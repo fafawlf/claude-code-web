@@ -1,5 +1,6 @@
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
+import { resolveClaudePath } from './resolveClaudePath.js';
 
 export type SessionEvent = { id: number; event: SDKMessage };
 export type EventListener = (ev: SessionEvent) => void;
@@ -83,11 +84,13 @@ export class ClaudeSession {
     this.id = opts.id;
     this.broker = new PermissionBroker(opts.onPermission);
 
+    const claudePath = resolveClaudePath();
     const options: Options = {
       cwd: opts.cwd,
       abortController: this.abortCtl,
       resume: opts.resume,
       includePartialMessages: false,
+      ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
       canUseTool: async (toolName, input, ctx) => {
         return this.broker.request(toolName, input, {
           title: ctx.title,
