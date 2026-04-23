@@ -273,6 +273,19 @@ export class ClaudeSession {
       // Query ended. If explicit close, stop.
       if (this.closed) break;
 
+      // Never relaunch without a known claudeSessionId — a fresh query would
+      // silently start a brand-new Claude session with a new id, which is
+      // worse than surfacing the failure. The UI can offer "new chat".
+      if (!this.state.claudeSessionId) {
+        this.pushEvent({
+          type: 'system',
+          subtype: 'error' as unknown as 'status',
+          message: 'SDK exited before any event — giving up. Start a new chat.',
+        } as unknown as SDKMessage);
+        this.closed = true;
+        break;
+      }
+
       // Otherwise, the SDK subprocess exited on its own. Rebuild options from
       // current state (preserves user's mode/model) and respawn. Rate-limit to
       // avoid tight loops: at most 5 relaunches per 30s.
@@ -377,13 +390,17 @@ export class ClaudeSession {
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
+    const previousSdkMode: PermissionMode = this.state.permissionMode === 'plan' ? 'plan' : 'default';
+    const nextSdkMode: PermissionMode = mode === 'plan' ? 'plan' : 'default';
     this.updateState({ permissionMode: mode });
-    if (!this.query) return;
-    // Only 'plan' and 'default' go to the SDK; acceptEdits/bypass are handled
-    // locally in canUseToolImpl, so the SDK stays on 'default' to avoid the
-    // subprocess exiting when the CLI's permission layer re-initializes.
-    const sdkMode: PermissionMode = mode === 'plan' ? 'plan' : 'default';
-    await this.query.setPermissionMode(sdkMode);
+    // IMPORTANT: only forward to the SDK when the SDK-level mode actually
+    // changes. default/acceptEdits/bypass all map to 'default' at the SDK
+    // level (we enforce accept/bypass in canUseToolImpl), so switching
+    // between them does not need an SDK control request. Calling
+    // query.setPermissionMode needlessly was what triggered the CLI
+    // subprocess to exit and made the session appear to "reset" on bypass.
+    if (!this.query || nextSdkMode === previousSdkMode) return;
+    await this.query.setPermissionMode(nextSdkMode);
   }
 
   async interrupt(): Promise<void> {
