@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/bin/claudecode-web.ts",
-    "start": "node dist/bin/claudecode-web.js"
+    "start": "node dist/bin/claudecode-web.js",
+    "test": "echo 'tests live at root; run from the repo root' && exit 0"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.118",

@@ -51,6 +51,14 @@ export function TopBar(p: Props) {
         <ModeMenu current={s?.permissionMode ?? 'default'} onSelect={p.onSelectMode} />
 
         <div className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
+          {s?.claudeSessionId && (
+            <span
+              className="font-mono text-[10px] text-text-muted hover:text-text-secondary transition-colors duration-hover cursor-default px-1.5 py-0.5 rounded bg-bg-raised/60 border border-border-subtle"
+              title={`Session ${s.claudeSessionId}`}
+            >
+              #{s.claudeSessionId.slice(0, 7)}
+            </span>
+          )}
           {renaming ? (
             <input
               autoFocus

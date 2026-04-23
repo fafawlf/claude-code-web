@@ -156,7 +156,7 @@ export class ClaudeSession {
     }
   }
 
-  private async loadHistoryThenStart(resumeId: string, cwd: string, options: Options): Promise<void> {
+  private async loadHistoryThenStart(resumeId: string, cwd: string, baseOptions: Options): Promise<void> {
     try {
       const prior = await getSessionMessages(resumeId, { dir: cwd });
       for (const m of prior) {
@@ -176,7 +176,15 @@ export class ClaudeSession {
     // before any live event races in.
     this.historyReadyResolve();
     if (this.closed) return;
-    this.query = query({ prompt: this.prompts, options });
+    // Rebuild options from current state — any setModel/setPermissionMode the
+    // user performed while history was loading will have updated this.state,
+    // and we want those reflected in the very first query() invocation.
+    const finalOptions: Options = {
+      ...baseOptions,
+      ...(this.state.model ? { model: this.state.model } : {}),
+      permissionMode: this.state.permissionMode,
+    };
+    this.query = query({ prompt: this.prompts, options: finalOptions });
     void this.pump();
   }
 
@@ -236,15 +244,18 @@ export class ClaudeSession {
   }
 
   async setModel(model: string): Promise<void> {
-    try { await this.query?.setModel(model); this.updateState({ model }); }
-    catch (e) { throw e; }
+    // Always reflect the user's intent in session state — it'll be honored as
+    // the initial options when the query is finally constructed (resume path),
+    // or forwarded to the live Query now (steady state).
+    this.updateState({ model });
+    if (!this.query) return; // history still loading; options will pick this up
+    await this.query.setModel(model);
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
-    try {
-      await this.query?.setPermissionMode(mode);
-      this.updateState({ permissionMode: mode });
-    } catch (e) { throw e; }
+    this.updateState({ permissionMode: mode });
+    if (!this.query) return;
+    await this.query.setPermissionMode(mode);
   }
 
   async interrupt(): Promise<void> {

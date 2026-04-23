@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyEvent, addUserOptimistic, initialState, withReady, type ChatState } from '../reducer';
+import { applyEvent, addUserOptimistic, applyStateDelta, initialState, withReady, type ChatState } from '../reducer';
 import type { SdkEvent, SessionStateSnapshot } from '../types';
 
 function baseState(): ChatState {
@@ -183,6 +183,31 @@ test('system error event appends an error item and clears busy', () => {
   assert.equal(last.kind, 'system');
   assert.equal(last.level, 'error');
   assert.equal(last.text, 'boom');
+});
+
+test('applyStateDelta merges model/mode onto existing state (optimistic update)', () => {
+  let s = baseState();
+  assert.equal(s.state?.model, undefined);
+  s = applyStateDelta(s, { model: 'claude-opus-4-7' });
+  assert.equal(s.state?.model, 'claude-opus-4-7');
+  s = applyStateDelta(s, { permissionMode: 'plan' });
+  assert.equal(s.state?.permissionMode, 'plan');
+  assert.equal(s.state?.model, 'claude-opus-4-7'); // prior delta preserved
+});
+
+test('applyStateDelta is a no-op before ready (state === null)', () => {
+  // A setState prior to hello/ready arriving should not crash or lose items.
+  const pre: ChatState = { ...initialState };
+  const out = applyStateDelta(pre, { model: 'x' });
+  assert.equal(out.state, null);
+});
+
+test('applyStateDelta is idempotent when applied twice with same delta', () => {
+  let s = baseState();
+  s = applyStateDelta(s, { model: 'claude-haiku-4-5' });
+  const first = s;
+  s = applyStateDelta(s, { model: 'claude-haiku-4-5' });
+  assert.deepEqual(s.state, first.state);
 });
 
 test('lastEventId always advances to the max id seen', () => {

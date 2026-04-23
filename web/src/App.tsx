@@ -182,10 +182,14 @@ export function App() {
   }, [planProposed]);
 
   const setMode = useCallback((mode: PermissionMode) => {
+    // Optimistic: update UI immediately. Server will ACK via state_update
+    // shortly; on failure a red toast surfaces from the error handler.
+    setState((s) => applyStateDelta(s, { permissionMode: mode }));
     wsRef.current?.send({ type: 'set_permission_mode', mode });
     toast.push(`Mode: ${modeLabel(mode)}`, { level: 'success' });
   }, [toast]);
   const setModel = useCallback((model: string) => {
+    setState((s) => applyStateDelta(s, { model }));
     wsRef.current?.send({ type: 'set_model', model });
     toast.push(`Model: ${model}`, { level: 'success' });
   }, [toast]);
