@@ -1,4 +1,4 @@
-import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, getSessionMessages, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveClaudePath } from './resolveClaudePath.js';
@@ -61,7 +61,7 @@ class PromptQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-const RING_CAPACITY = 500;
+const RING_CAPACITY = 5000;
 const EDIT_LIKE = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 export class ClaudeSession {
@@ -91,6 +91,10 @@ export class ClaudeSession {
     this.state = {
       sessionId: opts.id,
       cwd: opts.cwd,
+      // When resuming, the Claude session id is known up-front; helps the UI
+      // show the right title / rename target without waiting for the first
+      // live event.
+      claudeSessionId: opts.resume,
       model: opts.model,
       permissionMode: opts.permissionMode ?? 'default',
       tokensIn: 0,
@@ -137,8 +141,51 @@ export class ClaudeSession {
       },
     };
 
+    if (opts.resume) {
+      // Replay prior transcript from disk into the ring, then start live pump.
+      // History streaming runs before the SDK query spins up so the UI renders
+      // history first, then live events continue from where Claude left off.
+      void this.loadHistoryThenStart(opts.resume, opts.cwd, options);
+    } else {
+      this.query = query({ prompt: this.prompts, options });
+      void this.pump();
+    }
+  }
+
+  private async loadHistoryThenStart(resumeId: string, cwd: string, options: Options): Promise<void> {
+    try {
+      const prior = await getSessionMessages(resumeId, { dir: cwd });
+      for (const m of prior) {
+        // Shape is close enough to SDKMessage that the reducer's user/assistant
+        // handling treats it identically. Tool results embedded in user messages
+        // get matched back to their tool_use by tool_use_id as normal.
+        const ev = { ...m, parent_tool_use_id: m.parent_tool_use_id ?? null } as unknown as SDKMessage;
+        this.pushEvent(ev);
+        if (this.closed) return;
+      }
+    } catch (err) {
+      const msg = (err as Error).message ?? 'failed to load history';
+      this.pushEvent({
+        type: 'system',
+        subtype: 'error' as unknown as 'status',
+        message: `Could not load prior transcript: ${msg}`,
+      } as unknown as SDKMessage);
+    }
+    if (this.closed) return;
     this.query = query({ prompt: this.prompts, options });
     void this.pump();
+  }
+
+  private pushEvent(event: SDKMessage): void {
+    const anyEv = event as any;
+    if (!this.state.claudeSessionId && anyEv.session_id) {
+      this.updateState({ claudeSessionId: anyEv.session_id });
+    }
+    const id = this.nextEventId++;
+    const se: SessionEvent = { id, event };
+    this.ring.push(se);
+    if (this.ring.length > RING_CAPACITY) this.ring.shift();
+    for (const l of this.listeners) { try { l(se); } catch { /* */ } }
   }
 
   private async pump(): Promise<void> {
@@ -146,9 +193,6 @@ export class ClaudeSession {
     try {
       for await (const event of this.query) {
         const anyEv = event as any;
-        if (!this.state.claudeSessionId && anyEv.session_id) {
-          this.updateState({ claudeSessionId: anyEv.session_id });
-        }
         // Token bookkeeping — best-effort.
         const usage = anyEv?.message?.usage ?? anyEv?.usage;
         if (usage && typeof usage === 'object') {
@@ -160,25 +204,14 @@ export class ClaudeSession {
         if (event.type === 'result' && typeof (event as any).total_cost_usd === 'number') {
           this.updateState({ cost: (event as any).total_cost_usd });
         }
-
-        const id = this.nextEventId++;
-        const se: SessionEvent = { id, event };
-        this.ring.push(se);
-        if (this.ring.length > RING_CAPACITY) this.ring.shift();
-        for (const l of this.listeners) { try { l(se); } catch { /* */ } }
+        this.pushEvent(event);
       }
     } catch (err) {
-      const id = this.nextEventId++;
-      const se: SessionEvent = {
-        id,
-        event: {
-          type: 'system',
-          subtype: 'error' as any,
-          message: (err as Error).message,
-        } as unknown as SDKMessage,
-      };
-      this.ring.push(se);
-      for (const l of this.listeners) { try { l(se); } catch { /* */ } }
+      this.pushEvent({
+        type: 'system',
+        subtype: 'error' as unknown as 'status',
+        message: (err as Error).message,
+      } as unknown as SDKMessage);
     } finally {
       this.closed = true;
     }

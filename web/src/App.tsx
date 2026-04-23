@@ -107,13 +107,13 @@ export function App() {
     return () => { client.close(); };
   }, [authed, token, toast]);
 
-  const newSession = (opts?: { cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode }) => {
+  const newSession = (opts?: { cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string }) => {
     setState(initialState);
     setLocalItems([]);
     setPendingEdits(new Map());
     setNonEditPermReq(null);
     setPlanProposed(null);
-    setSessionTitle(undefined);
+    setSessionTitle(opts?.title);
     wsRef.current?.send({
       type: 'hello',
       cwd: opts?.cwd,
@@ -184,7 +184,12 @@ export function App() {
       case 'refresh': refreshSessions(state.state?.cwd); break;
       case 'set-model': setModel(a.id); break;
       case 'set-mode': setMode(a.mode); break;
-      case 'resume': newSession({ cwd: state.state?.cwd, resumeClaudeId: a.claudeSessionId }); break;
+      case 'resume': {
+        const s = sessions.find((x) => x.sessionId === a.claudeSessionId);
+        const title = s?.customTitle ?? s?.summary ?? s?.firstPrompt;
+        newSession({ cwd: state.state?.cwd, resumeClaudeId: a.claudeSessionId, title });
+        break;
+      }
     }
   };
 
@@ -267,7 +272,7 @@ export function App() {
         sessions={sessions}
         activeId={state.state?.claudeSessionId ?? null}
         onNew={() => newSession({ cwd: state.state?.cwd })}
-        onResume={(claudeId) => newSession({ cwd: state.state?.cwd, resumeClaudeId: claudeId })}
+        onResume={(claudeId, title) => newSession({ cwd: state.state?.cwd, resumeClaudeId: claudeId, title })}
         onRefresh={() => refreshSessions(state.state?.cwd)}
         onRename={renameInList}
         onOpenCommandPalette={() => setPaletteOpen(true)}

@@ -8,7 +8,7 @@ type Props = {
   sessions: StoredSession[];
   activeId: string | null;
   onNew: () => void;
-  onResume: (claudeId: string) => void;
+  onResume: (claudeId: string, title?: string) => void;
   onRefresh: () => void;
   onRename: (claudeId: string, newTitle: string) => void;
   connected: boolean;
@@ -105,7 +105,7 @@ export function Sidebar({ cwd, sessions, activeId, onNew, onResume, onRefresh, o
                   ) : (
                     <>
                       <button
-                        onClick={() => onResume(s.sessionId)}
+                        onClick={() => onResume(s.sessionId, title)}
                         className={`w-full text-left px-3 py-2.5 rounded-sm ${active ? 'bg-bg-hover shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
                         title={s.sessionId}
                       >
