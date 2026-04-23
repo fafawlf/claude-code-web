@@ -1,9 +1,12 @@
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
+import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveClaudePath } from './resolveClaudePath.js';
+import type { PermissionMode, SessionStateSnapshot } from '../protocol.js';
 
 export type SessionEvent = { id: number; event: SDKMessage };
 export type EventListener = (ev: SessionEvent) => void;
+export type StateListener = (state: Partial<SessionStateSnapshot>) => void;
 export type PermissionListener = (req: {
   reqId: string;
   toolName: string;
@@ -12,13 +15,10 @@ export type PermissionListener = (req: {
   displayName?: string;
   description?: string;
 }) => boolean;
+export type PlanListener = (req: { reqId: string; plan: string }) => boolean;
 
 type Pending = { resolve: (v: IteratorResult<SDKUserMessage>) => void };
 
-/**
- * Async-iterable queue fed by sendUser(). The SDK pulls from this; we push.
- * Closed by close() which drives the generator to completion.
- */
 class PromptQueue implements AsyncIterable<SDKUserMessage> {
   private queue: SDKUserMessage[] = [];
   private waiters: Pending[] = [];
@@ -62,27 +62,42 @@ class PromptQueue implements AsyncIterable<SDKUserMessage> {
 }
 
 const RING_CAPACITY = 500;
+const EDIT_LIKE = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 export class ClaudeSession {
-  readonly id: string; // our id; becomes the Claude session id once known
-  private claudeSessionId?: string;
+  readonly id: string;
+  private state: SessionStateSnapshot;
   private prompts = new PromptQueue();
   private query?: Query;
   private abortCtl = new AbortController();
   private nextEventId = 1;
   private ring: SessionEvent[] = [];
   private listeners = new Set<EventListener>();
+  private stateListeners = new Set<StateListener>();
   private closed = false;
-  readonly broker: PermissionBroker;
+  readonly permissionBroker: PermissionBroker;
+  readonly planBroker: PlanBroker;
 
   constructor(opts: {
     id: string;
     cwd: string;
     resume?: string;
+    model?: string;
+    permissionMode?: PermissionMode;
     onPermission: PermissionListener;
+    onPlan: PlanListener;
   }) {
     this.id = opts.id;
-    this.broker = new PermissionBroker(opts.onPermission);
+    this.state = {
+      sessionId: opts.id,
+      cwd: opts.cwd,
+      model: opts.model,
+      permissionMode: opts.permissionMode ?? 'default',
+      tokensIn: 0,
+      tokensOut: 0,
+    };
+    this.permissionBroker = new PermissionBroker(opts.onPermission);
+    this.planBroker = new PlanBroker(opts.onPlan);
 
     const claudePath = resolveClaudePath();
     const options: Options = {
@@ -90,9 +105,30 @@ export class ClaudeSession {
       abortController: this.abortCtl,
       resume: opts.resume,
       includePartialMessages: false,
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
       canUseTool: async (toolName, input, ctx) => {
-        return this.broker.request(toolName, input, {
+        // ExitPlanMode: custom flow — show plan to user, auto-flip mode on approve.
+        if (toolName === 'ExitPlanMode') {
+          const plan = typeof input.plan === 'string' ? input.plan : JSON.stringify(input, null, 2);
+          const result = await this.planBroker.awaitApproval(plan, ctx.signal);
+          if (result.behavior === 'allow') {
+            try {
+              await this.query?.setPermissionMode('default');
+              this.updateState({ permissionMode: 'default' });
+            } catch { /* best effort */ }
+          }
+          return result;
+        }
+
+        // acceptEdits mode: auto-allow edit tools without prompting.
+        if (this.state.permissionMode === 'acceptEdits' && EDIT_LIKE.has(toolName)) {
+          return { behavior: 'allow', updatedInput: input };
+        }
+
+        return this.permissionBroker.request(toolName, input, {
+          toolUseId: ctx.toolUseID,
           title: ctx.title,
           displayName: ctx.displayName,
           description: ctx.description,
@@ -109,19 +145,29 @@ export class ClaudeSession {
     if (!this.query) return;
     try {
       for await (const event of this.query) {
-        if (!this.claudeSessionId && (event as any).session_id) {
-          this.claudeSessionId = (event as any).session_id;
+        const anyEv = event as any;
+        if (!this.state.claudeSessionId && anyEv.session_id) {
+          this.updateState({ claudeSessionId: anyEv.session_id });
         }
+        // Token bookkeeping — best-effort.
+        const usage = anyEv?.message?.usage ?? anyEv?.usage;
+        if (usage && typeof usage === 'object') {
+          const delta: Partial<SessionStateSnapshot> = {};
+          if (typeof usage.input_tokens === 'number') delta.tokensIn = this.state.tokensIn + usage.input_tokens;
+          if (typeof usage.output_tokens === 'number') delta.tokensOut = this.state.tokensOut + usage.output_tokens;
+          if (Object.keys(delta).length) this.updateState(delta);
+        }
+        if (event.type === 'result' && typeof (event as any).total_cost_usd === 'number') {
+          this.updateState({ cost: (event as any).total_cost_usd });
+        }
+
         const id = this.nextEventId++;
         const se: SessionEvent = { id, event };
         this.ring.push(se);
         if (this.ring.length > RING_CAPACITY) this.ring.shift();
-        for (const l of this.listeners) {
-          try { l(se); } catch { /* ignore listener errors */ }
-        }
+        for (const l of this.listeners) { try { l(se); } catch { /* */ } }
       }
     } catch (err) {
-      // Surface as a synthetic error event for the UI.
       const id = this.nextEventId++;
       const se: SessionEvent = {
         id,
@@ -138,8 +184,13 @@ export class ClaudeSession {
     }
   }
 
-  getClaudeSessionId(): string | undefined {
-    return this.claudeSessionId;
+  private updateState(delta: Partial<SessionStateSnapshot>): void {
+    this.state = { ...this.state, ...delta };
+    for (const l of this.stateListeners) { try { l(delta); } catch { /* */ } }
+  }
+
+  getState(): SessionStateSnapshot {
+    return { ...this.state };
   }
 
   sendUser(text: string): void {
@@ -147,8 +198,20 @@ export class ClaudeSession {
     this.prompts.push(text);
   }
 
+  async setModel(model: string): Promise<void> {
+    try { await this.query?.setModel(model); this.updateState({ model }); }
+    catch (e) { throw e; }
+  }
+
+  async setPermissionMode(mode: PermissionMode): Promise<void> {
+    try {
+      await this.query?.setPermissionMode(mode);
+      this.updateState({ permissionMode: mode });
+    } catch (e) { throw e; }
+  }
+
   async interrupt(): Promise<void> {
-    try { await this.query?.interrupt(); } catch { /* best effort */ }
+    try { await this.query?.interrupt(); } catch { /* */ }
   }
 
   replay(afterId = 0): SessionEvent[] {
@@ -160,14 +223,18 @@ export class ClaudeSession {
     return () => this.listeners.delete(l);
   }
 
-  isClosed(): boolean {
-    return this.closed;
+  subscribeState(l: StateListener): () => void {
+    this.stateListeners.add(l);
+    return () => this.stateListeners.delete(l);
   }
+
+  isClosed(): boolean { return this.closed; }
 
   async close(): Promise<void> {
     this.closed = true;
     this.prompts.close();
     try { this.abortCtl.abort(); } catch { /* */ }
-    this.broker.drainDeny('Session closing');
+    this.permissionBroker.drainDeny();
+    this.planBroker.drainReject();
   }
 }

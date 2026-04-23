@@ -1,37 +1,38 @@
-import type { ChatItem, SdkEvent } from './types';
+import type { ChatItem, PermissionMode, SdkEvent, SessionStateSnapshot } from './types';
 
 export type ChatState = {
   items: ChatItem[];
   busy: boolean;
   lastEventId: number;
+  state: SessionStateSnapshot | null;
 };
 
-export const initialState: ChatState = { items: [], busy: false, lastEventId: 0 };
+export const initialState: ChatState = {
+  items: [],
+  busy: false,
+  lastEventId: 0,
+  state: null,
+};
 
-function id(): string {
-  return Math.random().toString(36).slice(2);
-}
+function rid(): string { return Math.random().toString(36).slice(2); }
 
-// Fold one SDK event into UI state. Pragmatic rendering — we don't exhaustively
-// reflect the full SDK taxonomy, just the turn-level shapes a user reads.
-export function applyEvent(state: ChatState, ev: SdkEvent, eventId: number): ChatState {
-  const items = state.items.slice();
-  let busy = state.busy;
+export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatState {
+  const items = s.items.slice();
+  let busy = s.busy;
 
   if (ev.type === 'assistant' && ev.message?.content) {
     busy = true;
     for (const part of ev.message.content) {
       if (part.type === 'text' && typeof (part as any).text === 'string') {
-        items.push({ kind: 'assistant_text', id: id(), text: (part as any).text });
+        items.push({ kind: 'assistant_text', id: rid(), text: (part as any).text });
       } else if (part.type === 'thinking' && typeof (part as any).thinking === 'string') {
-        items.push({ kind: 'thinking', id: id(), text: (part as any).thinking });
+        items.push({ kind: 'thinking', id: rid(), text: (part as any).thinking });
       } else if (part.type === 'tool_use') {
         const p = part as { id: string; name: string; input: Record<string, unknown> };
-        items.push({ kind: 'tool_use', id: id(), toolUseId: p.id, name: p.name, input: p.input });
+        items.push({ kind: 'tool_use', id: rid(), toolUseId: p.id, name: p.name, input: p.input });
       }
     }
   } else if (ev.type === 'user' && ev.message?.content) {
-    // Usually synthetic — tool results are injected as user messages.
     for (const part of ev.message.content) {
       if ((part as any).type === 'tool_result') {
         const p = part as { tool_use_id: string; content?: unknown; is_error?: boolean };
@@ -45,16 +46,35 @@ export function applyEvent(state: ChatState, ev: SdkEvent, eventId: number): Cha
           const prev = items[idx] as Extract<ChatItem, { kind: 'tool_use' }>;
           items[idx] = { ...prev, result: { content: content ?? '', isError: !!p.is_error } };
         }
-      } else if ((part as any).type === 'text') {
-        // Real user-typed messages are added locally on submit; ignore replays.
       }
     }
-  } else if (ev.type === 'result' || (ev.type === 'system' && ev.subtype === 'result')) {
+  } else if (ev.type === 'result') {
     busy = false;
   } else if (ev.type === 'system' && ev.subtype === 'error') {
-    items.push({ kind: 'system', id: id(), text: String((ev as any).message ?? 'error'), level: 'error' });
+    items.push({ kind: 'system', id: rid(), text: String((ev as any).message ?? 'error'), level: 'error' });
     busy = false;
   }
 
-  return { items, busy, lastEventId: Math.max(state.lastEventId, eventId) };
+  return { ...s, items, busy, lastEventId: Math.max(s.lastEventId, eventId) };
+}
+
+export function applyStateDelta(s: ChatState, delta: Partial<SessionStateSnapshot>): ChatState {
+  if (!s.state) return s;
+  return { ...s, state: { ...s.state, ...delta } };
+}
+
+export function withReady(s: ChatState, snap: SessionStateSnapshot): ChatState {
+  return { ...s, state: snap };
+}
+
+export function addSystem(s: ChatState, text: string, level: 'info' | 'error' = 'info'): ChatState {
+  return { ...s, items: [...s.items, { kind: 'system', id: rid(), text, level }] };
+}
+
+export function addUser(s: ChatState, text: string): ChatState {
+  return { ...s, items: [...s.items, { kind: 'user', id: rid(), text }] };
+}
+
+export function resetSession(model?: string, mode?: PermissionMode): ChatState {
+  return { ...initialState, state: null };
 }

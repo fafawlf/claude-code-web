@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { WebSocket, RawData } from 'ws';
 import type { SessionManager } from './session/SessionManager.js';
 import type { ClaudeSession } from './session/ClaudeSession.js';
-import type { ClientMessage, ServerMessage } from './protocol.js';
+import type { ClientMessage, ServerMessage, PermissionMode } from './protocol.js';
 import { timingSafeEqualStr } from './auth.js';
 
 export function registerWs(app: FastifyInstance, sm: SessionManager, token: string, defaultCwd: string) {
@@ -15,14 +15,21 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
     }
 
     let session: ClaudeSession | undefined;
-    let unsubscribe: (() => void) | undefined;
+    let unsubEvents: (() => void) | undefined;
+    let unsubState: (() => void) | undefined;
 
     const attach = (s: ClaudeSession, afterId: number) => {
       session = s;
       const replay = s.replay(afterId);
       for (const ev of replay) send(socket, { type: 'sdk_event', id: ev.id, event: ev.event });
-      unsubscribe = s.subscribe((ev) => send(socket, { type: 'sdk_event', id: ev.id, event: ev.event }));
-      send(socket, { type: 'ready', sessionId: s.id });
+      unsubEvents = s.subscribe((ev) => send(socket, { type: 'sdk_event', id: ev.id, event: ev.event }));
+      unsubState = s.subscribeState((delta) => send(socket, { type: 'state_update', state: delta }));
+      send(socket, { type: 'ready', state: s.getState() });
+    };
+
+    const detach = () => {
+      unsubEvents?.(); unsubEvents = undefined;
+      unsubState?.(); unsubState = undefined;
     };
 
     socket.on('message', async (raw: RawData) => {
@@ -32,6 +39,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
       }
 
       if (msg.type === 'hello') {
+        detach();
         if (msg.sessionId) {
           const existing = sm.get(msg.sessionId);
           if (!existing) return send(socket, { type: 'error', message: 'Session not found' });
@@ -41,18 +49,10 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
             const s = sm.create({
               cwd: msg.cwd ?? defaultCwd,
               resume: msg.resumeClaudeId,
-              onPermission: (pr) => {
-                const payload: ServerMessage = {
-                  type: 'permission_request',
-                  reqId: pr.reqId,
-                  toolName: pr.toolName,
-                  input: pr.input,
-                  title: pr.title,
-                  displayName: pr.displayName,
-                  description: pr.description,
-                };
-                return send(socket, payload);
-              },
+              model: msg.model,
+              permissionMode: msg.permissionMode,
+              onPermission: (pr) => send(socket, { type: 'permission_request', ...pr }),
+              onPlan: (pr) => send(socket, { type: 'plan_proposed', reqId: pr.reqId, plan: pr.plan }),
             });
             attach(s, 0);
           } catch (e) {
@@ -64,19 +64,31 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
 
       if (!session) return send(socket, { type: 'error', message: 'Say hello first' });
 
-      if (msg.type === 'user') {
-        session.sendUser(msg.text);
-      } else if (msg.type === 'permission_response') {
-        session.broker.resolve(msg.reqId, { decision: msg.decision, scope: msg.scope });
-      } else if (msg.type === 'interrupt') {
-        await session.interrupt();
+      switch (msg.type) {
+        case 'user':
+          session.sendUser(msg.text);
+          break;
+        case 'permission_response':
+          session.permissionBroker.resolve(msg.reqId, { decision: msg.decision, scope: msg.scope });
+          break;
+        case 'plan_response':
+          session.planBroker.resolve(msg.reqId, msg.decision);
+          break;
+        case 'interrupt':
+          await session.interrupt();
+          break;
+        case 'set_model':
+          try { await session.setModel(msg.model); }
+          catch (e) { send(socket, { type: 'error', message: `setModel failed: ${(e as Error).message}` }); }
+          break;
+        case 'set_permission_mode':
+          try { await session.setPermissionMode(msg.mode as PermissionMode); }
+          catch (e) { send(socket, { type: 'error', message: `setPermissionMode failed: ${(e as Error).message}` }); }
+          break;
       }
     });
 
-    socket.on('close', () => {
-      unsubscribe?.();
-      // Keep the session alive — a reconnect can reattach with lastEventId.
-    });
+    socket.on('close', () => { detach(); });
   });
 }
 

@@ -1,10 +1,19 @@
 import { useEffect, useRef } from 'react';
 import type { ChatItem } from '../types';
 import { ToolUse } from './ToolUse';
+import { DiffBlock } from './DiffBlock';
 
-type Props = { items: ChatItem[]; busy: boolean };
+const EDIT_LIKE = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
-export function MessageList({ items, busy }: Props) {
+type Props = {
+  items: ChatItem[];
+  busy: boolean;
+  pendingByToolUseId: Map<string, string>; // toolUseId → reqId awaiting decision
+  onAcceptEdit: (reqId: string) => void;
+  onRejectEdit: (reqId: string) => void;
+};
+
+export function MessageList({ items, busy, pendingByToolUseId, onAcceptEdit, onRejectEdit }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [items.length, busy]);
 
@@ -14,7 +23,7 @@ export function MessageList({ items, busy }: Props) {
         {items.length === 0 && (
           <div className="text-zinc-500 text-sm">Say something to start. Claude Code runs on the remote machine; output streams here.</div>
         )}
-        {items.map((it) => <Bubble key={it.id} item={it} />)}
+        {items.map((it) => <Bubble key={it.id} item={it} pendingByToolUseId={pendingByToolUseId} onAcceptEdit={onAcceptEdit} onRejectEdit={onRejectEdit} />)}
         {busy && <div className="text-xs text-zinc-500 animate-pulse">Claude is working…</div>}
         <div ref={endRef} />
       </div>
@@ -22,7 +31,9 @@ export function MessageList({ items, busy }: Props) {
   );
 }
 
-function Bubble({ item }: { item: ChatItem }) {
+type BubbleProps = { item: ChatItem } & Pick<Props, 'pendingByToolUseId' | 'onAcceptEdit' | 'onRejectEdit'>;
+
+function Bubble({ item, pendingByToolUseId, onAcceptEdit, onRejectEdit }: BubbleProps) {
   if (item.kind === 'user') {
     return (
       <div className="flex justify-end">
@@ -31,9 +42,7 @@ function Bubble({ item }: { item: ChatItem }) {
     );
   }
   if (item.kind === 'assistant_text') {
-    return (
-      <div className="text-zinc-100 whitespace-pre-wrap leading-relaxed">{item.text}</div>
-    );
+    return <div className="text-zinc-100 whitespace-pre-wrap leading-relaxed">{item.text}</div>;
   }
   if (item.kind === 'thinking') {
     return (
@@ -44,6 +53,10 @@ function Bubble({ item }: { item: ChatItem }) {
     );
   }
   if (item.kind === 'tool_use') {
+    if (EDIT_LIKE.has(item.name)) {
+      const pendingReqId = pendingByToolUseId.get(item.toolUseId);
+      return <DiffBlock item={item} pendingReqId={pendingReqId} onAccept={onAcceptEdit} onReject={onRejectEdit} />;
+    }
     return <ToolUse item={item} />;
   }
   return (

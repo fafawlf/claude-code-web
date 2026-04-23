@@ -14,6 +14,7 @@ type Pending = {
 type Emitter = (req: {
   reqId: string;
   toolName: string;
+  toolUseId?: string;
   input: Record<string, unknown>;
   title?: string;
   displayName?: string;
@@ -44,7 +45,7 @@ export class PermissionBroker {
   async request(
     toolName: string,
     input: Record<string, unknown>,
-    meta: { title?: string; displayName?: string; description?: string; signal: AbortSignal }
+    meta: { toolUseId?: string; title?: string; displayName?: string; description?: string; signal: AbortSignal }
   ): Promise<PermissionResult> {
     if (this.sessionAllowlist.has(fingerprint(toolName, input))) {
       return { behavior: 'allow', updatedInput: input };
@@ -70,6 +71,7 @@ export class PermissionBroker {
       const delivered = this.emit({
         reqId,
         toolName,
+        toolUseId: meta.toolUseId,
         input,
         title: meta.title,
         displayName: meta.displayName,
