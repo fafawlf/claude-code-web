@@ -3,21 +3,24 @@ import { modeLabel } from '../types';
 
 type Props = { mode: PermissionMode };
 
-export function ModeStrip({ mode }: Props) {
+// Inline in the InputBar's meta row now — no longer a full-width strip.
+export function ModeDot({ mode }: Props) {
   if (mode === 'default') return null;
   const isPlan = mode === 'plan';
   const isAccept = mode === 'acceptEdits';
-  const color = isPlan ? 'bg-amber-500/10 text-amber-300 border-amber-900/50'
-    : isAccept ? 'bg-emerald-500/10 text-emerald-300 border-emerald-900/50'
-    : 'bg-red-500/10 text-red-300 border-red-900/50';
-  const icon = isPlan ? '⏸' : isAccept ? '⏵⏵' : '⚠︎';
-  const hint = isPlan ? 'read-only — Claude will propose a plan, you approve to execute'
-    : isAccept ? 'file edits auto-allowed — Bash still prompts'
-    : 'all permissions bypassed';
+  const color = isPlan ? 'bg-warning shadow-[0_0_8px_rgba(212,169,94,.6)]'
+    : isAccept ? 'bg-success shadow-[0_0_8px_rgba(138,168,118,.6)]'
+    : 'bg-danger';
+  const textColor = isPlan ? 'text-warning' : isAccept ? 'text-success' : 'text-danger';
+  const hint = isPlan ? 'read-only — propose a plan' : isAccept ? 'file edits auto-allowed' : 'all permissions bypassed';
   return (
-    <div className={`border-t ${color} px-4 py-1.5 text-xs flex items-center gap-3`}>
-      <span className="font-semibold tracking-wide">{icon} {modeLabel(mode)} on</span>
-      <span className="opacity-80">{hint}</span>
+    <div className="flex items-center gap-1.5 text-[11px]">
+      <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-mode ease-soft ${color}`} />
+      <span className={`font-medium ${textColor}`}>{modeLabel(mode)}</span>
+      <span className="text-text-muted">· {hint}</span>
     </div>
   );
 }
+
+// Back-compat export so old imports keep working during migration.
+export function ModeStrip({ mode }: Props) { return <ModeDot mode={mode} />; }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Icon } from './Icon';
 
 type Props = {
   token: string;
@@ -36,20 +37,36 @@ export function MentionPopup({ token, cwd, query, onPick, onClose }: Props) {
   if (results.length === 0) return null;
 
   return (
-    <div className="absolute bottom-full mb-2 left-0 right-0 max-w-md bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl overflow-hidden">
-      <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800">Attach file</div>
+    <div className="absolute bottom-full mb-2 left-0 right-0 max-w-md bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-bottom-left">
+      <div className="px-3.5 py-1.5 text-[10px] uppercase tracking-[.06em] font-semibold text-text-muted border-b border-border-subtle">Attach file</div>
       <div className="max-h-56 overflow-y-auto">
         {results.map((r, idx) => (
           <button
             key={r}
             onClick={() => onPick(r)}
             onMouseEnter={() => setI(idx)}
-            className={`w-full text-left px-3 py-1 font-mono text-xs ${idx === i ? 'bg-zinc-800' : ''}`}
+            className={`w-full text-left px-3.5 py-1.5 flex items-center gap-2.5 transition-colors duration-hover ${idx === i ? 'bg-bg-hover' : ''}`}
           >
-            <span className="text-zinc-200">{r}</span>
+            <Icon name="file" size={13} className="text-text-muted" />
+            <span className="font-mono text-xs text-text-primary">
+              <MatchHighlight path={r} query={query} />
+            </span>
           </button>
         ))}
       </div>
     </div>
+  );
+}
+
+function MatchHighlight({ path, query }: { path: string; query: string }) {
+  if (!query) return <>{path}</>;
+  const idx = path.toLowerCase().indexOf(query.toLowerCase());
+  if (idx < 0) return <>{path}</>;
+  return (
+    <>
+      {path.slice(0, idx)}
+      <span className="text-accent-hi font-medium">{path.slice(idx, idx + query.length)}</span>
+      {path.slice(idx + query.length)}
+    </>
   );
 }

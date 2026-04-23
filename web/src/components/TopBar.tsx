@@ -3,6 +3,7 @@ import type { PermissionMode, SessionStateSnapshot } from '../types';
 import { modeLabel } from '../types';
 import { CwdPicker } from './CwdPicker';
 import { ModelMenu } from './ModelMenu';
+import { Icon } from './Icon';
 
 type Props = {
   state: SessionStateSnapshot | null;
@@ -29,32 +30,27 @@ export function TopBar(p: Props) {
 
   return (
     <>
-      <header className="h-12 shrink-0 border-b border-zinc-800 bg-zinc-950 px-3 flex items-center gap-2 text-sm">
-        <span className={`inline-block w-2 h-2 rounded-full ${p.connected ? 'bg-emerald-500' : 'bg-zinc-600'}`} title={p.connected ? 'connected' : 'disconnected'} />
+      <header className="h-11 shrink-0 px-4 flex items-center gap-1 text-sm bg-bg-base/70 backdrop-blur-[12px] border-b border-border-subtle sticky top-0 z-20">
+        <span
+          className={`w-2 h-2 rounded-full mr-2 transition-colors duration-hover ${p.connected ? 'bg-success shadow-[0_0_6px_rgba(138,168,118,.6)]' : 'bg-text-muted'}`}
+          title={p.connected ? 'connected' : 'disconnected'}
+        />
 
-        <button
-          onClick={() => setCwdOpen(true)}
-          className="px-2 py-1 rounded hover:bg-zinc-900 font-mono text-zinc-300 text-xs max-w-[280px] truncate"
-          title={s?.cwd ?? ''}
-        >
-          📁 {cwdShort}
+        <button onClick={() => setCwdOpen(true)} className="chip" title={s?.cwd ?? ''}>
+          <Icon name="folder" size={14} className="opacity-80" />
+          <span className="font-mono text-[11px]">{cwdShort}</span>
+          <Icon name="chev-down" size={12} className="opacity-50" />
         </button>
 
-        <span className="text-zinc-700">·</span>
+        <Separator />
 
-        <ModelMenu
-          current={s?.model}
-          onSelect={p.onSelectModel}
-        />
+        <ModelMenu current={s?.model} onSelect={p.onSelectModel} />
 
-        <span className="text-zinc-700">·</span>
+        <Separator />
 
-        <ModeMenu
-          current={s?.permissionMode ?? 'default'}
-          onSelect={p.onSelectMode}
-        />
+        <ModeMenu current={s?.permissionMode ?? 'default'} onSelect={p.onSelectMode} />
 
-        <div className="ml-auto flex items-center gap-3 text-xs text-zinc-500">
+        <div className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
           {renaming ? (
             <input
               autoFocus
@@ -65,11 +61,11 @@ export function TopBar(p: Props) {
                 if (e.key === 'Enter') { e.currentTarget.blur(); }
                 if (e.key === 'Escape') { setRenaming(false); setDraft(p.sessionTitle ?? ''); }
               }}
-              className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-200 text-xs w-48"
+              className="bg-bg-surface border border-border rounded-sm px-2 py-1 text-text-primary text-[11px] w-48 outline-none focus:border-accent"
               placeholder="Session title…"
             />
           ) : p.sessionTitle ? (
-            <button onClick={() => { setRenaming(true); setDraft(p.sessionTitle ?? ''); }} className="hover:text-zinc-300 truncate max-w-[200px]" title="rename">
+            <button onClick={() => { setRenaming(true); setDraft(p.sessionTitle ?? ''); }} className="px-2 py-1 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover max-w-[220px] truncate" title="rename">
               {p.sessionTitle}
             </button>
           ) : null}
@@ -90,29 +86,35 @@ export function TopBar(p: Props) {
   );
 }
 
+function Separator() {
+  return <div className="w-px h-3.5 bg-border-subtle mx-1.5" />;
+}
+
 function ModeMenu({ current, onSelect }: { current: PermissionMode; onSelect: (m: PermissionMode) => void }) {
   const [open, setOpen] = useState(false);
-  const color = current === 'plan' ? 'text-amber-400' : current === 'acceptEdits' ? 'text-emerald-400' : 'text-zinc-300';
+  const color = current === 'plan' ? 'text-warning' : current === 'acceptEdits' ? 'text-success' : 'text-text-secondary';
   return (
     <div className="relative">
-      <button onClick={() => setOpen(!open)} className={`px-2 py-1 rounded hover:bg-zinc-900 text-xs ${color}`}>
-        ⏵ {modeLabel(current)} ▾
+      <button onClick={() => setOpen(!open)} className={`chip ${color}`}>
+        <span className={`w-1.5 h-1.5 rounded-full bg-current ${current !== 'default' ? 'shadow-[0_0_8px_currentColor]' : ''}`} />
+        {modeLabel(current)}
+        <Icon name="chev-down" size={12} className="opacity-50" />
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 mt-1 w-56 z-20 bg-zinc-900 border border-zinc-700 rounded shadow-xl text-sm overflow-hidden">
+          <div className="absolute left-0 mt-1 w-60 z-20 bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-top-left">
             {(['default', 'acceptEdits', 'plan'] as PermissionMode[]).map((m) => (
               <button
                 key={m}
                 onClick={() => { onSelect(m); setOpen(false); }}
-                className={`w-full text-left px-3 py-2 hover:bg-zinc-800 flex items-center gap-2 ${m === current ? 'bg-zinc-800/60' : ''}`}
+                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors duration-hover ${m === current ? 'bg-bg-hover' : 'hover:bg-bg-hover'}`}
               >
                 <span className="flex-1">{modeLabel(m)}</span>
-                {m === current && <span className="text-emerald-400 text-xs">✓</span>}
+                {m === current && <Icon name="check" size={12} className="text-accent" />}
               </button>
             ))}
-            <div className="px-3 py-2 border-t border-zinc-800 text-[10px] text-zinc-500">
+            <div className="px-3 py-2 border-t border-border-subtle text-[10px] text-text-muted">
               Shift+Tab in input to cycle
             </div>
           </div>
@@ -123,8 +125,8 @@ function ModeMenu({ current, onSelect }: { current: PermissionMode; onSelect: (m
 }
 
 function shortPath(p: string): string {
-  const home = '/root'; // UI-only hint; real paths come from server
   let s = p;
+  const home = '/root'; // display-only heuristic
   if (s.startsWith(home)) s = '~' + s.slice(home.length);
   const parts = s.split('/').filter(Boolean);
   if (parts.length <= 3) return s;

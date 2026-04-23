@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { PermissionMode } from '../types';
 import { MODEL_OPTIONS } from '../types';
 
@@ -20,7 +20,6 @@ type Cmd = { label: string; hint: string; action: SlashAction; match: string[] }
 
 export function SlashPalette({ query, onPick, onClose }: Props) {
   const [i, setI] = useState(0);
-  const containerRef = useRef<HTMLDivElement>(null);
 
   const cmds: Cmd[] = [
     { label: '/clear', hint: 'new chat', action: { kind: 'new' }, match: ['clear', 'new', 'reset'] },
@@ -28,7 +27,7 @@ export function SlashPalette({ query, onPick, onClose }: Props) {
     { label: '/history', hint: 'show prior sessions', action: { kind: 'history' }, match: ['history', 'resume', 'sessions'] },
     ...MODEL_OPTIONS.map((m) => ({
       label: `/model ${m.label}`,
-      hint: `switch to ${m.label} (${m.hint})`,
+      hint: m.hint,
       action: { kind: 'model' as const, id: m.id },
       match: ['model', m.label.toLowerCase(), m.id],
     })),
@@ -58,18 +57,18 @@ export function SlashPalette({ query, onPick, onClose }: Props) {
   if (filtered.length === 0) return null;
 
   return (
-    <div ref={containerRef} className="absolute bottom-full mb-2 left-0 right-0 max-w-md bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl overflow-hidden">
-      <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800">Slash commands</div>
+    <div className="absolute bottom-full mb-2 left-0 right-0 max-w-md bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-bottom-left">
+      <div className="px-3.5 py-1.5 text-[10px] uppercase tracking-[.06em] font-semibold text-text-muted border-b border-border-subtle">Slash commands</div>
       <div className="max-h-64 overflow-y-auto">
         {filtered.map((c, idx) => (
           <button
             key={c.label}
             onClick={() => onPick(c.action)}
             onMouseEnter={() => setI(idx)}
-            className={`w-full text-left px-3 py-1.5 flex items-center gap-2 ${idx === i ? 'bg-zinc-800' : ''}`}
+            className={`w-full text-left px-3.5 py-1.5 flex items-center gap-2 transition-colors duration-hover ${idx === i ? 'bg-bg-hover' : ''}`}
           >
-            <span className="font-mono text-xs text-zinc-200">{c.label}</span>
-            <span className="text-[10px] text-zinc-500 ml-auto">{c.hint}</span>
+            <span className="font-mono text-xs text-text-primary">{c.label}</span>
+            <span className="text-[10px] text-text-muted ml-auto">{c.hint}</span>
           </button>
         ))}
       </div>

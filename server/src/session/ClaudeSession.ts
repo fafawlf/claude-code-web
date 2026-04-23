@@ -104,7 +104,7 @@ export class ClaudeSession {
       cwd: opts.cwd,
       abortController: this.abortCtl,
       resume: opts.resume,
-      includePartialMessages: false,
+      includePartialMessages: true,
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),

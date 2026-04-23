@@ -5,6 +5,7 @@ export type ChatState = {
   busy: boolean;
   lastEventId: number;
   state: SessionStateSnapshot | null;
+  streamingText: string; // live delta buffer, shown with cursor while busy
 };
 
 export const initialState: ChatState = {
@@ -12,6 +13,7 @@ export const initialState: ChatState = {
   busy: false,
   lastEventId: 0,
   state: null,
+  streamingText: '',
 };
 
 function rid(): string { return Math.random().toString(36).slice(2); }
@@ -19,9 +21,28 @@ function rid(): string { return Math.random().toString(36).slice(2); }
 export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatState {
   const items = s.items.slice();
   let busy = s.busy;
+  let streamingText = s.streamingText;
+
+  if (ev.type === 'stream_event') {
+    // Partial assistant streaming. Extract text deltas.
+    const inner = (ev as any).event as { type?: string; delta?: { type?: string; text?: string } };
+    if (inner?.type === 'content_block_delta' && inner.delta?.type === 'text_delta' && typeof inner.delta.text === 'string') {
+      streamingText = streamingText + inner.delta.text;
+      busy = true;
+    } else if (inner?.type === 'message_start') {
+      streamingText = '';
+      busy = true;
+    } else if (inner?.type === 'message_stop') {
+      // The authoritative assistant event will land next with the full content;
+      // leave streamingText untouched so there's no flicker — it gets cleared
+      // when the final assistant event processes.
+    }
+    return { ...s, items, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
+  }
 
   if (ev.type === 'assistant' && ev.message?.content) {
     busy = true;
+    streamingText = ''; // final message replaces any streaming preview
     for (const part of ev.message.content) {
       if (part.type === 'text' && typeof (part as any).text === 'string') {
         items.push({ kind: 'assistant_text', id: rid(), text: (part as any).text });
@@ -50,12 +71,14 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
     }
   } else if (ev.type === 'result') {
     busy = false;
+    streamingText = '';
   } else if (ev.type === 'system' && ev.subtype === 'error') {
     items.push({ kind: 'system', id: rid(), text: String((ev as any).message ?? 'error'), level: 'error' });
     busy = false;
+    streamingText = '';
   }
 
-  return { ...s, items, busy, lastEventId: Math.max(s.lastEventId, eventId) };
+  return { ...s, items, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
 }
 
 export function applyStateDelta(s: ChatState, delta: Partial<SessionStateSnapshot>): ChatState {
@@ -71,10 +94,6 @@ export function addSystem(s: ChatState, text: string, level: 'info' | 'error' = 
   return { ...s, items: [...s.items, { kind: 'system', id: rid(), text, level }] };
 }
 
-export function addUser(s: ChatState, text: string): ChatState {
-  return { ...s, items: [...s.items, { kind: 'user', id: rid(), text }] };
-}
-
-export function resetSession(model?: string, mode?: PermissionMode): ChatState {
-  return { ...initialState, state: null };
+export function resetSession(_model?: string, _mode?: PermissionMode): ChatState {
+  return { ...initialState };
 }
