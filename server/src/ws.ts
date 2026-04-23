@@ -15,21 +15,27 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
     }
 
     let session: ClaudeSession | undefined;
+    let attachedId: string | undefined;
     let unsubEvents: (() => void) | undefined;
     let unsubState: (() => void) | undefined;
 
+    const detach = () => {
+      unsubEvents?.(); unsubEvents = undefined;
+      unsubState?.(); unsubState = undefined;
+      if (attachedId) sm.detach(attachedId);
+      session = undefined;
+      attachedId = undefined;
+    };
+
     const attach = (s: ClaudeSession, afterId: number) => {
       session = s;
+      attachedId = s.id;
+      sm.attach(s.id);
       const replay = s.replay(afterId);
       for (const ev of replay) send(socket, { type: 'sdk_event', id: ev.id, event: ev.event });
       unsubEvents = s.subscribe((ev) => send(socket, { type: 'sdk_event', id: ev.id, event: ev.event }));
       unsubState = s.subscribeState((delta) => send(socket, { type: 'state_update', state: delta }));
       send(socket, { type: 'ready', state: s.getState() });
-    };
-
-    const detach = () => {
-      unsubEvents?.(); unsubEvents = undefined;
-      unsubState?.(); unsubState = undefined;
     };
 
     socket.on('message', async (raw: RawData) => {
@@ -39,7 +45,15 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
       }
 
       if (msg.type === 'hello') {
+        // Switching sessions: detach from the prior, and if this WS was the
+        // only subscriber AND it's different from the target, close the prior
+        // to free the slot (single-user, single-browser assumption).
+        const priorId = attachedId;
         detach();
+        if (priorId && priorId !== msg.sessionId) {
+          await sm.remove(priorId).catch(() => {});
+        }
+
         if (msg.sessionId) {
           const existing = sm.get(msg.sessionId);
           if (!existing) return send(socket, { type: 'error', message: 'Session not found' });
