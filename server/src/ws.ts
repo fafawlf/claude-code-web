@@ -27,15 +27,31 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
       attachedId = undefined;
     };
 
-    const attach = (s: ClaudeSession, afterId: number) => {
+    const attach = async (s: ClaudeSession, afterId: number) => {
       session = s;
       attachedId = s.id;
       sm.attach(s.id);
+      // Deliver the ready frame FIRST so the client can reset its view.
+      send(socket, { type: 'ready', state: s.getState() });
+      // Wait for the background history load (if any) to finish populating the
+      // ring, then flush the whole prior transcript as batched frames. This
+      // avoids subscribing early and dribbling 900 history events one by one.
+      await s.historyReady;
+      if (socket.readyState !== socket.OPEN) { sm.detach(s.id); return; }
       const replay = s.replay(afterId);
-      for (const ev of replay) send(socket, { type: 'sdk_event', id: ev.id, event: ev.event });
+      if (replay.length > 0) {
+        const CHUNK = 250;
+        for (let i = 0; i < replay.length; i += CHUNK) {
+          send(socket, {
+            type: 'sdk_events_batch',
+            events: replay.slice(i, i + CHUNK).map((e) => ({ id: e.id, event: e.event })),
+          });
+        }
+      }
+      // Only subscribe AFTER history is flushed so live events arrive in order
+      // after the batch on the wire.
       unsubEvents = s.subscribe((ev) => send(socket, { type: 'sdk_event', id: ev.id, event: ev.event }));
       unsubState = s.subscribeState((delta) => send(socket, { type: 'state_update', state: delta }));
-      send(socket, { type: 'ready', state: s.getState() });
     };
 
     socket.on('message', async (raw: RawData) => {
@@ -57,7 +73,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
         if (msg.sessionId) {
           const existing = sm.get(msg.sessionId);
           if (!existing) return send(socket, { type: 'error', message: 'Session not found' });
-          attach(existing, msg.lastEventId ?? 0);
+          await attach(existing, msg.lastEventId ?? 0);
         } else {
           try {
             const s = sm.create({
@@ -68,7 +84,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
               onPermission: (pr) => send(socket, { type: 'permission_request', ...pr }),
               onPlan: (pr) => send(socket, { type: 'plan_proposed', reqId: pr.reqId, plan: pr.plan }),
             });
-            attach(s, 0);
+            await attach(s, 0);
           } catch (e) {
             return send(socket, { type: 'error', message: (e as Error).message });
           }

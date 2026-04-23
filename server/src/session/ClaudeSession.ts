@@ -77,6 +77,8 @@ export class ClaudeSession {
   private closed = false;
   readonly permissionBroker: PermissionBroker;
   readonly planBroker: PlanBroker;
+  readonly historyReady: Promise<void>;
+  private historyReadyResolve!: () => void;
 
   constructor(opts: {
     id: string;
@@ -102,6 +104,7 @@ export class ClaudeSession {
     };
     this.permissionBroker = new PermissionBroker(opts.onPermission);
     this.planBroker = new PlanBroker(opts.onPlan);
+    this.historyReady = new Promise<void>((resolve) => { this.historyReadyResolve = resolve; });
 
     const claudePath = resolveClaudePath();
     const options: Options = {
@@ -149,6 +152,7 @@ export class ClaudeSession {
     } else {
       this.query = query({ prompt: this.prompts, options });
       void this.pump();
+      this.historyReadyResolve();
     }
   }
 
@@ -156,9 +160,6 @@ export class ClaudeSession {
     try {
       const prior = await getSessionMessages(resumeId, { dir: cwd });
       for (const m of prior) {
-        // Shape is close enough to SDKMessage that the reducer's user/assistant
-        // handling treats it identically. Tool results embedded in user messages
-        // get matched back to their tool_use by tool_use_id as normal.
         const ev = { ...m, parent_tool_use_id: m.parent_tool_use_id ?? null } as unknown as SDKMessage;
         this.pushEvent(ev);
         if (this.closed) return;
@@ -171,6 +172,9 @@ export class ClaudeSession {
         message: `Could not load prior transcript: ${msg}`,
       } as unknown as SDKMessage);
     }
+    // Signal history ready BEFORE starting pump so WS can flush the batch
+    // before any live event races in.
+    this.historyReadyResolve();
     if (this.closed) return;
     this.query = query({ prompt: this.prompts, options });
     void this.pump();

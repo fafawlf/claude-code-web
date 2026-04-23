@@ -24,11 +24,12 @@ export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionRe
 // Server → client
 export type ServerReady = { type: 'ready'; state: SessionStateSnapshot };
 export type ServerSdkEvent = { type: 'sdk_event'; id: number; event: SdkEvent };
+export type ServerSdkEventBatch = { type: 'sdk_events_batch'; events: Array<{ id: number; event: SdkEvent }> };
 export type ServerPermissionRequest = { type: 'permission_request'; reqId: string; toolName: string; toolUseId?: string; input: Record<string, unknown>; title?: string; displayName?: string; description?: string };
 export type ServerPlanProposed = { type: 'plan_proposed'; reqId: string; plan: string };
 export type ServerStateUpdate = { type: 'state_update'; state: Partial<SessionStateSnapshot> };
 export type ServerError = { type: 'error'; message: string };
-export type ServerMessage = ServerReady | ServerSdkEvent | ServerPermissionRequest | ServerPlanProposed | ServerStateUpdate | ServerError;
+export type ServerMessage = ServerReady | ServerSdkEvent | ServerSdkEventBatch | ServerPermissionRequest | ServerPlanProposed | ServerStateUpdate | ServerError;
 
 export type SdkEvent = {
   type: string;
@@ -50,7 +51,7 @@ export type SdkEvent = {
 };
 
 export type ChatItem =
-  | { kind: 'user'; id: string; text: string }
+  | { kind: 'user'; id: string; text: string; optimistic?: boolean }
   | { kind: 'assistant_text'; id: string; text: string }
   | { kind: 'thinking'; id: string; text: string }
   | { kind: 'tool_use'; id: string; toolUseId: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }

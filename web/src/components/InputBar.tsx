@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { PermissionMode } from '../types';
 import { MODE_ORDER } from '../types';
 import { SlashPalette, type SlashAction } from './SlashPalette';
@@ -27,7 +27,7 @@ const PLACEHOLDERS = [
   'Why is the test on line 42 flaky?',
 ];
 
-export function InputBar(p: Props) {
+function InputBarImpl(p: Props) {
   const [text, setText] = useState(p.initialText ?? '');
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -154,6 +154,8 @@ export function InputBar(p: Props) {
     </div>
   );
 }
+
+export const InputBar = memo(InputBarImpl);
 
 function SendButton({ busy, active, ready, onSend, onStop }: { busy: boolean; active: boolean; ready: boolean; onSend: () => void; onStop: () => void }) {
   if (busy) {

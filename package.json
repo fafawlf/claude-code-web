@@ -11,7 +11,8 @@
     "build": "npm run build -w server && npm run build -w web",
     "dev:server": "npm run dev -w server",
     "dev:web": "npm run dev -w web",
-    "start": "node server/dist/index.js"
+    "start": "node server/dist/index.js",
+    "test": "tsx --test web/src/__tests__/*.test.ts server/src/__tests__/*.test.ts"
   },
   "bin": {
     "claudecode-web": "./server/dist/bin/claudecode-web.js"

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { WsClient } from './ws';
-import { applyEvent, applyStateDelta, initialState, addSystem, withReady, type ChatState } from './reducer';
-import type { ChatItem, PermissionMode, ServerMessage, ServerPermissionRequest, ServerPlanProposed, StoredSession } from './types';
+import { applyEvent, applyStateDelta, initialState, addSystem, addUserOptimistic, withReady, type ChatState } from './reducer';
+import type { PermissionMode, SdkEvent, ServerMessage, ServerPermissionRequest, ServerPlanProposed, StoredSession } from './types';
 import { modeLabel, MODE_ORDER } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MessageList } from './components/MessageList';
@@ -34,7 +34,6 @@ export function App() {
   const toast = useToast();
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [state, setState] = useState<ChatState>(initialState);
-  const [localItems, setLocalItems] = useState<ChatItem[]>([]);
   const [nonEditPermReq, setNonEditPermReq] = useState<ServerPermissionRequest | null>(null);
   const [pendingEdits, setPendingEdits] = useState<Map<string, ServerPermissionRequest>>(new Map());
   const [planProposed, setPlanProposed] = useState<ServerPlanProposed | null>(null);
@@ -47,7 +46,25 @@ export function App() {
   const [inputSeed, setInputSeed] = useState<string | undefined>(undefined);
   const wsRef = useRef<WsClient | null>(null);
 
-  // Auth probe
+  // rAF-coalesced event queue: high-frequency SDK events (especially stream_event
+  // text deltas) get collapsed to one setState per animation frame, not per message.
+  const pendingRef = useRef<Array<{ id: number; event: SdkEvent }>>([]);
+  const rafScheduled = useRef(false);
+  const flushEvents = useCallback(() => {
+    rafScheduled.current = false;
+    const pending = pendingRef.current;
+    if (pending.length === 0) return;
+    pendingRef.current = [];
+    setState((s) => pending.reduce((acc, { id, event }) => applyEvent(acc, event, id), s));
+  }, []);
+  const enqueueEvent = useCallback((id: number, event: SdkEvent) => {
+    pendingRef.current.push({ id, event });
+    if (!rafScheduled.current) {
+      rafScheduled.current = true;
+      requestAnimationFrame(flushEvents);
+    }
+  }, [flushEvents]);
+
   useEffect(() => {
     if (!token) { setAuthed(false); return; }
     fetch(`/auth-check?t=${encodeURIComponent(token)}`)
@@ -77,16 +94,21 @@ export function App() {
     if (!authed || !token) return;
     const onMessage = (m: ServerMessage) => {
       if (m.type === 'ready') {
-        setState((s) => withReady(s, m.state));
+        pendingRef.current = [];
+        setState((s) => withReady({ ...initialState }, m.state));
         setConnected(true);
-        setLocalItems([]);
         setPendingEdits(new Map());
         setNonEditPermReq(null);
         setPlanProposed(null);
       } else if (m.type === 'state_update') {
         setState((s) => applyStateDelta(s, m.state));
       } else if (m.type === 'sdk_event') {
-        setState((s) => applyEvent(s, m.event, m.id));
+        enqueueEvent(m.id, m.event);
+      } else if (m.type === 'sdk_events_batch') {
+        // Batch replay from the server: fold the whole set into one setState to
+        // avoid 900× renders on attach to a long session.
+        const evs = m.events;
+        setState((s) => evs.reduce((acc, { id, event }) => applyEvent(acc, event, id), s));
       } else if (m.type === 'permission_request') {
         if (EDIT_LIKE.has(m.toolName) && m.toolUseId) {
           setPendingEdits((prev) => new Map(prev).set(m.toolUseId!, m));
@@ -105,11 +127,11 @@ export function App() {
     client.connect();
     client.onOpen(() => client.send({ type: 'hello' }));
     return () => { client.close(); };
-  }, [authed, token, toast]);
+  }, [authed, token, toast, enqueueEvent]);
 
-  const newSession = (opts?: { cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string }) => {
+  const newSession = useCallback((opts?: { cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string }) => {
+    pendingRef.current = [];
     setState(initialState);
-    setLocalItems([]);
     setPendingEdits(new Map());
     setNonEditPermReq(null);
     setPlanProposed(null);
@@ -121,62 +143,60 @@ export function App() {
       model: opts?.model,
       permissionMode: opts?.mode,
     });
-  };
+  }, []);
 
-  const sendUser = (text: string) => {
-    if (!text.trim() || !state.state) return;
-    setLocalItems((prev) => [...prev, { kind: 'user', id: Math.random().toString(36).slice(2), text }]);
+  const sendUser = useCallback((text: string) => {
+    if (!text.trim()) return;
+    setState((s) => (s.state ? addUserOptimistic(s, text) : s));
     wsRef.current?.send({ type: 'user', text });
-  };
+  }, []);
 
-  const respond = (req: ServerPermissionRequest | null, decision: 'allow' | 'deny', scope?: 'once' | 'session') => {
-    if (!req) return;
-    wsRef.current?.send({ type: 'permission_response', reqId: req.reqId, decision, scope });
-  };
+  const onAcceptEdit = useCallback((reqId: string) => {
+    setPendingEdits((prev) => {
+      let targetTuid: string | undefined;
+      for (const [k, v] of prev) if (v.reqId === reqId) { targetTuid = k; break; }
+      if (!targetTuid) return prev;
+      wsRef.current?.send({ type: 'permission_response', reqId, decision: 'allow' });
+      const n = new Map(prev); n.delete(targetTuid); return n;
+    });
+  }, []);
+  const onRejectEdit = useCallback((reqId: string) => {
+    setPendingEdits((prev) => {
+      let targetTuid: string | undefined;
+      for (const [k, v] of prev) if (v.reqId === reqId) { targetTuid = k; break; }
+      if (!targetTuid) return prev;
+      wsRef.current?.send({ type: 'permission_response', reqId, decision: 'deny' });
+      const n = new Map(prev); n.delete(targetTuid); return n;
+    });
+  }, []);
 
-  const onAcceptEdit = (reqId: string) => {
-    const entry = [...pendingEdits.entries()].find(([, v]) => v.reqId === reqId);
-    if (!entry) return;
-    wsRef.current?.send({ type: 'permission_response', reqId, decision: 'allow' });
-    setPendingEdits((prev) => { const n = new Map(prev); n.delete(entry[0]); return n; });
-  };
-  const onRejectEdit = (reqId: string) => {
-    const entry = [...pendingEdits.entries()].find(([, v]) => v.reqId === reqId);
-    if (!entry) return;
-    wsRef.current?.send({ type: 'permission_response', reqId, decision: 'deny' });
-    setPendingEdits((prev) => { const n = new Map(prev); n.delete(entry[0]); return n; });
-  };
-
-  const onPlanApprove = () => {
+  const onPlanApprove = useCallback(() => {
     if (!planProposed) return;
     wsRef.current?.send({ type: 'plan_response', reqId: planProposed.reqId, decision: 'approve' });
     setPlanProposed(null);
-  };
-  const onPlanReject = () => {
+  }, [planProposed]);
+  const onPlanReject = useCallback(() => {
     if (!planProposed) return;
     wsRef.current?.send({ type: 'plan_response', reqId: planProposed.reqId, decision: 'reject' });
     setPlanProposed(null);
-  };
+  }, [planProposed]);
 
-  const setMode = (mode: PermissionMode) => {
+  const setMode = useCallback((mode: PermissionMode) => {
     wsRef.current?.send({ type: 'set_permission_mode', mode });
     toast.push(`Mode: ${modeLabel(mode)}`, { level: 'success' });
-  };
-  const setModel = (model: string) => {
+  }, [toast]);
+  const setModel = useCallback((model: string) => {
     wsRef.current?.send({ type: 'set_model', model });
     toast.push(`Model: ${model}`, { level: 'success' });
-  };
+  }, [toast]);
 
-  const cycleMode = useCallback((next: PermissionMode) => {
-    setMode(next);
-  }, []);
+  const cycleMode = useCallback((next: PermissionMode) => setMode(next), [setMode]);
 
-  const openRename = () => {
-    // Trigger TopBar's inline rename: set a transient title, then let TopBar pick it up.
+  const openRename = useCallback(() => {
     setSessionTitle(sessionTitle ?? 'Rename this session');
-  };
+  }, [sessionTitle]);
 
-  const handlePaletteAction = (a: CommandAction) => {
+  const handlePaletteAction = useCallback((a: CommandAction) => {
     switch (a.kind) {
       case 'new-chat': newSession({ cwd: state.state?.cwd }); break;
       case 'open-cwd': setCwdPickerOpen(true); break;
@@ -191,25 +211,20 @@ export function App() {
         break;
       }
     }
-  };
+  }, [newSession, openRename, state.state?.cwd, setModel, setMode, sessions]);
 
-  const onSlash = (a: SlashAction) => {
+  const onSlash = useCallback((a: SlashAction) => {
     if (a.kind === 'new') newSession({ cwd: state.state?.cwd });
     else if (a.kind === 'cwd') setCwdPickerOpen(true);
     else if (a.kind === 'model') setModel(a.id);
     else if (a.kind === 'mode') setMode(a.mode);
-    else if (a.kind === 'history') { /* sidebar is always visible */ }
-  };
+    else if (a.kind === 'history') { /* sidebar always visible */ }
+  }, [newSession, state.state?.cwd, setModel, setMode]);
 
-  // Global keyboard
   useKeyboard(useCallback((e: KeyboardEvent) => {
-    // Cmd/Ctrl + K
     if (e.key === 'k' && isMod(e)) { e.preventDefault(); setPaletteOpen((v) => !v); return; }
-    // Cmd/Ctrl + N for new chat
     if (e.key === 'n' && isMod(e)) { e.preventDefault(); newSession({ cwd: state.state?.cwd }); return; }
-    // Cmd/Ctrl + O to open folder
     if (e.key === 'o' && isMod(e)) { e.preventDefault(); setCwdPickerOpen(true); return; }
-    // Shift+Tab from anywhere outside a textarea cycles mode too — but we already handle it inside InputBar.
     if (e.shiftKey && e.key === 'Tab' && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLInputElement)) {
       e.preventDefault();
       const cur = state.state?.permissionMode ?? 'default';
@@ -217,9 +232,9 @@ export function App() {
       const next = MODE_ORDER[(idx + 1) % MODE_ORDER.length];
       cycleMode(next);
     }
-  }, [state.state?.permissionMode, state.state?.cwd, cycleMode]));
+  }, [state.state?.permissionMode, state.state?.cwd, cycleMode, newSession]));
 
-  const renameCurrent = async (title: string) => {
+  const renameCurrent = useCallback(async (title: string) => {
     if (!state.state?.claudeSessionId || !token) return;
     setSessionTitle(title);
     try {
@@ -231,9 +246,9 @@ export function App() {
       refreshSessions(state.state.cwd);
       toast.push('Session renamed', { level: 'success' });
     } catch { toast.push('Rename failed', { level: 'error' }); }
-  };
+  }, [state.state?.claudeSessionId, state.state?.cwd, token, toast]);
 
-  const renameInList = async (claudeSessionId: string, newTitle: string) => {
+  const renameInList = useCallback(async (claudeSessionId: string, newTitle: string) => {
     if (!token) return;
     try {
       await fetch(`/api/session/rename?t=${encodeURIComponent(token)}`, {
@@ -244,7 +259,7 @@ export function App() {
       refreshSessions(state.state?.cwd);
       toast.push('Session renamed', { level: 'success' });
     } catch { toast.push('Rename failed', { level: 'error' }); }
-  };
+  }, [state.state?.cwd, token, toast]);
 
   const pendingByToolUseId = useMemo(() => {
     const m = new Map<string, string>();
@@ -252,8 +267,7 @@ export function App() {
     return m;
   }, [pendingEdits]);
 
-  const items = useMemo(() => [...localItems, ...state.items], [localItems, state.items]);
-  const showEmpty = items.length === 0 && !state.busy && !state.streamingText;
+  const showEmpty = state.items.length === 0 && !state.busy && !state.streamingText;
 
   if (authed === null) return <Centered>checking auth…</Centered>;
   if (authed === false) return (
@@ -295,7 +309,7 @@ export function App() {
           <EmptyState cwd={state.state?.cwd ?? defaultCwd} onUsePrompt={(t) => setInputSeed(t)} />
         ) : (
           <MessageList
-            items={items}
+            items={state.items}
             busy={state.busy}
             streamingText={state.streamingText}
             pendingByToolUseId={pendingByToolUseId}
@@ -319,8 +333,8 @@ export function App() {
       {nonEditPermReq && (
         <PermissionModal
           req={nonEditPermReq}
-          onAllow={(scope) => { respond(nonEditPermReq, 'allow', scope); setNonEditPermReq(null); }}
-          onDeny={() => { respond(nonEditPermReq, 'deny'); setNonEditPermReq(null); }}
+          onAllow={(scope) => { wsRef.current?.send({ type: 'permission_response', reqId: nonEditPermReq.reqId, decision: 'allow', scope }); setNonEditPermReq(null); }}
+          onDeny={() => { wsRef.current?.send({ type: 'permission_response', reqId: nonEditPermReq.reqId, decision: 'deny' }); setNonEditPermReq(null); }}
         />
       )}
       {planProposed && <PlanApprovalModal plan={planProposed.plan} onApprove={onPlanApprove} onReject={onPlanReject} />}

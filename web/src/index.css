@@ -44,6 +44,10 @@
   ::-webkit-scrollbar-track { background: transparent; }
 
   input::placeholder, textarea::placeholder { color: var(--text-muted); }
+
+  textarea, input[type="text"], input:not([type]) {
+    caret-color: var(--accent);
+  }
 }
 
 @layer components {

@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef } from 'react';
 import type { ChatItem } from '../types';
 import { ToolUse } from './ToolUse';
 import { DiffBlock } from './DiffBlock';
 
 const EDIT_LIKE = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const STICK_THRESHOLD = 80; // px from bottom still counts as "at bottom"
 
 type Props = {
   items: ChatItem[];
@@ -14,32 +15,63 @@ type Props = {
   onRejectEdit: (reqId: string) => void;
 };
 
-export function MessageList({ items, busy, streamingText, pendingByToolUseId, onAcceptEdit, onRejectEdit }: Props) {
+function MessageListImpl({ items, busy, streamingText, pendingByToolUseId, onAcceptEdit, onRejectEdit }: Props) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [items.length, busy, streamingText]);
+  const stickToBottomRef = useRef(true);
+
+  // Detect whether the user has scrolled up to read earlier messages. We only
+  // auto-scroll when they're already at (or near) the bottom.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Scroll on new message (items count change) only. Not on stream deltas.
+  // Use layout effect + instant behavior — "smooth" looks laggy when 900
+  // replayed items arrive in a single batch.
+  useLayoutEffect(() => {
+    if (!stickToBottomRef.current) return;
+    endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+  }, [items.length]);
+
+  // During streaming, keep the tail in view only if user is already at bottom.
+  // Use the CSS scroll-margin anchor via direct scrollTop for minimal cost.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [streamingText, busy]);
 
   return (
-    <div className="flex-1 overflow-y-auto pb-40">
+    <div ref={scrollerRef} className="flex-1 overflow-y-auto pb-40">
       <div className="max-w-[720px] mx-auto px-6 py-8 flex flex-col gap-[18px]">
         {items.map((it) => <Bubble key={it.id} item={it} pendingByToolUseId={pendingByToolUseId} onAcceptEdit={onAcceptEdit} onRejectEdit={onRejectEdit} />)}
         {streamingText && busy && (
-          <div className="animate-fade-up text-text-primary leading-[1.65] whitespace-pre-wrap">
+          <div className="text-text-primary leading-[1.65] whitespace-pre-wrap">
             {streamingText}<span className="cursor-bar" />
           </div>
         )}
-        {busy && !streamingText && <div className="animate-fade-up text-sm text-text-muted">Claude is thinking…<span className="cursor-bar ml-1" /></div>}
+        {busy && !streamingText && <div className="text-sm text-text-muted">Claude is thinking…<span className="cursor-bar ml-1" /></div>}
         <div ref={endRef} />
       </div>
     </div>
   );
 }
 
+export const MessageList = memo(MessageListImpl);
+
 type BubbleProps = { item: ChatItem } & Pick<Props, 'pendingByToolUseId' | 'onAcceptEdit' | 'onRejectEdit'>;
 
 function Bubble({ item, pendingByToolUseId, onAcceptEdit, onRejectEdit }: BubbleProps) {
   if (item.kind === 'user') {
     return (
-      <div className="animate-fade-up flex justify-end">
+      <div className={`animate-fade-up flex justify-end ${item.optimistic ? 'opacity-85' : ''}`}>
         <div className="max-w-[80%] px-4 py-2.5 text-text-primary whitespace-pre-wrap bg-bg-accent-soft border border-accent/15 rounded-[14px_14px_4px_14px]">
           {item.text}
         </div>

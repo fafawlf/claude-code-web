@@ -52,6 +52,7 @@ export type SessionStateSnapshot = {
 
 export type ServerReady = { type: 'ready'; state: SessionStateSnapshot };
 export type ServerSdkEvent = { type: 'sdk_event'; id: number; event: unknown };
+export type ServerSdkEventBatch = { type: 'sdk_events_batch'; events: Array<{ id: number; event: unknown }> };
 export type ServerPermissionRequest = {
   type: 'permission_request';
   reqId: string;
@@ -76,6 +77,7 @@ export type ServerError = { type: 'error'; message: string };
 export type ServerMessage =
   | ServerReady
   | ServerSdkEvent
+  | ServerSdkEventBatch
   | ServerPermissionRequest
   | ServerPlanProposed
   | ServerStateUpdate

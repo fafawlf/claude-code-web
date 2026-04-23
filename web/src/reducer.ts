@@ -5,7 +5,7 @@ export type ChatState = {
   busy: boolean;
   lastEventId: number;
   state: SessionStateSnapshot | null;
-  streamingText: string; // live delta buffer, shown with cursor while busy
+  streamingText: string;
 };
 
 export const initialState: ChatState = {
@@ -18,13 +18,46 @@ export const initialState: ChatState = {
 
 function rid(): string { return Math.random().toString(36).slice(2); }
 
+/**
+ * Extract a user text payload from an SDK user event's `content` field.
+ * Claude's message content can be either a plain string or an array of parts;
+ * we accept either and ignore `tool_result` parts (handled separately).
+ */
+function extractUserText(content: unknown): string | null {
+  if (typeof content === 'string') return content.length ? content : null;
+  if (!Array.isArray(content)) return null;
+  const buf: string[] = [];
+  for (const part of content as any[]) {
+    if (!part || typeof part !== 'object') continue;
+    if (part.type === 'text' && typeof part.text === 'string') buf.push(part.text);
+  }
+  return buf.length ? buf.join('') : null;
+}
+
+/**
+ * When an echoed user event arrives, see if there's a recent optimistic item
+ * with the same text — if so, "confirm" it instead of appending a duplicate.
+ * Searches the tail of items for resilience (last 5 are usually enough).
+ */
+function absorbOptimistic(items: ChatItem[], text: string): ChatItem[] | null {
+  const scan = Math.min(5, items.length);
+  for (let i = items.length - 1; i >= items.length - scan && i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === 'user' && it.optimistic && it.text === text) {
+      const copy = items.slice();
+      copy[i] = { ...it, optimistic: false };
+      return copy;
+    }
+  }
+  return null;
+}
+
 export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatState {
   const items = s.items.slice();
   let busy = s.busy;
   let streamingText = s.streamingText;
 
   if (ev.type === 'stream_event') {
-    // Partial assistant streaming. Extract text deltas.
     const inner = (ev as any).event as { type?: string; delta?: { type?: string; text?: string } };
     if (inner?.type === 'content_block_delta' && inner.delta?.type === 'text_delta' && typeof inner.delta.text === 'string') {
       streamingText = streamingText + inner.delta.text;
@@ -32,17 +65,13 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
     } else if (inner?.type === 'message_start') {
       streamingText = '';
       busy = true;
-    } else if (inner?.type === 'message_stop') {
-      // The authoritative assistant event will land next with the full content;
-      // leave streamingText untouched so there's no flicker — it gets cleared
-      // when the final assistant event processes.
     }
     return { ...s, items, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
   }
 
   if (ev.type === 'assistant' && ev.message?.content) {
     busy = true;
-    streamingText = ''; // final message replaces any streaming preview
+    streamingText = '';
     for (const part of ev.message.content) {
       if (part.type === 'text' && typeof (part as any).text === 'string') {
         items.push({ kind: 'assistant_text', id: rid(), text: (part as any).text });
@@ -53,11 +82,24 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
         items.push({ kind: 'tool_use', id: rid(), toolUseId: p.id, name: p.name, input: p.input });
       }
     }
-  } else if (ev.type === 'user' && ev.message?.content) {
-    for (const part of ev.message.content) {
-      if ((part as any).type === 'tool_result') {
+  } else if (ev.type === 'user' && ev.message?.content !== undefined) {
+    const content = ev.message.content as unknown;
+    // 1) First attempt user text extraction (string or text parts). If present,
+    //    either absorb the matching optimistic item or append a new one.
+    const text = extractUserText(content);
+    if (text) {
+      const absorbed = absorbOptimistic(items, text);
+      if (absorbed) {
+        return { ...s, items: absorbed, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
+      }
+      items.push({ kind: 'user', id: rid(), text });
+    }
+    // 2) Then walk for tool_result parts and bind them back to their tool_use.
+    if (Array.isArray(content)) {
+      for (const part of content as any[]) {
+        if (part?.type !== 'tool_result') continue;
         const p = part as { tool_use_id: string; content?: unknown; is_error?: boolean };
-        const content = typeof p.content === 'string' ? p.content : JSON.stringify(p.content, null, 2);
+        const resultContent = typeof p.content === 'string' ? p.content : JSON.stringify(p.content, null, 2);
         let idx = -1;
         for (let i = items.length - 1; i >= 0; i--) {
           const x = items[i];
@@ -65,7 +107,7 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
         }
         if (idx >= 0 && items[idx].kind === 'tool_use') {
           const prev = items[idx] as Extract<ChatItem, { kind: 'tool_use' }>;
-          items[idx] = { ...prev, result: { content: content ?? '', isError: !!p.is_error } };
+          items[idx] = { ...prev, result: { content: resultContent ?? '', isError: !!p.is_error } };
         }
       }
     }
@@ -79,6 +121,11 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
   }
 
   return { ...s, items, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
+}
+
+/** Optimistically append a user message on send (replaced when the echo arrives). */
+export function addUserOptimistic(s: ChatState, text: string): ChatState {
+  return { ...s, items: [...s.items, { kind: 'user', id: rid(), text, optimistic: true }] };
 }
 
 export function applyStateDelta(s: ChatState, delta: Partial<SessionStateSnapshot>): ChatState {
