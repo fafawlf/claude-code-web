@@ -25,7 +25,14 @@ Make sure `ANTHROPIC_API_KEY` (or `claude login` credentials in
 `~/.claude`) is set in the shell where you launch the server, same as
 you'd set it for the `claude` CLI.
 
-## Use
+## Zero-SSH daily use (recommended)
+
+Once the remote is built (above) and SSH-key login works, grab the right
+launcher from [`launcher/`](./launcher/) and run it from your laptop. It
+auto-starts the remote server inside `tmux`, sets up the tunnel, and opens
+your browser — one double-click, 1–3 seconds. See [launcher/README.md](./launcher/README.md).
+
+## Manual use
 
 On the remote machine, in the directory you want Claude to work in:
 
