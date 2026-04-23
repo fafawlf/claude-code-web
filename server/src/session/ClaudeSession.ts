@@ -128,33 +128,7 @@ export class ClaudeSession {
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
-      canUseTool: async (toolName, input, ctx) => {
-        // ExitPlanMode: custom flow — show plan to user, auto-flip mode on approve.
-        if (toolName === 'ExitPlanMode') {
-          const plan = typeof input.plan === 'string' ? input.plan : JSON.stringify(input, null, 2);
-          const result = await this.planBroker.awaitApproval(plan, ctx.signal);
-          if (result.behavior === 'allow') {
-            try {
-              await this.query?.setPermissionMode('default');
-              this.updateState({ permissionMode: 'default' });
-            } catch { /* best effort */ }
-          }
-          return result;
-        }
-
-        // acceptEdits mode: auto-allow edit tools without prompting.
-        if (this.state.permissionMode === 'acceptEdits' && EDIT_LIKE.has(toolName)) {
-          return { behavior: 'allow', updatedInput: input };
-        }
-
-        return this.permissionBroker.request(toolName, input, {
-          toolUseId: ctx.toolUseID,
-          title: ctx.title,
-          displayName: ctx.displayName,
-          description: ctx.description,
-          signal: ctx.signal,
-        });
-      },
+      canUseTool: this.canUseToolImpl,
     };
 
     if (this.viewerMode && opts.resume) {
@@ -262,32 +236,83 @@ export class ClaudeSession {
     for (const l of this.listeners) { try { l(se); } catch { /* */ } }
   }
 
+  // Supervisor-style pump: runs the SDK query to completion, and when it exits
+  // unexpectedly (not from user close/interrupt) respawns with current state.
+  // This prevents "session death" after control-request failures (e.g. the CLI
+  // subprocess exits when toggling certain permission modes).
+  private relaunchCount = 0;
+  private lastRelaunchAt = 0;
+
   private async pump(): Promise<void> {
-    if (!this.query) return;
-    try {
-      for await (const event of this.query) {
-        const anyEv = event as any;
-        // Token bookkeeping — best-effort.
-        const usage = anyEv?.message?.usage ?? anyEv?.usage;
-        if (usage && typeof usage === 'object') {
-          const delta: Partial<SessionStateSnapshot> = {};
-          if (typeof usage.input_tokens === 'number') delta.tokensIn = this.state.tokensIn + usage.input_tokens;
-          if (typeof usage.output_tokens === 'number') delta.tokensOut = this.state.tokensOut + usage.output_tokens;
-          if (Object.keys(delta).length) this.updateState(delta);
+    while (!this.closed) {
+      if (!this.query) return;
+      try {
+        for await (const event of this.query) {
+          const anyEv = event as any;
+          const usage = anyEv?.message?.usage ?? anyEv?.usage;
+          if (usage && typeof usage === 'object') {
+            const delta: Partial<SessionStateSnapshot> = {};
+            if (typeof usage.input_tokens === 'number') delta.tokensIn = this.state.tokensIn + usage.input_tokens;
+            if (typeof usage.output_tokens === 'number') delta.tokensOut = this.state.tokensOut + usage.output_tokens;
+            if (Object.keys(delta).length) this.updateState(delta);
+          }
+          if (event.type === 'result' && typeof (event as any).total_cost_usd === 'number') {
+            this.updateState({ cost: (event as any).total_cost_usd });
+          }
+          this.pushEvent(event);
         }
-        if (event.type === 'result' && typeof (event as any).total_cost_usd === 'number') {
-          this.updateState({ cost: (event as any).total_cost_usd });
-        }
-        this.pushEvent(event);
+      } catch (err) {
+        this.pushEvent({
+          type: 'system',
+          subtype: 'error' as unknown as 'status',
+          message: (err as Error).message,
+        } as unknown as SDKMessage);
       }
-    } catch (err) {
+
+      // Query ended. If explicit close, stop.
+      if (this.closed) break;
+
+      // Otherwise, the SDK subprocess exited on its own. Rebuild options from
+      // current state (preserves user's mode/model) and respawn. Rate-limit to
+      // avoid tight loops: at most 5 relaunches per 30s.
+      const now = Date.now();
+      if (now - this.lastRelaunchAt < 30_000) {
+        this.relaunchCount += 1;
+      } else {
+        this.relaunchCount = 1;
+      }
+      this.lastRelaunchAt = now;
+      if (this.relaunchCount > 5) {
+        this.pushEvent({
+          type: 'system',
+          subtype: 'error' as unknown as 'status',
+          message: 'Session relaunched too many times — stopping. Click "New chat" or reload.',
+        } as unknown as SDKMessage);
+        this.closed = true;
+        break;
+      }
+
       this.pushEvent({
         type: 'system',
-        subtype: 'error' as unknown as 'status',
-        message: (err as Error).message,
+        subtype: 'info' as unknown as 'status',
+        message: 'Session re-initialized with current settings.',
       } as unknown as SDKMessage);
-    } finally {
-      this.closed = true;
+
+      this.abortCtl = new AbortController();
+      const claudePath = resolveClaudePath();
+      const opts: Options = {
+        cwd: this.cwd,
+        abortController: this.abortCtl,
+        resume: this.state.claudeSessionId,
+        includePartialMessages: true,
+        allowDangerouslySkipPermissions: true,
+        ...(this.state.model ? { model: this.state.model } : {}),
+        permissionMode: this.state.permissionMode,
+        ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
+        canUseTool: this.canUseToolImpl,
+      };
+      this.query = query({ prompt: this.prompts, options: opts });
+      // loop continues, awaits the new query
     }
   }
 
@@ -299,6 +324,36 @@ export class ClaudeSession {
   getState(): SessionStateSnapshot {
     return { ...this.state };
   }
+
+  private canUseToolImpl = async (toolName: string, input: Record<string, unknown>, ctx: {
+    signal: AbortSignal;
+    title?: string;
+    displayName?: string;
+    description?: string;
+    toolUseID: string;
+  }): Promise<any> => {
+    if (toolName === 'ExitPlanMode') {
+      const plan = typeof input.plan === 'string' ? input.plan : JSON.stringify(input, null, 2);
+      const result = await this.planBroker.awaitApproval(plan, ctx.signal);
+      if (result.behavior === 'allow') {
+        try {
+          await this.query?.setPermissionMode('default');
+          this.updateState({ permissionMode: 'default' });
+        } catch { /* best effort */ }
+      }
+      return result;
+    }
+    if (this.state.permissionMode === 'acceptEdits' && EDIT_LIKE.has(toolName)) {
+      return { behavior: 'allow', updatedInput: input };
+    }
+    return this.permissionBroker.request(toolName, input, {
+      toolUseId: ctx.toolUseID,
+      title: ctx.title,
+      displayName: ctx.displayName,
+      description: ctx.description,
+      signal: ctx.signal,
+    });
+  };
 
   sendUser(text: string): void {
     if (this.closed || this.viewerMode) return;
