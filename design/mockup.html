@@ -1,0 +1,1645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="dark" />
+<title>claude-code-web · design preview</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --bg-base: #19161a;
+  --bg-raised: #22201e;
+  --bg-surface: #2a2724;
+  --bg-hover: #332f2a;
+  --bg-accent-soft: #39241c;
+  --border-subtle: #2f2b27;
+  --border-default: #3f3830;
+  --text-primary: #f0e8d9;
+  --text-secondary: #b5a898;
+  --text-muted: #7a7065;
+  --text-inverse: #1a1714;
+  --accent: #d97757;
+  --accent-hi: #e28b70;
+  --accent-lo: #b85f44;
+  --success: #8aa876;
+  --warning: #d4a95e;
+  --danger: #c66a4f;
+
+  --d-hover: 120ms;
+  --d-enter: 180ms;
+  --d-modal: 220ms;
+  --d-exit: 140ms;
+  --d-mode: 240ms;
+
+  --e-out: cubic-bezier(.22, 1, .36, 1);
+  --e-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --e-soft: cubic-bezier(.4, 0, .2, 1);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  --shadow-pop: 0 1px 0 rgba(255,230,200,.02) inset, 0 6px 20px -8px rgba(0,0,0,.6);
+  --shadow-modal: 0 24px 60px -16px rgba(0,0,0,.7), 0 0 0 1px var(--border-subtle);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'Inter', -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 24px;
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  height: 100%;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #4a4238; }
+::-webkit-scrollbar-track { background: transparent; }
+
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+input, textarea { font: inherit; color: inherit; background: none; border: 0; outline: 0; }
+input::placeholder, textarea::placeholder { color: var(--text-muted); }
+
+/* ────────────── top nav (scene switcher) ─────────────── */
+
+.scene-nav {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 16px;
+  background: rgba(25, 22, 26, .85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.scene-nav .brand {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px 4px 6px;
+  margin-right: 12px;
+}
+.scene-nav .brand .dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px rgba(217,119,87,.5);
+}
+.scene-nav .brand span { font-weight: 500; color: var(--text-primary); font-size: 13px; }
+.scene-nav .brand small { color: var(--text-muted); font-size: 11px; margin-left: 4px; }
+
+.scene-nav button.tab {
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  transition: color var(--d-hover) var(--e-out), background var(--d-hover) var(--e-out);
+}
+.scene-nav button.tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+.scene-nav button.tab.active {
+  background: var(--bg-accent-soft);
+  color: var(--accent-hi);
+}
+.scene-nav .spacer { flex: 1; }
+.scene-nav .meta {
+  color: var(--text-muted); font-size: 11px; display: flex; align-items: center; gap: 10px;
+}
+.kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+/* ────────────── scene frame ─────────────── */
+
+.stage {
+  height: calc(100vh - 56px);
+  overflow: hidden;
+  position: relative;
+}
+.scene {
+  display: none;
+  height: 100%;
+  position: absolute; inset: 0;
+  animation: sceneIn var(--d-enter) var(--e-out);
+}
+.scene.active { display: flex; }
+@keyframes sceneIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ────────────── app shell ─────────────── */
+
+.sidebar {
+  width: 288px;
+  flex-shrink: 0;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.sidebar .brand {
+  padding: 16px 16px 12px;
+  display: flex; align-items: center; gap: 10px;
+}
+.sidebar .brand .mark {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-lo) 100%);
+  display: grid; place-items: center;
+  color: var(--text-inverse);
+  font-weight: 600; font-size: 13px;
+  box-shadow: inset 0 1px 0 rgba(255,230,200,.2);
+}
+.sidebar .brand .name { color: var(--text-primary); font-weight: 500; font-size: 13px; }
+.sidebar .brand .shortcut { margin-left: auto; }
+
+.sidebar .actions { padding: 0 12px; }
+.sidebar .new-btn {
+  width: 100%;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent-soft);
+  color: var(--accent-hi);
+  font-weight: 500; font-size: 13px;
+  border: 1px solid rgba(217,119,87,.15);
+  transition: all var(--d-hover) var(--e-out);
+}
+.sidebar .new-btn:hover { background: rgba(217,119,87,.18); border-color: rgba(217,119,87,.3); }
+.sidebar .new-btn svg { width: 16px; height: 16px; }
+
+.sidebar .search {
+  margin: 10px 12px 6px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid transparent;
+  transition: border-color var(--d-hover) var(--e-out);
+}
+.sidebar .search:focus-within { border-color: var(--border-default); }
+.sidebar .search svg { width: 14px; height: 14px; color: var(--text-muted); }
+.sidebar .search input { flex: 1; font-size: 13px; }
+
+.history {
+  flex: 1; overflow-y: auto;
+  padding: 4px 6px 16px;
+}
+.history .group-label {
+  padding: 12px 10px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.history .item {
+  position: relative;
+  padding: 9px 12px;
+  margin: 1px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--d-hover) var(--e-out);
+}
+.history .item:hover { background: var(--bg-hover); }
+.history .item.active { background: var(--bg-hover); box-shadow: inset 2px 0 0 var(--accent); }
+.history .item .title {
+  font-size: 13px; color: var(--text-primary);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.history .item .meta {
+  font-size: 11px; color: var(--text-muted);
+  margin-top: 3px;
+  display: flex; gap: 8px; align-items: center;
+}
+.history .item .meta svg { width: 10px; height: 10px; }
+.history .item .row-actions {
+  position: absolute; top: 8px; right: 8px;
+  display: flex; gap: 2px;
+  opacity: 0;
+  transition: opacity var(--d-hover) var(--e-out);
+}
+.history .item:hover .row-actions { opacity: 1; }
+.history .item .row-actions button {
+  width: 22px; height: 22px; border-radius: 4px;
+  display: grid; place-items: center;
+  color: var(--text-muted);
+  transition: all var(--d-hover) var(--e-out);
+}
+.history .item .row-actions button:hover { background: var(--bg-base); color: var(--text-primary); }
+.history .item .row-actions svg { width: 12px; height: 12px; }
+
+.sidebar .footer {
+  border-top: 1px solid var(--border-subtle);
+  padding: 12px 16px;
+}
+.sidebar .footer .label {
+  font-size: 10px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.sidebar .footer .path {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px; color: var(--text-secondary);
+  word-break: break-all;
+}
+
+/* ────────────── main column ─────────────── */
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  position: relative;
+}
+
+/* top bar */
+.topbar {
+  height: 44px;
+  padding: 0 16px;
+  display: flex; align-items: center; gap: 4px;
+  background: rgba(25, 22, 26, .7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-subtle);
+  position: sticky; top: 0; z-index: 20;
+}
+.topbar .chip {
+  display: flex; align-items: center; gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  transition: all var(--d-hover) var(--e-out);
+  cursor: pointer;
+}
+.topbar .chip:hover { background: var(--bg-hover); color: var(--text-primary); }
+.topbar .chip svg { width: 14px; height: 14px; opacity: .8; }
+.topbar .chip .chev { width: 12px; height: 12px; opacity: .5; }
+.topbar .chip.cwd .path { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; }
+.topbar .chip.mode { color: var(--text-secondary); }
+.topbar .chip.mode.plan { color: var(--warning); }
+.topbar .chip.mode.acceptEdits { color: var(--success); }
+.topbar .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.topbar .sep { width: 1px; height: 14px; background: var(--border-subtle); margin: 0 6px; }
+
+.topbar .right {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.topbar .title-edit {
+  color: var(--text-secondary);
+  padding: 4px 8px; border-radius: 4px;
+  transition: all var(--d-hover) var(--e-out);
+}
+.topbar .title-edit:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.topbar .conn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(138,168,118,.6);
+  margin-right: 8px;
+}
+
+/* message list */
+.messages {
+  flex: 1; overflow-y: auto;
+  padding: 32px 24px 140px;
+}
+.messages .inner {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.msg { animation: msgIn var(--d-enter) var(--e-out); }
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.msg.user {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 10px 16px;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--bg-accent-soft);
+  border: 1px solid rgba(217,119,87,.15);
+  color: var(--text-primary);
+}
+.msg.assistant { color: var(--text-primary); line-height: 1.65; }
+.msg.assistant p + p { margin-top: 10px; }
+.msg.assistant .cursor {
+  display: inline-block;
+  width: 2px; height: 1.1em; vertical-align: -2px;
+  background: var(--accent);
+  margin-left: 2px;
+  animation: blink 1.1s ease-in-out infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+.msg.thinking {
+  padding: 8px 12px;
+  font-size: 12px; color: var(--text-muted);
+  border-left: 2px solid var(--border-default);
+  cursor: pointer;
+}
+.msg.thinking:hover { color: var(--text-secondary); }
+.msg.thinking svg { width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px; }
+
+/* tool card */
+.tool-card {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-raised);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color var(--d-hover) var(--e-out), transform var(--d-hover) var(--e-out);
+}
+.tool-card:hover { border-color: var(--border-default); transform: translateY(-1px); }
+.tool-card .head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+}
+.tool-card .tname {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: .9;
+}
+.tool-card .arg {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tool-card .head svg.chev { width: 12px; height: 12px; color: var(--text-muted); }
+.tool-card.open { background: var(--bg-surface); }
+.tool-card .body {
+  max-height: 0; overflow: hidden;
+  transition: max-height var(--d-enter) var(--e-soft);
+}
+.tool-card.open .body { max-height: 400px; border-top: 1px solid var(--border-subtle); }
+.tool-card .body pre {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 12px 14px;
+  white-space: pre-wrap;
+}
+.tool-card .status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-weight: 500;
+}
+.tool-card .status.ok { color: var(--success); background: rgba(138,168,118,.1); }
+
+/* diff card */
+.diff-card {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-raised);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color var(--d-mode) var(--e-soft);
+}
+.diff-card.pending { border-color: rgba(212,169,94,.6); box-shadow: 0 0 0 3px rgba(212,169,94,.08); }
+.diff-card.accepted { border-color: rgba(138,168,118,.5); }
+.diff-card .head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.diff-card .head .tname { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+.diff-card.pending .head .tname { color: var(--warning); }
+.diff-card.accepted .head .tname { color: var(--success); }
+.diff-card .head .path {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px; color: var(--text-primary); flex: 1;
+}
+.diff-card .head .stat {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px; color: var(--text-muted);
+}
+.diff-card .head .stat .plus { color: var(--success); }
+.diff-card .head .stat .minus { color: var(--danger); }
+.diff-card .hunk {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.diff-card .hunk .line {
+  display: flex;
+  padding: 0 0;
+}
+.diff-card .hunk .gutter {
+  width: 48px; flex-shrink: 0;
+  color: var(--text-muted);
+  padding: 0 8px;
+  text-align: right;
+  user-select: none;
+  opacity: .6;
+}
+.diff-card .hunk .sign {
+  width: 16px; flex-shrink: 0; text-align: center;
+  color: var(--text-muted);
+}
+.diff-card .hunk .line.del { background: rgba(198,106,79,.08); }
+.diff-card .hunk .line.del .sign { color: var(--danger); }
+.diff-card .hunk .line.add { background: rgba(138,168,118,.08); }
+.diff-card .hunk .line.add .sign { color: var(--success); }
+.diff-card .hunk .content { padding-right: 14px; }
+.diff-card .actions {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex; justify-content: flex-end; gap: 8px;
+}
+.diff-card .btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  transition: all var(--d-hover) var(--e-out);
+}
+.diff-card .btn.ghost { color: var(--text-secondary); }
+.diff-card .btn.ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+.diff-card .btn.primary { background: var(--success); color: var(--text-inverse); }
+.diff-card .btn.primary:hover { filter: brightness(1.1); }
+.diff-card .summary {
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: none;
+}
+.diff-card.accepted .summary { display: flex; gap: 8px; align-items: center; }
+.diff-card.accepted .actions { display: none; }
+.diff-card.accepted .hunk { opacity: .7; }
+
+/* input bar (floating) */
+.input-wrap {
+  position: absolute;
+  bottom: 24px; left: 24px; right: 24px;
+  pointer-events: none;
+  display: flex; justify-content: center;
+}
+.input-bar {
+  pointer-events: auto;
+  width: 100%; max-width: 720px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  padding: 14px 16px 10px;
+  box-shadow: var(--shadow-pop);
+  transition: border-color var(--d-hover) var(--e-out), box-shadow var(--d-hover) var(--e-out);
+}
+.input-bar.focused {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-pop), 0 0 0 4px rgba(217,119,87,.12);
+}
+.input-bar .meta-row {
+  display: flex; align-items: center; gap: 10px;
+  height: 22px;
+  margin-bottom: 4px;
+}
+.input-bar .mode-dot {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px;
+}
+.input-bar .mode-dot.default { display: none; }
+.input-bar .mode-dot .d {
+  width: 6px; height: 6px; border-radius: 50%;
+  transition: background-color var(--d-mode) var(--e-soft);
+}
+.input-bar .mode-dot.plan .d { background: var(--warning); box-shadow: 0 0 8px rgba(212,169,94,.6); }
+.input-bar .mode-dot.acceptEdits .d { background: var(--success); box-shadow: 0 0 8px rgba(138,168,118,.6); }
+.input-bar .mode-dot.plan .label { color: var(--warning); }
+.input-bar .mode-dot.acceptEdits .label { color: var(--success); }
+
+.input-bar textarea {
+  width: 100%;
+  resize: none;
+  padding: 4px 0;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--text-primary);
+  min-height: 24px;
+  max-height: 160px;
+}
+.input-bar .hint-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 6px;
+}
+.input-bar .hints {
+  flex: 1; display: flex; gap: 10px;
+  color: var(--text-muted); font-size: 11px;
+  align-items: center;
+}
+.input-bar .hints .chip {
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.input-bar .hints .kbd { font-size: 10px; padding: 0 4px; min-width: 16px; height: 16px; }
+
+.send-btn {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  transition: all var(--d-hover) var(--e-out);
+  flex-shrink: 0;
+}
+.send-btn.active {
+  background: var(--accent);
+  color: var(--text-inverse);
+  box-shadow: 0 0 0 1px var(--accent-hi), 0 6px 16px -4px rgba(217,119,87,.4);
+}
+.send-btn.active:hover { background: var(--accent-hi); }
+.send-btn:active { transform: scale(.97); }
+.send-btn svg { width: 16px; height: 16px; }
+
+/* ────────────── empty state ─────────────── */
+.empty {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 0 24px 200px;
+}
+.empty .hero {
+  font-family: ui-serif, 'Iowan Old Style', Georgia, serif;
+  font-size: 34px;
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  letter-spacing: -.01em;
+}
+.empty .sub {
+  color: var(--text-secondary);
+  margin-bottom: 36px;
+}
+.empty .prompts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  max-width: 680px;
+  margin-bottom: 24px;
+}
+.empty .prompt {
+  padding: 14px 16px;
+  text-align: left;
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+  transition: all var(--d-hover) var(--e-out);
+}
+.empty .prompt:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+  transform: translateY(-1px);
+}
+.empty .prompt .icon { color: var(--accent); opacity: .8; margin-bottom: 8px; }
+.empty .prompt .icon svg { width: 16px; height: 16px; }
+.empty .kb-chips {
+  display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;
+  color: var(--text-muted); font-size: 11px;
+}
+.empty .kb-chips .chip { display: inline-flex; gap: 6px; align-items: center; }
+
+/* ────────────── modals & overlays ─────────────── */
+.backdrop {
+  position: absolute; inset: 0;
+  background: rgba(20,16,15,.65);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+  animation: backdropIn var(--d-enter) var(--e-out);
+}
+@keyframes backdropIn { from { opacity: 0; } to { opacity: 1; } }
+
+.modal {
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  max-width: 560px;
+  width: calc(100% - 48px);
+  animation: modalIn var(--d-modal) var(--e-spring);
+}
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.modal .m-head {
+  padding: 22px 24px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.modal .m-head .icon-circle {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--bg-accent-soft);
+  color: var(--accent);
+  display: grid; place-items: center;
+  margin-bottom: 12px;
+}
+.modal .m-head .icon-circle svg { width: 18px; height: 18px; }
+.modal .m-head .title { font-size: 17px; font-weight: 500; color: var(--text-primary); }
+.modal .m-head .sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.modal .m-body { padding: 18px 24px; }
+.modal .mono-block {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  max-height: 240px; overflow-y: auto;
+}
+.modal .m-foot {
+  padding: 14px 24px 20px;
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+.modal .btn {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  transition: all var(--d-hover) var(--e-out);
+}
+.modal .btn.ghost { color: var(--text-secondary); }
+.modal .btn.ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+.modal .btn.outline { color: var(--text-primary); border: 1px solid var(--border-default); }
+.modal .btn.outline:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--accent-hi); }
+.modal .btn.primary { background: var(--accent); color: var(--text-inverse); }
+.modal .btn.primary:hover { background: var(--accent-hi); }
+
+/* plan modal specifically */
+.modal.plan-modal { max-width: 640px; }
+.modal.plan-modal .m-head .title {
+  font-family: ui-serif, 'Iowan Old Style', Georgia, serif;
+  font-size: 22px;
+  font-weight: 600;
+}
+.modal.plan-modal .plan-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px;
+  color: var(--warning);
+  background: rgba(212,169,94,.08);
+  padding: 2px 8px;
+  border-radius: 99px;
+  margin-top: 4px;
+}
+.modal.plan-modal .plan-chip .d {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--warning);
+}
+.modal.plan-modal .plan-body {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  max-height: 400px; overflow-y: auto;
+  padding-right: 8px;
+}
+.modal.plan-modal .plan-body h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-hi);
+  margin: 16px 0 6px;
+}
+.modal.plan-modal .plan-body ol, .modal.plan-modal .plan-body ul {
+  padding-left: 22px;
+  color: var(--text-secondary);
+}
+.modal.plan-modal .plan-body li { margin: 4px 0; }
+.modal.plan-modal .plan-body code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  background: var(--bg-base);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--accent-hi);
+}
+
+/* command palette */
+.palette-wrap {
+  position: absolute; inset: 0;
+  background: rgba(20,16,15,.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding-top: 15vh;
+  display: flex; justify-content: center;
+  z-index: 55;
+  animation: backdropIn var(--d-enter) var(--e-out);
+}
+.palette {
+  width: 640px; max-height: 520px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  animation: modalIn var(--d-modal) var(--e-spring);
+}
+.palette .p-search {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.palette .p-search svg.s-icon { width: 18px; height: 18px; color: var(--text-muted); }
+.palette .p-search input {
+  flex: 1; font-size: 15px;
+  color: var(--text-primary);
+}
+.palette .p-search .kbd-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+}
+.palette .p-list { overflow-y: auto; padding: 6px 0 8px; }
+.palette .p-group-label {
+  padding: 10px 18px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.palette .p-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 18px;
+  cursor: pointer;
+  transition: background var(--d-hover) var(--e-out);
+}
+.palette .p-item.selected { background: var(--bg-hover); }
+.palette .p-item svg { width: 16px; height: 16px; color: var(--text-secondary); }
+.palette .p-item.selected svg { color: var(--accent); }
+.palette .p-item .label {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.palette .p-item .label .dim { color: var(--text-muted); }
+.palette .p-item .hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.palette .p-item.selected .hint {
+  color: var(--text-secondary);
+}
+.palette .p-item .check { color: var(--accent); }
+
+/* mention popup */
+.mention-pop {
+  position: absolute;
+  left: 50%;
+  bottom: 110px;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: modalIn var(--d-enter) var(--e-spring);
+  z-index: 40;
+}
+.mention-pop .m-label {
+  padding: 8px 14px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.mention-pop .m-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 14px;
+  transition: background var(--d-hover) var(--e-out);
+  cursor: pointer;
+}
+.mention-pop .m-item.selected { background: var(--bg-hover); }
+.mention-pop .m-item svg { width: 14px; height: 14px; color: var(--text-muted); }
+.mention-pop .m-item .path {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.mention-pop .m-item .path .match { color: var(--accent-hi); font-weight: 500; }
+
+/* toast */
+.toast-stack {
+  position: absolute; top: 60px; right: 24px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 70;
+}
+.toast {
+  min-width: 260px;
+  padding: 10px 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px;
+  animation: toastIn var(--d-enter) var(--e-out);
+}
+.toast.success { border-left-color: var(--success); }
+.toast svg { width: 14px; height: 14px; color: var(--accent); flex-shrink: 0; }
+.toast.success svg { color: var(--success); }
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ────────────── design-doc strip at bottom of viewport ─────────────── */
+.foot-hint {
+  position: fixed; bottom: 8px; left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px; color: var(--text-muted);
+  background: rgba(25,22,26,.7);
+  backdrop-filter: blur(8px);
+  padding: 4px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--border-subtle);
+  pointer-events: none;
+}
+</style>
+</head>
+
+<body>
+
+<!-- ──────────── SVG sprite ──────────── -->
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute">
+  <defs>
+    <!-- all icons 24x24 viewBox, stroke currentColor 1.5 -->
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-chev-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></symbol>
+    <symbol id="i-chev-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.6" y2="16.6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></symbol>
+    <symbol id="i-command" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 1 0 0 6h-3V6a3 3 0 0 0-6 0v3H6a3 3 0 1 0 0 6h3v3a3 3 0 1 0 6 0v-3h3a3 3 0 1 0 0-6h-3V6"/></symbol>
+    <symbol id="i-brain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2a3.5 3.5 0 0 0-3.5 3.5v.5a3.5 3.5 0 0 0-2 6.3 3.5 3.5 0 0 0 2 6.2V19a3 3 0 0 0 6 0V4.5A2.5 2.5 0 0 0 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 1 17 4.5V19a3 3 0 0 1-6 0"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 8 11 4 15"/><line x1="11" y1="17" x2="19" y2="17"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 10 18 20 6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16 4l4 4-11 11H5v-4z"/></symbol>
+    <symbol id="i-git-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><path d="M18 8a7 7 0 0 1-7 7H6"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/><path d="M19 14l.75 2.25L22 17l-2.25.75L19 20l-.75-2.25L16 17l2.25-.75z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></symbol>
+    <symbol id="i-circle-dot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2" fill="currentColor"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="8" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="20" y2="12"/><line x1="8" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></symbol>
+  </defs>
+</svg>
+
+<!-- ──────────── scene nav ──────────── -->
+<nav class="scene-nav">
+  <div class="brand">
+    <div class="dot"></div>
+    <span>claude-code-web</span>
+    <small>· design preview v3</small>
+  </div>
+  <button class="tab active" data-scene="empty">Empty state</button>
+  <button class="tab" data-scene="chat">Active chat</button>
+  <button class="tab" data-scene="plan">Plan approval</button>
+  <button class="tab" data-scene="cmdk">Command palette</button>
+  <button class="tab" data-scene="permission">Permission · Mention</button>
+  <div class="spacer"></div>
+  <div class="meta">
+    <span class="kbd">⌘K</span>
+    <span>to jump</span>
+  </div>
+</nav>
+
+<main class="stage">
+
+<!-- ══════════════════ SCENE: EMPTY ══════════════════ -->
+<section class="scene active" data-scene="empty">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">cc</div>
+      <div class="name">claude-code-web</div>
+      <span class="kbd shortcut">⌘K</span>
+    </div>
+    <div class="actions">
+      <button class="new-btn"><svg><use href="#i-plus"/></svg> New chat</button>
+    </div>
+    <div class="search">
+      <svg><use href="#i-search"/></svg>
+      <input placeholder="Search history…" />
+    </div>
+    <div class="history">
+      <div class="group-label">Today</div>
+      <div class="item active">
+        <div class="title">New chat</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>Just now</span></div>
+      </div>
+      <div class="group-label">Yesterday</div>
+      <div class="item">
+        <div class="title">Rename formatDate across the codebase</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>Yesterday, 19:22</span><svg><use href="#i-git-branch"/></svg><span>feat/date</span></div>
+      </div>
+      <div class="item">
+        <div class="title">Debug webhook retries — why is it firing twice?</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>Yesterday, 10:03</span></div>
+      </div>
+      <div class="group-label">This week</div>
+      <div class="item">
+        <div class="title">Add error boundary to the checkout flow</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>Mon</span><svg><use href="#i-git-branch"/></svg><span>main</span></div>
+      </div>
+      <div class="item">
+        <div class="title">Explain the retry queue and propose simplification</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>Mon</span></div>
+      </div>
+    </div>
+    <div class="footer">
+      <div class="label">Project</div>
+      <div class="path">~/projects/claude-code-web</div>
+    </div>
+  </aside>
+
+  <section class="main">
+    <header class="topbar">
+      <div class="conn-dot"></div>
+      <button class="chip cwd">
+        <svg><use href="#i-folder"/></svg>
+        <span class="path">~/…/claude-code-web</span>
+        <svg class="chev"><use href="#i-chev-down"/></svg>
+      </button>
+      <div class="sep"></div>
+      <button class="chip">
+        <svg><use href="#i-brain"/></svg>
+        Opus 4.7
+        <svg class="chev"><use href="#i-chev-down"/></svg>
+      </button>
+      <div class="sep"></div>
+      <button class="chip mode">
+        <span class="dot"></span>
+        default
+        <svg class="chev"><use href="#i-chev-down"/></svg>
+      </button>
+      <div class="right">
+        <span>0 tok</span>
+        <button class="title-edit">New chat</button>
+      </div>
+    </header>
+
+    <div class="empty">
+      <div class="hero">Ready when you are.</div>
+      <div class="sub">Ask anything. I have access to <code style="font-family:'JetBrains Mono',ui-monospace; font-size:13px; color:var(--accent-hi)">~/projects/claude-code-web</code></div>
+      <div class="prompts">
+        <button class="prompt">
+          <div class="icon"><svg><use href="#i-sparkles"/></svg></div>
+          Give me a tour of this codebase — what are the major modules?
+        </button>
+        <button class="prompt">
+          <div class="icon"><svg><use href="#i-list"/></svg></div>
+          Find all TODOs and group them by file.
+        </button>
+        <button class="prompt">
+          <div class="icon"><svg><use href="#i-zap"/></svg></div>
+          Rename <span style="color:var(--accent-hi); font-family:'JetBrains Mono',ui-monospace; font-size:12px">formatDate</span> to <span style="color:var(--accent-hi); font-family:'JetBrains Mono',ui-monospace; font-size:12px">formatIso</span> across the repo.
+        </button>
+      </div>
+      <div class="kb-chips">
+        <span class="chip"><span class="kbd">⌘K</span> command palette</span>
+        <span class="chip"><span class="kbd">⇧⇥</span> cycle mode</span>
+        <span class="chip"><span class="kbd">@</span> attach file</span>
+        <span class="chip"><span class="kbd">/</span> slash command</span>
+      </div>
+    </div>
+
+    <div class="input-wrap">
+      <div class="input-bar">
+        <div class="meta-row">
+          <div class="mode-dot default"><span class="d"></span><span class="label">default</span></div>
+        </div>
+        <textarea placeholder="Ask Claude anything about this project…" rows="1"></textarea>
+        <div class="hint-row">
+          <div class="hints">
+            <span class="chip"><span class="kbd">⌘K</span></span>
+            <span class="chip"><span class="kbd">@</span></span>
+            <span class="chip"><span class="kbd">/</span></span>
+            <span class="chip"><span class="kbd">⇧⇥</span> mode</span>
+          </div>
+          <button class="send-btn"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </section>
+</section>
+
+<!-- ══════════════════ SCENE: CHAT ══════════════════ -->
+<section class="scene" data-scene="chat">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">cc</div>
+      <div class="name">claude-code-web</div>
+      <span class="kbd shortcut">⌘K</span>
+    </div>
+    <div class="actions">
+      <button class="new-btn"><svg><use href="#i-plus"/></svg> New chat</button>
+    </div>
+    <div class="search">
+      <svg><use href="#i-search"/></svg>
+      <input placeholder="Search history…" />
+    </div>
+    <div class="history">
+      <div class="group-label">Today</div>
+      <div class="item active">
+        <div class="title">Rename formatDate across the codebase</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>Now</span><svg><use href="#i-git-branch"/></svg><span>feat/date</span></div>
+        <div class="row-actions">
+          <button title="rename"><svg><use href="#i-pencil"/></svg></button>
+          <button title="delete"><svg><use href="#i-x"/></svg></button>
+        </div>
+      </div>
+      <div class="item">
+        <div class="title">Debug webhook retries</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>10:03</span></div>
+      </div>
+      <div class="group-label">Yesterday</div>
+      <div class="item">
+        <div class="title">Add error boundary to checkout</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>18:40</span></div>
+      </div>
+      <div class="item">
+        <div class="title">Explain the retry queue</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>12:01</span></div>
+      </div>
+    </div>
+    <div class="footer">
+      <div class="label">Project</div>
+      <div class="path">~/projects/claude-code-web</div>
+    </div>
+  </aside>
+
+  <section class="main">
+    <header class="topbar">
+      <div class="conn-dot"></div>
+      <button class="chip cwd">
+        <svg><use href="#i-folder"/></svg>
+        <span class="path">~/…/claude-code-web</span>
+        <svg class="chev"><use href="#i-chev-down"/></svg>
+      </button>
+      <div class="sep"></div>
+      <button class="chip">
+        <svg><use href="#i-brain"/></svg>
+        Opus 4.7
+        <svg class="chev"><use href="#i-chev-down"/></svg>
+      </button>
+      <div class="sep"></div>
+      <button class="chip mode">
+        <span class="dot"></span>
+        default
+        <svg class="chev"><use href="#i-chev-down"/></svg>
+      </button>
+      <div class="right">
+        <span>3.2k tok</span>
+        <span>$0.014</span>
+        <button class="title-edit">Rename formatDate across the codebase</button>
+      </div>
+    </header>
+
+    <div class="messages">
+      <div class="inner">
+
+        <div class="msg user">Rename <code style="font-family:'JetBrains Mono',ui-monospace; background: rgba(255,255,255,.05); padding:1px 5px; border-radius:3px">formatDate</code> to <code style="font-family:'JetBrains Mono',ui-monospace; background: rgba(255,255,255,.05); padding:1px 5px; border-radius:3px">formatIso</code> across the repo. Keep behaviour identical.</div>
+
+        <div class="msg thinking">
+          <svg><use href="#i-sparkles"/></svg>
+          Thought for 2.3s — looking at call sites first
+        </div>
+
+        <div class="msg assistant"><p>Let me first locate every use of <code style="font-family:'JetBrains Mono',ui-monospace; font-size:13px">formatDate</code> before changing anything.</p></div>
+
+        <div class="tool-card open msg">
+          <div class="head">
+            <span class="tname">Bash</span>
+            <span class="arg">rg -n "formatDate" --type ts --type tsx</span>
+            <span class="status ok">done</span>
+            <svg class="chev"><use href="#i-chev-down"/></svg>
+          </div>
+          <div class="body">
+            <pre>src/utils/date.ts:3:export function formatDate(d: Date): string {
+src/components/Header.tsx:24:  <span>{formatDate(user.createdAt)}</span>
+src/components/OrderRow.tsx:41:      label={formatDate(order.placedAt)}
+src/pages/Invoice.tsx:88:const paid = formatDate(invoice.paidAt);
+src/pages/Dashboard.tsx:102: return formatDate(entry.ts);
+… 12 matches in 5 files</pre>
+          </div>
+        </div>
+
+        <div class="msg assistant"><p>12 references across 5 files. I'll rename the export in <code style="font-family:'JetBrains Mono',ui-monospace; font-size:13px">src/utils/date.ts</code> and propagate the new name.</p></div>
+
+        <div class="diff-card pending msg">
+          <div class="head">
+            <span class="tname">Edit</span>
+            <span class="path">src/utils/date.ts</span>
+            <span class="stat"><span class="plus">+1</span> <span class="minus">-1</span></span>
+          </div>
+          <div class="hunk">
+            <div class="line del">
+              <span class="gutter">3</span>
+              <span class="sign">-</span>
+              <span class="content">export function formatDate(d: Date): string {</span>
+            </div>
+            <div class="line add">
+              <span class="gutter">3</span>
+              <span class="sign">+</span>
+              <span class="content">export function formatIso(d: Date): string {</span>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn ghost">Reject</button>
+            <button class="btn primary">Accept</button>
+          </div>
+        </div>
+
+        <div class="diff-card accepted msg">
+          <div class="head">
+            <span class="tname">Edit</span>
+            <span class="path">src/components/Header.tsx</span>
+            <span class="stat"><span class="plus">+1</span> <span class="minus">-1</span></span>
+          </div>
+          <div class="hunk">
+            <div class="line del">
+              <span class="gutter">24</span>
+              <span class="sign">-</span>
+              <span class="content">  &lt;span&gt;{formatDate(user.createdAt)}&lt;/span&gt;</span>
+            </div>
+            <div class="line add">
+              <span class="gutter">24</span>
+              <span class="sign">+</span>
+              <span class="content">  &lt;span&gt;{formatIso(user.createdAt)}&lt;/span&gt;</span>
+            </div>
+          </div>
+          <div class="summary">
+            <svg style="width:12px; height:12px; color: var(--success)"><use href="#i-check"/></svg>
+            Accepted · +1 −1
+          </div>
+          <div class="actions">
+            <button class="btn ghost">Undo</button>
+          </div>
+        </div>
+
+        <div class="msg assistant">
+          <p>Applying the same rename to the remaining call sites…<span class="cursor"></span></p>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="input-wrap">
+      <div class="input-bar focused">
+        <div class="meta-row">
+          <div class="mode-dot default"><span class="d"></span><span class="label">default</span></div>
+        </div>
+        <textarea placeholder="Reply or ask anything…" rows="1">Now run the tests.</textarea>
+        <div class="hint-row">
+          <div class="hints">
+            <span class="chip"><span class="kbd">⌘K</span></span>
+            <span class="chip"><span class="kbd">@</span></span>
+            <span class="chip"><span class="kbd">/</span></span>
+            <span class="chip"><span class="kbd">⇧⇥</span> mode</span>
+          </div>
+          <button class="send-btn active"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </section>
+</section>
+
+<!-- ══════════════════ SCENE: PLAN ══════════════════ -->
+<section class="scene" data-scene="plan">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">cc</div>
+      <div class="name">claude-code-web</div>
+      <span class="kbd shortcut">⌘K</span>
+    </div>
+    <div class="actions">
+      <button class="new-btn"><svg><use href="#i-plus"/></svg> New chat</button>
+    </div>
+    <div class="search">
+      <svg><use href="#i-search"/></svg>
+      <input placeholder="Search history…" />
+    </div>
+    <div class="history">
+      <div class="group-label">Today</div>
+      <div class="item active">
+        <div class="title">Plan: wire payments to the new provider</div>
+        <div class="meta"><svg><use href="#i-clock"/></svg><span>Now</span></div>
+      </div>
+    </div>
+    <div class="footer">
+      <div class="label">Project</div>
+      <div class="path">~/projects/claude-code-web</div>
+    </div>
+  </aside>
+
+  <section class="main">
+    <header class="topbar">
+      <div class="conn-dot"></div>
+      <button class="chip cwd">
+        <svg><use href="#i-folder"/></svg>
+        <span class="path">~/…/claude-code-web</span>
+        <svg class="chev"><use href="#i-chev-down"/></svg>
+      </button>
+      <div class="sep"></div>
+      <button class="chip">
+        <svg><use href="#i-brain"/></svg>
+        Opus 4.7
+        <svg class="chev"><use href="#i-chev-down"/></svg>
+      </button>
+      <div class="sep"></div>
+      <button class="chip mode plan">
+        <span class="dot"></span>
+        plan mode
+        <svg class="chev"><use href="#i-chev-down"/></svg>
+      </button>
+      <div class="right">
+        <span>1.1k tok</span>
+        <button class="title-edit">Plan: wire payments to the new provider</button>
+      </div>
+    </header>
+
+    <div class="messages">
+      <div class="inner">
+        <div class="msg user">I want to migrate from Stripe to Adyen. Make a plan first — don't touch code yet.</div>
+        <div class="msg thinking">
+          <svg><use href="#i-sparkles"/></svg>
+          Thought for 4.1s — reading current integration
+        </div>
+        <div class="msg assistant"><p>I've mapped out the integration points and compiled a plan for your review.</p></div>
+      </div>
+    </div>
+
+    <div class="input-wrap">
+      <div class="input-bar">
+        <div class="meta-row">
+          <div class="mode-dot plan"><span class="d"></span><span class="label">plan mode · read-only</span></div>
+        </div>
+        <textarea placeholder="Refine the plan or ask follow-ups…" rows="1"></textarea>
+        <div class="hint-row">
+          <div class="hints">
+            <span class="chip"><span class="kbd">⌘K</span></span>
+            <span class="chip"><span class="kbd">@</span></span>
+            <span class="chip"><span class="kbd">/</span></span>
+            <span class="chip"><span class="kbd">⇧⇥</span> mode</span>
+          </div>
+          <button class="send-btn"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Plan approval modal -->
+    <div class="backdrop">
+      <div class="modal plan-modal">
+        <div class="m-head">
+          <div class="title">Plan ready</div>
+          <div class="plan-chip"><span class="d"></span>Plan mode · read-only</div>
+        </div>
+        <div class="m-body">
+          <div class="plan-body">
+            <p>Before touching any code, here is the migration I'd run for you:</p>
+            <h3>1. Adapter layer</h3>
+            <ul>
+              <li>Introduce <code>PaymentProvider</code> interface in <code>src/payments/provider.ts</code>.</li>
+              <li>Extract current Stripe logic behind <code>StripeProvider</code>.</li>
+              <li>Add <code>AdyenProvider</code> scaffold with the same interface.</li>
+            </ul>
+            <h3>2. Feature flag</h3>
+            <ul>
+              <li>Read <code>PAYMENTS_PROVIDER=stripe|adyen</code> from env.</li>
+              <li>Default to <code>stripe</code>; roll out 1 %, 10 %, 100 %.</li>
+            </ul>
+            <h3>3. Webhook endpoints</h3>
+            <ol>
+              <li>Add <code>/webhooks/adyen</code> alongside the existing <code>/webhooks/stripe</code>.</li>
+              <li>Route to the same domain handler.</li>
+              <li>Add HMAC verification for Adyen payloads.</li>
+            </ol>
+            <h3>4. Tests &amp; rollout</h3>
+            <ul>
+              <li>Contract tests for both providers.</li>
+              <li>Staging dry-run with 10 real charges before production.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="m-foot">
+          <button class="btn ghost">Reject · stay in plan mode</button>
+          <button class="btn primary">Approve &amp; execute</button>
+        </div>
+      </div>
+    </div>
+
+  </section>
+</section>
+
+<!-- ══════════════════ SCENE: CMD-K ══════════════════ -->
+<section class="scene" data-scene="cmdk">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">cc</div>
+      <div class="name">claude-code-web</div>
+      <span class="kbd shortcut">⌘K</span>
+    </div>
+    <div class="actions">
+      <button class="new-btn"><svg><use href="#i-plus"/></svg> New chat</button>
+    </div>
+    <div class="search">
+      <svg><use href="#i-search"/></svg>
+      <input placeholder="Search history…" />
+    </div>
+    <div class="history">
+      <div class="group-label">Today</div>
+      <div class="item active"><div class="title">Rename formatDate across the codebase</div><div class="meta"><svg><use href="#i-clock"/></svg><span>Now</span></div></div>
+    </div>
+    <div class="footer">
+      <div class="label">Project</div>
+      <div class="path">~/projects/claude-code-web</div>
+    </div>
+  </aside>
+
+  <section class="main">
+    <header class="topbar">
+      <div class="conn-dot"></div>
+      <button class="chip cwd"><svg><use href="#i-folder"/></svg><span class="path">~/…/claude-code-web</span><svg class="chev"><use href="#i-chev-down"/></svg></button>
+      <div class="sep"></div>
+      <button class="chip"><svg><use href="#i-brain"/></svg>Opus 4.7<svg class="chev"><use href="#i-chev-down"/></svg></button>
+      <div class="sep"></div>
+      <button class="chip mode"><span class="dot"></span>default<svg class="chev"><use href="#i-chev-down"/></svg></button>
+      <div class="right"><span>3.2k tok</span></div>
+    </header>
+    <div class="messages">
+      <div class="inner" style="opacity:.3">
+        <div class="msg user">Rename formatDate across the repo.</div>
+        <div class="msg assistant"><p>Let me first locate every use of formatDate before changing anything.</p></div>
+      </div>
+    </div>
+
+    <!-- palette -->
+    <div class="palette-wrap">
+      <div class="palette">
+        <div class="p-search">
+          <svg class="s-icon"><use href="#i-search"/></svg>
+          <input value="opus" placeholder="Type a command or search sessions…" />
+          <span class="kbd-hint">ESC</span>
+        </div>
+        <div class="p-list">
+          <div class="p-group-label">Models</div>
+          <div class="p-item selected">
+            <svg><use href="#i-brain"/></svg>
+            <span class="label">Switch to <strong>Opus 4.7</strong> <span class="dim">· deepest reasoning</span></span>
+            <span class="check"><svg style="width:14px;height:14px"><use href="#i-check"/></svg></span>
+            <span class="hint">active</span>
+          </div>
+          <div class="p-item">
+            <svg><use href="#i-brain"/></svg>
+            <span class="label">Switch to <strong>Sonnet 4.6</strong> <span class="dim">· balanced</span></span>
+            <span class="hint">switch</span>
+          </div>
+          <div class="p-item">
+            <svg><use href="#i-brain"/></svg>
+            <span class="label">Switch to <strong>Haiku 4.5</strong> <span class="dim">· fastest</span></span>
+            <span class="hint">switch</span>
+          </div>
+          <div class="p-group-label">Sessions</div>
+          <div class="p-item">
+            <svg><use href="#i-list"/></svg>
+            <span class="label">Plan: wire payments to <strong>Opus</strong> reasoning</span>
+            <span class="hint">Yesterday</span>
+          </div>
+          <div class="p-group-label">Actions</div>
+          <div class="p-item">
+            <svg><use href="#i-plus"/></svg>
+            <span class="label">New chat</span>
+            <span class="hint">⌘N</span>
+          </div>
+          <div class="p-item">
+            <svg><use href="#i-folder"/></svg>
+            <span class="label">Open folder…</span>
+            <span class="hint">⌘O</span>
+          </div>
+          <div class="p-item">
+            <svg><use href="#i-pencil"/></svg>
+            <span class="label">Rename current session</span>
+            <span class="hint"></span>
+          </div>
+          <div class="p-group-label">Modes</div>
+          <div class="p-item">
+            <svg><use href="#i-shield"/></svg>
+            <span class="label">Set mode: <strong>default</strong></span>
+            <span class="check"><svg style="width:14px;height:14px"><use href="#i-check"/></svg></span>
+            <span class="hint">active</span>
+          </div>
+          <div class="p-item">
+            <svg><use href="#i-zap"/></svg>
+            <span class="label">Set mode: <strong>auto-accept edits</strong></span>
+            <span class="hint">switch</span>
+          </div>
+          <div class="p-item">
+            <svg><use href="#i-brain"/></svg>
+            <span class="label">Set mode: <strong>plan</strong></span>
+            <span class="hint">switch</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-wrap">
+      <div class="input-bar" style="opacity:.3">
+        <div class="meta-row"><div class="mode-dot default"><span class="d"></span><span class="label">default</span></div></div>
+        <textarea placeholder="Ask Claude anything…" rows="1"></textarea>
+        <div class="hint-row">
+          <div class="hints"><span class="chip"><span class="kbd">⌘K</span></span><span class="chip"><span class="kbd">@</span></span><span class="chip"><span class="kbd">/</span></span><span class="chip"><span class="kbd">⇧⇥</span> mode</span></div>
+          <button class="send-btn"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </section>
+</section>
+
+<!-- ══════════════════ SCENE: PERMISSION + MENTION ══════════════════ -->
+<section class="scene" data-scene="permission">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">cc</div>
+      <div class="name">claude-code-web</div>
+      <span class="kbd shortcut">⌘K</span>
+    </div>
+    <div class="actions">
+      <button class="new-btn"><svg><use href="#i-plus"/></svg> New chat</button>
+    </div>
+    <div class="search">
+      <svg><use href="#i-search"/></svg>
+      <input placeholder="Search history…" />
+    </div>
+    <div class="history">
+      <div class="group-label">Today</div>
+      <div class="item active"><div class="title">Clean up the build artifacts</div><div class="meta"><svg><use href="#i-clock"/></svg><span>Now</span></div></div>
+    </div>
+    <div class="footer">
+      <div class="label">Project</div>
+      <div class="path">~/projects/claude-code-web</div>
+    </div>
+  </aside>
+
+  <section class="main">
+    <header class="topbar">
+      <div class="conn-dot"></div>
+      <button class="chip cwd"><svg><use href="#i-folder"/></svg><span class="path">~/…/claude-code-web</span><svg class="chev"><use href="#i-chev-down"/></svg></button>
+      <div class="sep"></div>
+      <button class="chip"><svg><use href="#i-brain"/></svg>Opus 4.7<svg class="chev"><use href="#i-chev-down"/></svg></button>
+      <div class="sep"></div>
+      <button class="chip mode"><span class="dot"></span>default<svg class="chev"><use href="#i-chev-down"/></svg></button>
+      <div class="right"><span>1.8k tok</span></div>
+    </header>
+    <div class="messages">
+      <div class="inner">
+        <div class="msg user">Clean up stale build artifacts under ./build.</div>
+        <div class="msg assistant"><p>I'll remove everything under <code style="font-family:'JetBrains Mono',ui-monospace; font-size:13px">./build</code>. Requesting permission first.</p></div>
+      </div>
+    </div>
+
+    <div class="input-wrap">
+      <div class="input-bar focused">
+        <div class="meta-row"><div class="mode-dot default"><span class="d"></span><span class="label">default</span></div></div>
+        <textarea rows="1">Also check @README.md  for what counts as build output</textarea>
+        <div class="hint-row">
+          <div class="hints"><span class="chip"><span class="kbd">⌘K</span></span><span class="chip"><span class="kbd">@</span></span><span class="chip"><span class="kbd">/</span></span><span class="chip"><span class="kbd">⇧⇥</span> mode</span></div>
+          <button class="send-btn active"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+
+      <!-- mention popup anchored above input -->
+      <div class="mention-pop">
+        <div class="m-label">Attach file</div>
+        <div class="m-item selected">
+          <svg><use href="#i-file"/></svg>
+          <span class="path"><span class="match">REA</span>DME.md</span>
+        </div>
+        <div class="m-item">
+          <svg><use href="#i-file"/></svg>
+          <span class="path">design/<span class="match">REA</span>DME.md</span>
+        </div>
+        <div class="m-item">
+          <svg><use href="#i-file"/></svg>
+          <span class="path">launcher/<span class="match">REA</span>DME.md</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- permission modal backdrop on top -->
+    <div class="backdrop">
+      <div class="modal">
+        <div class="m-head">
+          <div class="icon-circle"><svg><use href="#i-terminal"/></svg></div>
+          <div class="title">Run this command?</div>
+          <div class="sub">Claude wants to use <code style="font-family:'JetBrains Mono',ui-monospace; font-size:12px">Bash</code> to delete build artifacts.</div>
+        </div>
+        <div class="m-body">
+          <div class="mono-block">rm -rf ./build</div>
+        </div>
+        <div class="m-foot">
+          <button class="btn ghost">Deny</button>
+          <button class="btn outline">Allow once</button>
+          <button class="btn primary">Allow for session</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- toast -->
+    <div class="toast-stack">
+      <div class="toast success">
+        <svg><use href="#i-check"/></svg>
+        <span>Mode: <strong>default</strong></span>
+      </div>
+    </div>
+
+  </section>
+</section>
+
+</main>
+
+<div class="foot-hint">Scene mockup · not wired to a live session · click tabs above to preview each state</div>
+
+<script>
+(function () {
+  const tabs = document.querySelectorAll('.scene-nav .tab');
+  const scenes = document.querySelectorAll('.scene');
+  tabs.forEach((t) => {
+    t.addEventListener('click', () => {
+      tabs.forEach((x) => x.classList.remove('active'));
+      scenes.forEach((s) => s.classList.remove('active'));
+      t.classList.add('active');
+      const target = t.getAttribute('data-scene');
+      const target_el = document.querySelector('.scene[data-scene="' + target + '"]');
+      if (target_el) target_el.classList.add('active');
+    });
+  });
+
+  // Keyboard: 1-5 jumps between scenes.
+  window.addEventListener('keydown', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= 5) { tabs[n - 1]?.click(); }
+    if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      document.querySelector('.scene-nav .tab[data-scene="cmdk"]')?.click();
+    }
+  });
+})();
+</script>
+
+</body>
+</html>
