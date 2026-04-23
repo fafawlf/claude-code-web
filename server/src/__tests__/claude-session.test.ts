@@ -53,7 +53,10 @@ test('state listeners fire with the delta on updateState', async () => {
   const s = new ClaudeSession({ id: 'id-5', cwd: '/tmp', ...stubs() });
   const deltas: any[] = [];
   s.subscribeState((d) => deltas.push(d));
-  await s.setPermissionMode('acceptEdits');
+  // setPermissionMode updates state synchronously BEFORE awaiting the SDK
+  // control request; the CLI subprocess may still fail (no auth in test env),
+  // so we swallow that — the listener should already have captured the delta.
+  await s.setPermissionMode('acceptEdits').catch(() => {});
   assert.ok(deltas.some((d) => d.permissionMode === 'acceptEdits'));
   await s.close();
 });

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { PermissionMode, SessionStateSnapshot } from '../types';
-import { modeLabel } from '../types';
+import { modeLabel, modeHint } from '../types';
 import { CwdPicker } from './CwdPicker';
 import { ModelMenu } from './ModelMenu';
 import { Icon } from './Icon';
@@ -124,7 +124,11 @@ function Separator() {
 
 function ModeMenu({ current, onSelect }: { current: PermissionMode; onSelect: (m: PermissionMode) => void }) {
   const [open, setOpen] = useState(false);
-  const color = current === 'plan' ? 'text-warning' : current === 'acceptEdits' ? 'text-success' : 'text-text-secondary';
+  const color =
+    current === 'plan' ? 'text-warning' :
+    current === 'acceptEdits' ? 'text-success' :
+    current === 'bypassPermissions' ? 'text-danger' :
+    'text-text-secondary';
   return (
     <div className="relative">
       <button onClick={() => setOpen(!open)} className={`chip ${color}`}>
@@ -135,19 +139,29 @@ function ModeMenu({ current, onSelect }: { current: PermissionMode; onSelect: (m
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 mt-1 w-60 z-20 bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-top-left">
-            {(['default', 'acceptEdits', 'plan'] as PermissionMode[]).map((m) => (
-              <button
-                key={m}
-                onClick={() => { onSelect(m); setOpen(false); }}
-                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors duration-hover ${m === current ? 'bg-bg-hover' : 'hover:bg-bg-hover'}`}
-              >
-                <span className="flex-1">{modeLabel(m)}</span>
-                {m === current && <Icon name="check" size={12} className="text-accent" />}
-              </button>
-            ))}
+          <div className="absolute left-0 mt-1 w-72 z-20 bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-top-left">
+            {(['default', 'acceptEdits', 'plan', 'bypassPermissions'] as PermissionMode[]).map((m) => {
+              const dangerous = m === 'bypassPermissions';
+              const activeCls = m === current ? 'bg-bg-hover' : 'hover:bg-bg-hover';
+              return (
+                <button
+                  key={m}
+                  onClick={() => { onSelect(m); setOpen(false); }}
+                  className={`w-full text-left px-3 py-2 text-sm flex items-start gap-2 transition-colors duration-hover ${activeCls} ${dangerous ? 'border-t border-border-subtle' : ''}`}
+                >
+                  <span className="flex-1">
+                    <span className={`block ${dangerous ? 'text-danger' : 'text-text-primary'}`}>
+                      {modeLabel(m)}
+                      {dangerous && <span className="ml-1.5 text-[9px] uppercase tracking-wider opacity-70">dangerous</span>}
+                    </span>
+                    <span className="block text-[10px] text-text-muted mt-0.5">{modeHint(m)}</span>
+                  </span>
+                  {m === current && <Icon name="check" size={12} className="text-accent mt-0.5 shrink-0" />}
+                </button>
+              );
+            })}
             <div className="px-3 py-2 border-t border-border-subtle text-[10px] text-text-muted">
-              Shift+Tab in input to cycle
+              Shift+Tab cycles default / acceptEdits / plan
             </div>
           </div>
         </>

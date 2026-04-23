@@ -32,8 +32,9 @@ export function SlashPalette({ query, onPick, onClose }: Props) {
       match: ['model', m.label.toLowerCase(), m.id],
     })),
     { label: '/mode default', hint: 'prompt before each tool', action: { kind: 'mode', mode: 'default' }, match: ['mode', 'default'] },
-    { label: '/mode acceptEdits', hint: 'auto-allow file edits', action: { kind: 'mode', mode: 'acceptEdits' }, match: ['mode', 'accept', 'edits'] },
-    { label: '/mode plan', hint: 'read-only plan mode', action: { kind: 'mode', mode: 'plan' }, match: ['mode', 'plan'] },
+    { label: '/mode acceptEdits', hint: 'auto-allow file edits · Bash prompts', action: { kind: 'mode', mode: 'acceptEdits' }, match: ['mode', 'accept', 'edits'] },
+    { label: '/mode plan', hint: 'read-only · propose a plan', action: { kind: 'mode', mode: 'plan' }, match: ['mode', 'plan'] },
+    { label: '/mode bypass', hint: 'auto-allow EVERYTHING · dangerous', action: { kind: 'mode', mode: 'bypassPermissions' }, match: ['mode', 'bypass', 'yolo', 'dangerous'] },
   ];
 
   const q = query.toLowerCase();

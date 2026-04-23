@@ -120,6 +120,11 @@ export class ClaudeSession {
       abortController: this.abortCtl,
       resume: opts.resume,
       includePartialMessages: true,
+      // Required so mid-session setPermissionMode('bypassPermissions') is
+      // accepted by the SDK. The server is loopback-only, token-gated, and
+      // single-user — the user can switch in/out of bypass at will. Entering
+      // bypass is an explicit UI action; 'default' remains the default mode.
+      allowDangerouslySkipPermissions: true,
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),

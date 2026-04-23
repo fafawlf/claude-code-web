@@ -75,6 +75,9 @@ export const MODEL_OPTIONS = [
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5', hint: 'fastest' },
 ] as const;
 
+// Shift+Tab cycles only through the three non-dangerous modes. bypass is
+// available from the ModeMenu / CommandPalette / slash command but NOT via
+// accidental Tab-cycling, because it auto-approves Bash too.
 export const MODE_ORDER: PermissionMode[] = ['default', 'acceptEdits', 'plan'];
 
 export function modeLabel(m: PermissionMode): string {
@@ -82,6 +85,15 @@ export function modeLabel(m: PermissionMode): string {
     case 'default': return 'default';
     case 'acceptEdits': return 'auto-accept edits';
     case 'plan': return 'plan mode';
-    case 'bypassPermissions': return 'bypass (unsafe)';
+    case 'bypassPermissions': return 'bypass permissions';
+  }
+}
+
+export function modeHint(m: PermissionMode): string {
+  switch (m) {
+    case 'default': return 'prompt before each tool';
+    case 'acceptEdits': return 'auto-allow file edits · Bash still prompts';
+    case 'plan': return 'read-only · propose a plan first';
+    case 'bypassPermissions': return 'auto-allow EVERYTHING including Bash';
   }
 }

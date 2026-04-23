@@ -64,7 +64,7 @@ export function CommandPalette({ open, onClose, state, sessions, onAction }: Pro
       });
     }
 
-    for (const mode of ['default', 'acceptEdits', 'plan'] as PermissionMode[]) {
+    for (const mode of ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as PermissionMode[]) {
       const active = state?.permissionMode === mode;
       out.push({
         id: `mode:${mode}`,
