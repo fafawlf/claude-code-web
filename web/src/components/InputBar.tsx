@@ -12,6 +12,7 @@ type Props = {
   mode: PermissionMode;
   busy: boolean;
   ready: boolean;
+  readOnly?: boolean;
   initialText?: string;
   onSend: (text: string) => void;
   onStop: () => void;
@@ -129,9 +130,9 @@ function InputBarImpl(p: Props) {
           onKeyDown={onKey}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          placeholder={p.ready ? PLACEHOLDERS[placeholderIdx] : 'Connecting…'}
+          placeholder={p.readOnly ? 'Read-only — press Continue writing to take over' : p.ready ? PLACEHOLDERS[placeholderIdx] : 'Connecting…'}
           rows={1}
-          disabled={!p.ready}
+          disabled={!p.ready || p.readOnly}
           className="w-full resize-none bg-transparent outline-none text-base text-text-primary placeholder:text-text-muted leading-6 py-1"
         />
         <div className="flex items-center gap-2 mt-1.5">

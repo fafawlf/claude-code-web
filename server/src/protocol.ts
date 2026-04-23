@@ -12,6 +12,9 @@ export type ClientHello = {
   model?: string;
   permissionMode?: PermissionMode;
   lastEventId?: number;
+  /** When true, load transcript but do NOT spawn a live Claude Code process.
+   *  Safe for peeking at sessions that may be actively running elsewhere. */
+  viewerMode?: boolean;
 };
 
 export type ClientUserMessage = { type: 'user'; text: string };
@@ -29,6 +32,7 @@ export type ClientPlanResponse = {
 export type ClientInterrupt = { type: 'interrupt' };
 export type ClientSetModel = { type: 'set_model'; model: string };
 export type ClientSetMode = { type: 'set_permission_mode'; mode: PermissionMode };
+export type ClientRefreshHistory = { type: 'refresh_history' };
 
 export type ClientMessage =
   | ClientHello
@@ -37,7 +41,8 @@ export type ClientMessage =
   | ClientPlanResponse
   | ClientInterrupt
   | ClientSetModel
-  | ClientSetMode;
+  | ClientSetMode
+  | ClientRefreshHistory;
 
 export type SessionStateSnapshot = {
   sessionId: string;
@@ -48,6 +53,7 @@ export type SessionStateSnapshot = {
   tokensIn: number;
   tokensOut: number;
   cost?: number;
+  viewerMode?: boolean;
 };
 
 export type ServerReady = { type: 'ready'; state: SessionStateSnapshot };

@@ -13,6 +13,7 @@ export class SessionManager {
     resume?: string;
     model?: string;
     permissionMode?: PermissionMode;
+    viewerMode?: boolean;
     onPermission: PermissionListener;
     onPlan: PlanListener;
   }): ClaudeSession {

@@ -144,7 +144,7 @@ export function App() {
     return () => { client.close(); };
   }, [authed, token, toast, enqueueEvent]);
 
-  const newSession = useCallback((opts?: { cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string }) => {
+  const newSession = useCallback((opts?: { cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string; viewerMode?: boolean }) => {
     pendingRef.current = [];
     setState(initialState);
     setPendingEdits(new Map());
@@ -157,6 +157,7 @@ export function App() {
       resumeClaudeId: opts?.resumeClaudeId,
       model: opts?.model,
       permissionMode: opts?.mode,
+      viewerMode: opts?.viewerMode,
     });
   }, []);
 
@@ -318,6 +319,7 @@ export function App() {
         activeId={state.state?.claudeSessionId ?? null}
         onNew={() => newSession({ cwd: state.state?.cwd })}
         onResume={(claudeId, title) => newSession({ cwd: state.state?.cwd, resumeClaudeId: claudeId, title })}
+        onView={(claudeId, title) => newSession({ cwd: state.state?.cwd, resumeClaudeId: claudeId, title, viewerMode: true })}
         onRefresh={() => refreshSessions(state.state?.cwd)}
         onRename={renameInList}
         onOpenCommandPalette={() => setPaletteOpen(true)}
@@ -333,6 +335,12 @@ export function App() {
           onSelectModel={setModel}
           onSelectMode={setMode}
           onRename={renameCurrent}
+          onContinueWriting={state.state?.viewerMode && state.state?.claudeSessionId
+            ? () => newSession({ cwd: state.state?.cwd, resumeClaudeId: state.state!.claudeSessionId, title: sessionTitle })
+            : undefined}
+          onRefreshHistory={state.state?.viewerMode
+            ? () => wsRef.current?.send({ type: 'refresh_history' })
+            : undefined}
           sessionTitle={sessionTitle}
           connected={connected}
         />
@@ -366,7 +374,8 @@ export function App() {
           cwd={state.state?.cwd ?? defaultCwd}
           mode={state.state?.permissionMode ?? 'default'}
           busy={state.busy}
-          ready={connected && !!state.state}
+          ready={connected && !!state.state && !state.state?.viewerMode}
+          readOnly={!!state.state?.viewerMode}
           initialText={inputSeed}
           onSend={(t) => { sendUser(t); setInputSeed(undefined); }}
           onStop={() => wsRef.current?.send({ type: 'interrupt' })}

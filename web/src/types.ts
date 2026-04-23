@@ -9,17 +9,19 @@ export type SessionStateSnapshot = {
   tokensIn: number;
   tokensOut: number;
   cost?: number;
+  viewerMode?: boolean;
 };
 
 // Client → server
-export type ClientHello = { type: 'hello'; sessionId?: string; resumeClaudeId?: string; cwd?: string; model?: string; permissionMode?: PermissionMode; lastEventId?: number };
+export type ClientHello = { type: 'hello'; sessionId?: string; resumeClaudeId?: string; cwd?: string; model?: string; permissionMode?: PermissionMode; lastEventId?: number; viewerMode?: boolean };
 export type ClientUserMessage = { type: 'user'; text: string };
 export type ClientPermissionResponse = { type: 'permission_response'; reqId: string; decision: 'allow' | 'deny'; scope?: 'once' | 'session' };
 export type ClientPlanResponse = { type: 'plan_response'; reqId: string; decision: 'approve' | 'reject' };
 export type ClientInterrupt = { type: 'interrupt' };
 export type ClientSetModel = { type: 'set_model'; model: string };
 export type ClientSetMode = { type: 'set_permission_mode'; mode: PermissionMode };
-export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientSetModel | ClientSetMode;
+export type ClientRefreshHistory = { type: 'refresh_history' };
+export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientSetModel | ClientSetMode | ClientRefreshHistory;
 
 // Server → client
 export type ServerReady = { type: 'ready'; state: SessionStateSnapshot };

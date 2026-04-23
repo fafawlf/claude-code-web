@@ -14,6 +14,8 @@ type Props = {
   onSelectModel: (model: string) => void;
   onSelectMode: (mode: PermissionMode) => void;
   onRename: (title: string) => void;
+  onContinueWriting?: () => void;
+  onRefreshHistory?: () => void;
   sessionTitle?: string;
   connected: boolean;
 };
@@ -51,6 +53,28 @@ export function TopBar(p: Props) {
         <ModeMenu current={s?.permissionMode ?? 'default'} onSelect={p.onSelectMode} />
 
         <div className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
+          {s?.viewerMode && (
+            <>
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-warning/10 text-warning border border-warning/30">
+                <span className="w-1 h-1 rounded-full bg-warning" />
+                Read-only
+              </span>
+              {p.onRefreshHistory && (
+                <button
+                  onClick={p.onRefreshHistory}
+                  className="text-[11px] px-2 py-1 rounded bg-bg-hover hover:bg-bg-surface text-text-secondary hover:text-text-primary transition-colors duration-hover"
+                  title="Re-read transcript from disk"
+                >↻ Refresh</button>
+              )}
+              {p.onContinueWriting && (
+                <button
+                  onClick={p.onContinueWriting}
+                  className="text-[11px] px-2.5 py-1 rounded bg-accent hover:bg-accent-hi text-text-inverse font-medium transition-colors duration-hover"
+                  title="Take over and continue writing in this session (may conflict if another Claude Code is still attached)"
+                >Continue writing →</button>
+              )}
+            </>
+          )}
           {s?.claudeSessionId && (
             <span
               className="font-mono text-[10px] text-text-muted hover:text-text-secondary transition-colors duration-hover cursor-default px-1.5 py-0.5 rounded bg-bg-raised/60 border border-border-subtle"

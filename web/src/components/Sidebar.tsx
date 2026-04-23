@@ -9,13 +9,14 @@ type Props = {
   activeId: string | null;
   onNew: () => void;
   onResume: (claudeId: string, title?: string) => void;
+  onView: (claudeId: string, title?: string) => void;
   onRefresh: () => void;
   onRename: (claudeId: string, newTitle: string) => void;
   connected: boolean;
   onOpenCommandPalette: () => void;
 };
 
-export function Sidebar({ cwd, sessions, activeId, onNew, onResume, onRefresh, onRename, connected, onOpenCommandPalette }: Props) {
+export function Sidebar({ cwd, sessions, activeId, onNew, onResume, onView, onRefresh, onRename, connected, onOpenCommandPalette }: Props) {
   const [search, setSearch] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -121,7 +122,12 @@ export function Sidebar({ cwd, sessions, activeId, onNew, onResume, onRefresh, o
                       </button>
                       <div className="absolute top-1.5 right-1.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-hover">
                         <button
-                          onClick={() => { setRenamingId(s.sessionId); setDraft(s.customTitle ?? s.summary ?? ''); }}
+                          onClick={(e) => { e.stopPropagation(); onView(s.sessionId, title); }}
+                          className="w-[22px] h-[22px] rounded grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
+                          title="view (read-only — safe if session is active elsewhere)"
+                        ><Icon name="circle-dot" size={12} /></button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setRenamingId(s.sessionId); setDraft(s.customTitle ?? s.summary ?? ''); }}
                           className="w-[22px] h-[22px] rounded grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
                           title="rename"
                         ><Icon name="pencil" size={12} /></button>

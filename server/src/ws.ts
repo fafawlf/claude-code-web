@@ -81,6 +81,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
               resume: msg.resumeClaudeId,
               model: msg.model,
               permissionMode: msg.permissionMode,
+              viewerMode: msg.viewerMode,
               onPermission: (pr) => send(socket, { type: 'permission_request', ...pr }),
               onPlan: (pr) => send(socket, { type: 'plan_proposed', reqId: pr.reqId, plan: pr.plan }),
             });
@@ -114,6 +115,9 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
         case 'set_permission_mode':
           try { await session.setPermissionMode(msg.mode as PermissionMode); }
           catch (e) { send(socket, { type: 'error', message: `setPermissionMode failed: ${(e as Error).message}` }); }
+          break;
+        case 'refresh_history':
+          await session.refreshHistory();
           break;
       }
     });

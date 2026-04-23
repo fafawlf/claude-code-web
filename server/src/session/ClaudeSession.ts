@@ -80,16 +80,23 @@ export class ClaudeSession {
   readonly historyReady: Promise<void>;
   private historyReadyResolve!: () => void;
 
+  private readonly viewerMode: boolean;
+  private readonly cwd: string;
+  private seenUuids = new Set<string>();
+
   constructor(opts: {
     id: string;
     cwd: string;
     resume?: string;
     model?: string;
     permissionMode?: PermissionMode;
+    viewerMode?: boolean;
     onPermission: PermissionListener;
     onPlan: PlanListener;
   }) {
     this.id = opts.id;
+    this.cwd = opts.cwd;
+    this.viewerMode = !!opts.viewerMode;
     this.state = {
       sessionId: opts.id,
       cwd: opts.cwd,
@@ -101,6 +108,7 @@ export class ClaudeSession {
       permissionMode: opts.permissionMode ?? 'default',
       tokensIn: 0,
       tokensOut: 0,
+      viewerMode: this.viewerMode,
     };
     this.permissionBroker = new PermissionBroker(opts.onPermission);
     this.planBroker = new PlanBroker(opts.onPlan);
@@ -144,10 +152,12 @@ export class ClaudeSession {
       },
     };
 
-    if (opts.resume) {
+    if (this.viewerMode && opts.resume) {
+      // Read-only: just load history. Do NOT spawn a Claude Code process.
+      // Safe when the session may be actively written to by another process.
+      void this.loadHistoryViewer(opts.resume, opts.cwd);
+    } else if (opts.resume) {
       // Replay prior transcript from disk into the ring, then start live pump.
-      // History streaming runs before the SDK query spins up so the UI renders
-      // history first, then live events continue from where Claude left off.
       void this.loadHistoryThenStart(opts.resume, opts.cwd, options);
     } else {
       this.query = query({ prompt: this.prompts, options });
@@ -156,11 +166,58 @@ export class ClaudeSession {
     }
   }
 
+  private async loadHistoryViewer(resumeId: string, cwd: string): Promise<void> {
+    try {
+      const prior = await getSessionMessages(resumeId, { dir: cwd });
+      for (const m of prior) {
+        if (this.closed) return;
+        const ev = { ...m, parent_tool_use_id: m.parent_tool_use_id ?? null } as unknown as SDKMessage;
+        if ((m as any).uuid) this.seenUuids.add((m as any).uuid);
+        this.pushEvent(ev);
+      }
+    } catch (err) {
+      const msg = (err as Error).message ?? 'failed to load history';
+      this.pushEvent({
+        type: 'system',
+        subtype: 'error' as unknown as 'status',
+        message: `Could not load transcript: ${msg}`,
+      } as unknown as SDKMessage);
+    }
+    this.historyReadyResolve();
+    // Viewer mode never starts a live SDK query. Calls to setUser are silently
+    // ignored; refreshHistory() can be used to pull new messages appended by
+    // whoever owns the session.
+  }
+
+  /** Re-read the session's transcript from disk and push any messages we
+   *  haven't seen yet. Only makes sense in viewer mode, but is safe to call
+   *  from anywhere (a no-op if no new messages found). */
+  async refreshHistory(): Promise<number> {
+    const claudeId = this.state.claudeSessionId;
+    if (!claudeId) return 0;
+    let added = 0;
+    try {
+      const prior = await getSessionMessages(claudeId, { dir: this.cwd });
+      for (const m of prior) {
+        const uuid = (m as any).uuid;
+        if (uuid && this.seenUuids.has(uuid)) continue;
+        if (uuid) this.seenUuids.add(uuid);
+        const ev = { ...m, parent_tool_use_id: m.parent_tool_use_id ?? null } as unknown as SDKMessage;
+        this.pushEvent(ev);
+        added++;
+      }
+    } catch {
+      // Best effort — errors surface as they do on initial load only if fatal.
+    }
+    return added;
+  }
+
   private async loadHistoryThenStart(resumeId: string, cwd: string, baseOptions: Options): Promise<void> {
     try {
       const prior = await getSessionMessages(resumeId, { dir: cwd });
       for (const m of prior) {
         const ev = { ...m, parent_tool_use_id: m.parent_tool_use_id ?? null } as unknown as SDKMessage;
+        if ((m as any).uuid) this.seenUuids.add((m as any).uuid);
         this.pushEvent(ev);
         if (this.closed) return;
       }
@@ -239,9 +296,11 @@ export class ClaudeSession {
   }
 
   sendUser(text: string): void {
-    if (this.closed) return;
+    if (this.closed || this.viewerMode) return;
     this.prompts.push(text);
   }
+
+  isViewer(): boolean { return this.viewerMode; }
 
   async setModel(model: string): Promise<void> {
     // Always reflect the user's intent in session state — it'll be honored as
