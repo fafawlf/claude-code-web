@@ -59,7 +59,7 @@ export function DiffBlock({ item, pendingReqId, onAccept, onReject }: Props) {
   else if (isError) { borderCls = 'border-danger/50'; tnameCls = 'text-danger'; }
 
   return (
-    <div className={`rounded-md border bg-bg-raised overflow-hidden transition-[border-color] duration-mode ease-soft ${borderCls} ${pendingReqId ? 'shadow-[0_0_0_3px_rgba(212,169,94,.08)]' : ''}`}>
+    <div id={`diff-${item.toolUseId}`} className={`rounded-md border bg-bg-raised overflow-hidden transition-[border-color] duration-mode ease-soft ${borderCls} ${pendingReqId ? 'shadow-[0_0_0_3px_rgba(212,169,94,.08)] animate-pulse-soft' : ''}`}>
       <div className="flex items-center gap-2.5 px-3.5 py-2.5 border-b border-border-subtle">
         <Icon name="pencil" size={13} className={tnameCls} />
         <span className={`text-[11px] uppercase tracking-wider font-semibold ${tnameCls}`}>{item.name}</span>

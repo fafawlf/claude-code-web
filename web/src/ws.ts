@@ -1,10 +1,13 @@
 import type { ClientMessage, ServerMessage } from './types';
 
 export type WsHandler = (m: ServerMessage) => void;
+export type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';
+export type ConnectionHandler = (s: ConnectionState) => void;
 
 export class WsClient {
   private ws?: WebSocket;
   private handler: WsHandler;
+  private connHandler?: ConnectionHandler;
   private token: string;
   private closed = false;
   private backoff = 500;
@@ -14,8 +17,17 @@ export class WsClient {
     this.handler = handler;
   }
 
+  onConnectionChange(cb: ConnectionHandler): void {
+    this.connHandler = cb;
+  }
+
+  private emit(state: ConnectionState): void {
+    this.connHandler?.(state);
+  }
+
   connect(): void {
     if (this.closed) return;
+    this.emit(this.ws ? 'reconnecting' : 'connecting');
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const url = `${proto}://${location.host}/ws?t=${encodeURIComponent(this.token)}`;
     const ws = new WebSocket(url);
@@ -24,11 +36,15 @@ export class WsClient {
       try { this.handler(JSON.parse(e.data) as ServerMessage); } catch { /* ignore */ }
     };
     ws.onclose = () => {
-      if (this.closed) return;
+      if (this.closed) { this.emit('closed'); return; }
+      this.emit('reconnecting');
       setTimeout(() => this.connect(), this.backoff);
       this.backoff = Math.min(this.backoff * 2, 5000);
     };
-    ws.onopen = () => { this.backoff = 500; };
+    ws.onopen = () => {
+      this.backoff = 500;
+      this.emit('open');
+    };
   }
 
   onOpen(cb: () => void): void {
@@ -46,6 +62,7 @@ export class WsClient {
   close(): void {
     this.closed = true;
     this.ws?.close();
+    this.emit('closed');
   }
 
   isOpen(): boolean {

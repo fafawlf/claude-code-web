@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { WsClient } from './ws';
+import { WsClient, type ConnectionState } from './ws';
 import { applyEvent, applyStateDelta, initialState, addSystem, addUserOptimistic, withReady, type ChatState } from './reducer';
 import type { PermissionMode, SdkEvent, ServerMessage, ServerPermissionRequest, ServerPlanProposed, StoredSession } from './types';
 import { modeLabel, MODE_ORDER } from './types';
@@ -11,6 +11,7 @@ import { InputBar } from './components/InputBar';
 import { TopBar } from './components/TopBar';
 import { EmptyState } from './components/EmptyState';
 import { CommandPalette, type CommandAction } from './components/CommandPalette';
+import { StatusBar } from './components/StatusBar';
 import { useKeyboard, isMod } from './hooks/useKeyboard';
 import { useToast } from './components/Toast';
 import type { SlashAction } from './components/SlashPalette';
@@ -39,8 +40,11 @@ export function App() {
   const [planProposed, setPlanProposed] = useState<ServerPlanProposed | null>(null);
   const [sessions, setSessions] = useState<StoredSession[]>([]);
   const [defaultCwd, setDefaultCwd] = useState<string>('');
-  const [connected, setConnected] = useState(false);
+  const [connection, setConnection] = useState<ConnectionState>('connecting');
+  const connected = connection === 'open';
   const [sessionTitle, setSessionTitle] = useState<string | undefined>(undefined);
+  const lastEventAtRef = useRef<number>(Date.now());
+  const [secondsSinceLastEvent, setSecondsSinceLastEvent] = useState(0);
   const [cwdPickerOpen, setCwdPickerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [inputSeed, setInputSeed] = useState<string | undefined>(undefined);
@@ -59,11 +63,21 @@ export function App() {
   }, []);
   const enqueueEvent = useCallback((id: number, event: SdkEvent) => {
     pendingRef.current.push({ id, event });
+    lastEventAtRef.current = Date.now();
     if (!rafScheduled.current) {
       rafScheduled.current = true;
       requestAnimationFrame(flushEvents);
     }
   }, [flushEvents]);
+
+  // Tick every second while busy so the StatusBar's "no activity for Ns" counter
+  // updates without needing a prop change from each event.
+  useEffect(() => {
+    const t = setInterval(() => {
+      setSecondsSinceLastEvent(Math.floor((Date.now() - lastEventAtRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     if (!token) { setAuthed(false); return; }
@@ -95,8 +109,8 @@ export function App() {
     const onMessage = (m: ServerMessage) => {
       if (m.type === 'ready') {
         pendingRef.current = [];
-        setState((s) => withReady({ ...initialState }, m.state));
-        setConnected(true);
+        lastEventAtRef.current = Date.now();
+        setState(() => withReady({ ...initialState }, m.state));
         setPendingEdits(new Map());
         setNonEditPermReq(null);
         setPlanProposed(null);
@@ -124,6 +138,7 @@ export function App() {
     };
     const client = new WsClient(token, onMessage);
     wsRef.current = client;
+    client.onConnectionChange((s) => setConnection(s));
     client.connect();
     client.onOpen(() => client.send({ type: 'hello' }));
     return () => { client.close(); };
@@ -273,6 +288,18 @@ export function App() {
 
   const showEmpty = state.items.length === 0 && !state.busy && !state.streamingText;
 
+  const firstPendingEditToolUseId = useMemo(() => {
+    for (const [tuid] of pendingEdits) return tuid;
+    return undefined;
+  }, [pendingEdits]);
+
+  const focusPending = useCallback(() => {
+    if (firstPendingEditToolUseId) {
+      const el = document.getElementById(`diff-${firstPendingEditToolUseId}`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [firstPendingEditToolUseId]);
+
   if (authed === null) return <Centered>checking auth…</Centered>;
   if (authed === false) return (
     <Centered>
@@ -321,6 +348,19 @@ export function App() {
             onRejectEdit={onRejectEdit}
           />
         )}
+        <div className="px-4 pb-1 pt-0">
+          <StatusBar
+            connection={connection}
+            busy={state.busy}
+            streamingText={state.streamingText}
+            items={state.items}
+            hasPermReq={!!nonEditPermReq}
+            pendingEditCount={pendingEdits.size}
+            hasPlan={!!planProposed}
+            secondsSinceLastEvent={secondsSinceLastEvent}
+            onFocusPending={firstPendingEditToolUseId ? focusPending : undefined}
+          />
+        </div>
         <InputBar
           token={token!}
           cwd={state.state?.cwd ?? defaultCwd}

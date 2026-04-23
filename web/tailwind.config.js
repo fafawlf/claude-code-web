@@ -85,6 +85,10 @@ export default {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0' },
         },
+        'pulse-soft': {
+          '0%, 100%': { boxShadow: '0 0 0 3px rgba(212,169,94,.08)' },
+          '50%':      { boxShadow: '0 0 0 6px rgba(212,169,94,.18)' },
+        },
       },
       animation: {
         'fade-up': 'fade-up 180ms cubic-bezier(.22, 1, .36, 1)',
@@ -92,6 +96,7 @@ export default {
         'modal-in': 'modal-in 220ms cubic-bezier(.34, 1.56, .64, 1)',
         'toast-in': 'toast-in 180ms cubic-bezier(.22, 1, .36, 1)',
         blink: 'blink 1.1s ease-in-out infinite',
+        'pulse-soft': 'pulse-soft 1.6s ease-in-out infinite',
       },
     },
   },
