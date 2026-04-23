@@ -120,13 +120,14 @@ export class ClaudeSession {
       abortController: this.abortCtl,
       resume: opts.resume,
       includePartialMessages: true,
-      // Required so mid-session setPermissionMode('bypassPermissions') is
-      // accepted by the SDK. The server is loopback-only, token-gated, and
-      // single-user — the user can switch in/out of bypass at will. Entering
-      // bypass is an explicit UI action; 'default' remains the default mode.
-      allowDangerouslySkipPermissions: true,
       ...(opts.model ? { model: opts.model } : {}),
-      ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+      // Only forward 'plan' to the SDK (it actually changes the model's system
+      // reminder). 'acceptEdits' and 'bypassPermissions' are implemented
+      // entirely in our canUseTool below, so the SDK stays in 'default' and
+      // the CLI subprocess never has to re-initialize when the user toggles
+      // between those modes. Fixes the "process exited with code 1" loop you
+      // used to hit when flipping bypass mid-session.
+      permissionMode: opts.permissionMode === 'plan' ? 'plan' : 'default',
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
       canUseTool: this.canUseToolImpl,
     };
@@ -218,7 +219,7 @@ export class ClaudeSession {
     const finalOptions: Options = {
       ...baseOptions,
       ...(this.state.model ? { model: this.state.model } : {}),
-      permissionMode: this.state.permissionMode,
+      permissionMode: this.state.permissionMode === 'plan' ? 'plan' : 'default',
     };
     this.query = query({ prompt: this.prompts, options: finalOptions });
     void this.pump();
@@ -305,9 +306,8 @@ export class ClaudeSession {
         abortController: this.abortCtl,
         resume: this.state.claudeSessionId,
         includePartialMessages: true,
-        allowDangerouslySkipPermissions: true,
         ...(this.state.model ? { model: this.state.model } : {}),
-        permissionMode: this.state.permissionMode,
+        permissionMode: this.state.permissionMode === 'plan' ? 'plan' : 'default',
         ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
         canUseTool: this.canUseToolImpl,
       };
@@ -343,6 +343,11 @@ export class ClaudeSession {
       }
       return result;
     }
+    // "bypass" is implemented here, not at the SDK level — avoids the CLI
+    // subprocess exiting with "bypass_permissions_disabled" on toggle.
+    if (this.state.permissionMode === 'bypassPermissions') {
+      return { behavior: 'allow', updatedInput: input };
+    }
     if (this.state.permissionMode === 'acceptEdits' && EDIT_LIKE.has(toolName)) {
       return { behavior: 'allow', updatedInput: input };
     }
@@ -374,7 +379,11 @@ export class ClaudeSession {
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     this.updateState({ permissionMode: mode });
     if (!this.query) return;
-    await this.query.setPermissionMode(mode);
+    // Only 'plan' and 'default' go to the SDK; acceptEdits/bypass are handled
+    // locally in canUseToolImpl, so the SDK stays on 'default' to avoid the
+    // subprocess exiting when the CLI's permission layer re-initializes.
+    const sdkMode: PermissionMode = mode === 'plan' ? 'plan' : 'default';
+    await this.query.setPermissionMode(sdkMode);
   }
 
   async interrupt(): Promise<void> {
