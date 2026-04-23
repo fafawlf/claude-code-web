@@ -1,0 +1,28 @@
+{
+  "name": "@claudecode-web/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "claudecode-web": "./dist/bin/claudecode-web.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/bin/claudecode-web.ts",
+    "start": "node dist/bin/claudecode-web.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.118",
+    "@fastify/static": "^7.0.4",
+    "@fastify/websocket": "^10.0.1",
+    "fastify": "^4.28.1",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}

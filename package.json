@@ -1,0 +1,19 @@
+{
+  "name": "claudecode-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted web client for remote Claude Code over SSH tunnel",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build -w server && npm run build -w web",
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "start": "node server/dist/index.js"
+  },
+  "bin": {
+    "claudecode-web": "./server/dist/bin/claudecode-web.js"
+  }
+}
