@@ -9,7 +9,17 @@ import '@fontsource/inter/500.css';
 import '@fontsource/inter/600.css';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
+import '@fontsource/nunito/700.css';
+import '@fontsource/nunito/800.css';
+import '@fontsource/nunito/900.css';
 import './index.css';
+import { readSkin } from './skins';
+
+try {
+  document.documentElement.dataset.skin = readSkin();
+} catch {
+  document.documentElement.dataset.skin = 'warm';
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

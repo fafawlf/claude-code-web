@@ -2,20 +2,22 @@ import { query, getSessionMessages, type Options, type Query, type SDKMessage, t
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveClaudePath } from './resolveClaudePath.js';
-import type { PermissionMode, SessionStateSnapshot } from '../protocol.js';
+import type { PendingControl, PermissionMode, SessionRuntimeStatus, SessionStateSnapshot } from '../protocol.js';
 
 export type SessionEvent = { id: number; event: SDKMessage };
 export type EventListener = (ev: SessionEvent) => void;
 export type StateListener = (state: Partial<SessionStateSnapshot>) => void;
+export type ControlListener = (control: PendingControl) => void;
 export type PermissionListener = (req: {
   reqId: string;
   toolName: string;
+  toolUseId?: string;
   input: Record<string, unknown>;
   title?: string;
   displayName?: string;
   description?: string;
-}) => boolean;
-export type PlanListener = (req: { reqId: string; plan: string }) => boolean;
+}) => void;
+export type PlanListener = (req: { reqId: string; plan: string }) => void;
 
 type Pending = { resolve: (v: IteratorResult<SDKUserMessage>) => void };
 
@@ -74,6 +76,7 @@ export class ClaudeSession {
   private ring: SessionEvent[] = [];
   private listeners = new Set<EventListener>();
   private stateListeners = new Set<StateListener>();
+  private controlListeners = new Set<ControlListener>();
   private closed = false;
   readonly permissionBroker: PermissionBroker;
   readonly planBroker: PlanBroker;
@@ -91,8 +94,8 @@ export class ClaudeSession {
     model?: string;
     permissionMode?: PermissionMode;
     viewerMode?: boolean;
-    onPermission: PermissionListener;
-    onPlan: PlanListener;
+    onPermission?: PermissionListener;
+    onPlan?: PlanListener;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
@@ -106,31 +109,25 @@ export class ClaudeSession {
       claudeSessionId: opts.resume,
       model: opts.model,
       permissionMode: opts.permissionMode ?? 'default',
+      runtimeStatus: 'idle',
+      attachedCount: 0,
+      lastEventId: 0,
+      lastEventAt: Date.now(),
       tokensIn: 0,
       tokensOut: 0,
       viewerMode: this.viewerMode,
     };
-    this.permissionBroker = new PermissionBroker(opts.onPermission);
-    this.planBroker = new PlanBroker(opts.onPlan);
+    this.permissionBroker = new PermissionBroker((req) => {
+      opts.onPermission?.(req);
+      this.setRuntimeStatus('waiting_permission');
+      this.emitControl({ kind: 'permission', ...req });
+    });
+    this.planBroker = new PlanBroker((req) => {
+      opts.onPlan?.(req);
+      this.setRuntimeStatus('waiting_plan');
+      this.emitControl({ kind: 'plan', ...req });
+    });
     this.historyReady = new Promise<void>((resolve) => { this.historyReadyResolve = resolve; });
-
-    const claudePath = resolveClaudePath();
-    const options: Options = {
-      cwd: opts.cwd,
-      abortController: this.abortCtl,
-      resume: opts.resume,
-      includePartialMessages: true,
-      ...(opts.model ? { model: opts.model } : {}),
-      // Only forward 'plan' to the SDK (it actually changes the model's system
-      // reminder). 'acceptEdits' and 'bypassPermissions' are implemented
-      // entirely in our canUseTool below, so the SDK stays in 'default' and
-      // the CLI subprocess never has to re-initialize when the user toggles
-      // between those modes. Fixes the "process exited with code 1" loop you
-      // used to hit when flipping bypass mid-session.
-      permissionMode: opts.permissionMode === 'plan' ? 'plan' : 'default',
-      ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
-      canUseTool: this.canUseToolImpl,
-    };
 
     if (this.viewerMode && opts.resume) {
       // Read-only: just load history. Do NOT spawn a Claude Code process.
@@ -138,10 +135,11 @@ export class ClaudeSession {
       void this.loadHistoryViewer(opts.resume, opts.cwd);
     } else if (opts.resume) {
       // Replay prior transcript from disk into the ring, then start live pump.
-      void this.loadHistoryThenStart(opts.resume, opts.cwd, options);
+      void this.loadHistoryThenStart(opts.resume, opts.cwd);
     } else {
-      this.query = query({ prompt: this.prompts, options });
-      void this.pump();
+      // Fresh chats are lazy: do not spawn a Claude Code subprocess until the
+      // first user prompt. This keeps empty project clicks out of Claude's
+      // session store and avoids "lost empty chat" noise in the UI.
       this.historyReadyResolve();
     }
   }
@@ -192,7 +190,7 @@ export class ClaudeSession {
     return added;
   }
 
-  private async loadHistoryThenStart(resumeId: string, cwd: string, baseOptions: Options): Promise<void> {
+  private async loadHistoryThenStart(resumeId: string, cwd: string): Promise<void> {
     try {
       const prior = await getSessionMessages(resumeId, { dir: cwd });
       for (const m of prior) {
@@ -216,13 +214,7 @@ export class ClaudeSession {
     // Rebuild options from current state — any setModel/setPermissionMode the
     // user performed while history was loading will have updated this.state,
     // and we want those reflected in the very first query() invocation.
-    const finalOptions: Options = {
-      ...baseOptions,
-      ...(this.state.model ? { model: this.state.model } : {}),
-      permissionMode: this.state.permissionMode === 'plan' ? 'plan' : 'default',
-    };
-    this.query = query({ prompt: this.prompts, options: finalOptions });
-    void this.pump();
+    this.startQuery(resumeId);
   }
 
   private pushEvent(event: SDKMessage): void {
@@ -230,11 +222,38 @@ export class ClaudeSession {
     if (!this.state.claudeSessionId && anyEv.session_id) {
       this.updateState({ claudeSessionId: anyEv.session_id });
     }
+    const activeToolDelta = this.activeToolDelta(event);
     const id = this.nextEventId++;
+    this.state = { ...this.state, lastEventId: id, lastEventAt: Date.now(), ...activeToolDelta };
     const se: SessionEvent = { id, event };
     this.ring.push(se);
     if (this.ring.length > RING_CAPACITY) this.ring.shift();
     for (const l of this.listeners) { try { l(se); } catch { /* */ } }
+    if (event.type === 'result') this.setRuntimeStatus('idle');
+    if (event.type === 'system' && (event as any).subtype === 'error') this.setRuntimeStatus('error');
+  }
+
+  private activeToolDelta(event: SDKMessage): Partial<SessionStateSnapshot> {
+    const content = (event as any)?.message?.content;
+    if (event.type === 'assistant' && Array.isArray(content)) {
+      const tool = [...content].reverse().find((p) => p?.type === 'tool_use' && typeof p.id === 'string');
+      if (tool) {
+        return {
+          activeTool: {
+            toolUseId: tool.id,
+            name: String(tool.name ?? 'Tool'),
+            startedAt: Date.now(),
+            inputSummary: summarizeToolInput(String(tool.name ?? 'Tool'), tool.input),
+          },
+        };
+      }
+    }
+    if (event.type === 'user' && Array.isArray(content) && this.state.activeTool) {
+      const matched = content.some((p) => p?.type === 'tool_result' && p.tool_use_id === this.state.activeTool?.toolUseId);
+      if (matched) return { activeTool: undefined };
+    }
+    if (event.type === 'result' || (event.type === 'system' && (event as any).subtype === 'error')) return { activeTool: undefined };
+    return {};
   }
 
   // Supervisor-style pump: runs the SDK query to completion, and when it exits
@@ -283,6 +302,7 @@ export class ClaudeSession {
           message: 'SDK exited before any event — giving up. Start a new chat.',
         } as unknown as SDKMessage);
         this.closed = true;
+        this.updateState({ runtimeStatus: 'closed' });
         break;
       }
 
@@ -303,6 +323,7 @@ export class ClaudeSession {
           message: 'Session relaunched too many times — stopping. Click "New chat" or reload.',
         } as unknown as SDKMessage);
         this.closed = true;
+        this.updateState({ runtimeStatus: 'closed' });
         break;
       }
 
@@ -313,25 +334,56 @@ export class ClaudeSession {
       } as unknown as SDKMessage);
 
       this.abortCtl = new AbortController();
-      const claudePath = resolveClaudePath();
-      const opts: Options = {
-        cwd: this.cwd,
-        abortController: this.abortCtl,
-        resume: this.state.claudeSessionId,
-        includePartialMessages: true,
-        ...(this.state.model ? { model: this.state.model } : {}),
-        permissionMode: this.state.permissionMode === 'plan' ? 'plan' : 'default',
-        ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
-        canUseTool: this.canUseToolImpl,
-      };
-      this.query = query({ prompt: this.prompts, options: opts });
+      this.query = query({ prompt: this.prompts, options: this.buildOptions(this.state.claudeSessionId) });
       // loop continues, awaits the new query
     }
+  }
+
+  private buildOptions(resume?: string): Options {
+    const claudePath = resolveClaudePath();
+    return {
+      cwd: this.cwd,
+      abortController: this.abortCtl,
+      ...(resume ? { resume } : {}),
+      includePartialMessages: true,
+      ...(this.state.model ? { model: this.state.model } : {}),
+      // Only forward 'plan' to the SDK (it actually changes the model's system
+      // reminder). 'acceptEdits' and 'bypassPermissions' are implemented
+      // entirely in our canUseTool below, so the SDK stays in 'default' and
+      // the CLI subprocess never has to re-initialize when the user toggles
+      // between those modes.
+      permissionMode: this.state.permissionMode === 'plan' ? 'plan' : 'default',
+      ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
+      canUseTool: this.canUseToolImpl,
+    };
+  }
+
+  private startQuery(resume?: string): void {
+    if (this.query || this.closed || this.viewerMode) return;
+    this.abortCtl = new AbortController();
+    this.query = query({ prompt: this.prompts, options: this.buildOptions(resume) });
+    void this.pump();
   }
 
   private updateState(delta: Partial<SessionStateSnapshot>): void {
     this.state = { ...this.state, ...delta };
     for (const l of this.stateListeners) { try { l(delta); } catch { /* */ } }
+  }
+
+  private setRuntimeStatus(runtimeStatus: SessionRuntimeStatus): void {
+    if (this.state.runtimeStatus === runtimeStatus) return;
+    this.updateState({ runtimeStatus });
+  }
+
+  private refreshRuntimeStatus(fallback: SessionRuntimeStatus): void {
+    const pending = this.getPendingControls();
+    if (pending.some((c) => c.kind === 'permission')) this.setRuntimeStatus('waiting_permission');
+    else if (pending.some((c) => c.kind === 'plan')) this.setRuntimeStatus('waiting_plan');
+    else if (!this.closed) this.setRuntimeStatus(fallback);
+  }
+
+  private emitControl(control: PendingControl): void {
+    for (const l of this.controlListeners) { try { l(control); } catch { /* */ } }
   }
 
   getState(): SessionStateSnapshot {
@@ -347,14 +399,18 @@ export class ClaudeSession {
   }): Promise<any> => {
     if (toolName === 'ExitPlanMode') {
       const plan = typeof input.plan === 'string' ? input.plan : JSON.stringify(input, null, 2);
-      const result = await this.planBroker.awaitApproval(plan, ctx.signal);
-      if (result.behavior === 'allow') {
-        try {
-          await this.query?.setPermissionMode('default');
-          this.updateState({ permissionMode: 'default' });
-        } catch { /* best effort */ }
+      try {
+        const result = await this.planBroker.awaitApproval(plan, ctx.signal);
+        if (result.behavior === 'allow') {
+          try {
+            await this.query?.setPermissionMode('default');
+            this.updateState({ permissionMode: 'default' });
+          } catch { /* best effort */ }
+        }
+        return result;
+      } finally {
+        this.refreshRuntimeStatus('running');
       }
-      return result;
     }
     // "bypass" is implemented here, not at the SDK level — avoids the CLI
     // subprocess exiting with "bypass_permissions_disabled" on toggle.
@@ -364,18 +420,24 @@ export class ClaudeSession {
     if (this.state.permissionMode === 'acceptEdits' && EDIT_LIKE.has(toolName)) {
       return { behavior: 'allow', updatedInput: input };
     }
-    return this.permissionBroker.request(toolName, input, {
-      toolUseId: ctx.toolUseID,
-      title: ctx.title,
-      displayName: ctx.displayName,
-      description: ctx.description,
-      signal: ctx.signal,
-    });
+    try {
+      return await this.permissionBroker.request(toolName, input, {
+        toolUseId: ctx.toolUseID,
+        title: ctx.title,
+        displayName: ctx.displayName,
+        description: ctx.description,
+        signal: ctx.signal,
+      });
+    } finally {
+      this.refreshRuntimeStatus('running');
+    }
   };
 
   sendUser(text: string): void {
     if (this.closed || this.viewerMode) return;
+    this.setRuntimeStatus('running');
     this.prompts.push(text);
+    this.startQuery(this.state.claudeSessionId);
   }
 
   isViewer(): boolean { return this.viewerMode; }
@@ -421,13 +483,39 @@ export class ClaudeSession {
     return () => this.stateListeners.delete(l);
   }
 
+  subscribeControls(l: ControlListener): () => void {
+    this.controlListeners.add(l);
+    return () => this.controlListeners.delete(l);
+  }
+
+  getPendingControls(): PendingControl[] {
+    return [
+      ...this.permissionBroker.getPending().map((p) => ({ kind: 'permission' as const, ...p })),
+      ...this.planBroker.getPending().map((p) => ({ kind: 'plan' as const, ...p })),
+    ];
+  }
+
   isClosed(): boolean { return this.closed; }
 
   async close(): Promise<void> {
     this.closed = true;
+    this.updateState({ runtimeStatus: 'closed', activeTool: undefined });
     this.prompts.close();
     try { this.abortCtl.abort(); } catch { /* */ }
     this.permissionBroker.drainDeny();
     this.planBroker.drainReject();
   }
+}
+
+function summarizeToolInput(name: string, input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const obj = input as Record<string, unknown>;
+  const value =
+    name === 'Bash' ? obj.command :
+    (name === 'Read' || name === 'Edit' || name === 'Write' || name === 'MultiEdit') ? obj.file_path :
+    name === 'Grep' ? obj.pattern :
+    name === 'Glob' ? obj.pattern :
+    Object.values(obj)[0];
+  if (typeof value !== 'string') return undefined;
+  return value.length > 120 ? value.slice(0, 117) + '...' : value;
 }

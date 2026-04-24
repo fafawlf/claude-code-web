@@ -1,129 +1,190 @@
-# claudecode-web
+# Claude Code Web
 
-A tiny self-hosted web UI for driving Claude Code on a remote machine — when
-you can't install Claude Code locally and don't want to route traffic through
-`claude.ai`.
+A self-hosted web workspace for Claude Code.
 
-- Runs on the remote box where Claude Code can already run
-- Your laptop opens a browser tab over an **SSH tunnel** — no new ports
-  exposed, no third-party relay
-- The only outbound Anthropic traffic is the same one Claude Code already
-  makes: from the remote machine to `api.anthropic.com`
+Claude Code is excellent in a terminal, but not every workflow fits a TUI:
 
-## Install (on the remote machine)
+- You cannot use the local Claude Code desktop/client experience, but you can SSH
+  into a machine where Claude Code works.
+- You like the power of the TUI, but want a browser UI that is easier to read,
+  copy from, upload files into, and recover after refreshes.
+- You do not love the default Claude Code UI and want a skinnable interface with
+  different visual personalities.
 
-Requires Node 20+.
+Claude Code Web runs next to Claude Code on your local machine or remote server.
+Your browser talks to it over localhost or an SSH tunnel. Claude itself still
+runs on the machine where the server is started.
+
+This is an independent open-source project and is not affiliated with Anthropic.
+
+## Highlights
+
+- Web chat UI for local or remote Claude Code
+- Project launcher with recent and pinned projects
+- Markdown rendering, copyable code blocks, prompt history, smooth streaming
+- Upload files and images by picker, paste, or drag/drop
+- Download/open generated files from assistant messages
+- Diff cards for edits and writes, with approve/reject controls
+- Plan mode and permission prompts
+- Background activity badge for live sessions that need attention
+- Browser reconnect with event replay
+- Viewer mode for historical sessions, with explicit takeover
+- Component-level skins: Warm, Cyberpunk, DevChat, Catgirl, and Emochi
+
+## Install
+
+Requirements:
+
+- Node.js 20+
+- Claude Code available on the machine running the server
+- Claude Code auth already configured, either by `claude login` or the same
+  environment variables you use with the Claude CLI
 
 ```bash
-git clone <this repo> claudecode-web
-cd claudecode-web
+git clone https://github.com/fafawlf/claude-code-web.git
+cd claude-code-web
 npm install
 npm run build
 ```
 
-Make sure `ANTHROPIC_API_KEY` (or `claude login` credentials in
-`~/.claude`) is set in the shell where you launch the server, same as
-you'd set it for the `claude` CLI.
+## Local Usage
 
-## Zero-SSH daily use (recommended)
-
-Once the remote is built (above) and SSH-key login works, grab the right
-launcher from [`launcher/`](./launcher/) and run it from your laptop. It
-auto-starts the remote server inside `tmux`, sets up the tunnel, and opens
-your browser — one double-click, 1–3 seconds. See [launcher/README.md](./launcher/README.md).
-
-## Manual use
-
-On the remote machine, in the directory you want Claude to work in:
+Use this when Claude Code works on your own computer.
 
 ```bash
-node ./server/dist/bin/claudecode-web.js
+cd ~/your-project
+node /path/to/claude-code-web/server/dist/bin/claudecode-web.js
 ```
 
-You'll see:
+Open the URL printed by the server. It includes a local auth token:
 
-```
-  claudecode-web listening on 127.0.0.1:8080
-  project: /path/you/launched/from
-
-  On your laptop:
-    ssh -L 8080:127.0.0.1:8080 <your-user>@<your-remote-host>
-
-  Then open:
-    http://localhost:8080/?t=<token>
+```text
+http://localhost:8080/?t=<token>
 ```
 
-Copy the URL into your browser. The token is remembered in `sessionStorage`
-for that tab; you can reload the page without pasting it again.
+## Remote Usage
 
-### Running across SSH disconnects
+Use this when Claude Code works on a remote machine but your local machine
+cannot run it comfortably.
 
-`claudecode-web` is a foreground process. If you want it to survive a dropped
-SSH session, run it under `tmux` or `systemd --user`:
+On the remote machine:
 
 ```bash
-tmux new -d -s ccw 'cd ~/my-project && node /path/to/claudecode-web/server/dist/bin/claudecode-web.js'
+cd ~/your-project
+node /path/to/claude-code-web/server/dist/bin/claudecode-web.js
 ```
 
-### Options
+The server binds to `127.0.0.1` by default. From your laptop, open an SSH
+tunnel:
 
-```
-  --port, -p <n>   Port to bind (default 8080)
-  --host <addr>    Bind address (default 127.0.0.1 — leave it)
-  --cwd <path>     Default project directory (default: process.cwd())
-```
-
-## Security model
-
-- The server binds to **127.0.0.1 only**. Public network cannot reach it.
-- A random 32-byte token is generated on first run and stored at
-  `~/.claudecode-web/token` (mode 0600). It's required on every request
-  and WS connection.
-- All browser ↔ server traffic travels inside the SSH tunnel, which is
-  already encrypted. No TLS termination is needed on the server.
-- The token is what prevents another user on the same remote box from
-  hijacking your session (since loopback is shared).
-- **Not designed for multi-user.** One token, one user.
-
-## What it supports (v1)
-
-- Streaming assistant output with Stop
-- Tool-use rendering (Bash/Read/Edit/Grep/Glob — inputs and outputs)
-- Permission prompts with **Allow once / Allow for session / Deny**
-- Resume prior sessions (reads Claude Code's own session store)
-- Up to 3 concurrent sessions; browser tab reconnect replays buffered events
-
-## Deferred
-
-- Full file tree and diff viewer (tool inputs currently render as JSON)
-- Mobile layout, slash-command palette, keybinding parity with the TUI
-- Multi-user, non-loopback binding, HTTPS
-
-## Layout
-
-```
-server/                  Node/Fastify backend
-  src/
-    bin/claudecode-web.ts  launcher CLI
-    index.ts               server bootstrap
-    ws.ts                  WebSocket protocol
-    api.ts                 REST (/api/sessions)
-    session/
-      ClaudeSession.ts     wraps @anthropic-ai/claude-agent-sdk
-      SessionManager.ts    concurrent-session registry
-    permissions/
-      PermissionBroker.ts  bridges SDK canUseTool → browser
-    auth.ts, paths.ts, protocol.ts
-web/                     Vite + React + Tailwind SPA
-  src/
-    App.tsx, ws.ts, reducer.ts
-    components/*
+```bash
+ssh -L 8080:127.0.0.1:8080 <user>@<remote-host>
 ```
 
-## Why not `claude.ai/code` Remote Control?
+Then open the tokenized URL printed by the server:
 
-Remote Control works great *if your browser can reach `claude.ai`*. From
-regions where `claude.ai` is restricted, routing a browser through it can
-get your account flagged. This tool keeps all browser traffic inside the
-SSH tunnel — `api.anthropic.com` is only ever called from the remote box,
-identical to the traffic profile you already have using `claude` over SSH.
+```text
+http://localhost:8080/?t=<token>
+```
+
+### Launcher Scripts
+
+The [`launcher/`](./launcher/) folder contains optional laptop-side launchers
+for macOS/Linux and Windows. They can:
+
+1. SSH into the remote machine
+2. Start the web server in `tmux`
+3. Fetch the local token
+4. Open the SSH tunnel
+5. Open your browser
+
+Edit the placeholder remote host and project path in the launcher before use.
+Do not commit real SSH hosts, usernames, or tokens.
+
+## CLI Options
+
+```text
+--port, -p <n>   Port to bind, default 8080
+--host <addr>    Bind address, default 127.0.0.1
+--cwd <path>     Default project directory, default current directory
+--help, -h       Show help
+```
+
+Keep `--host` on `127.0.0.1` unless you are deliberately putting another
+trusted access layer in front of the server.
+
+## Security Model
+
+Claude Code Web is built for a single user over localhost or an SSH tunnel.
+
+- The server binds to `127.0.0.1` by default.
+- A random token is generated on first run and stored at
+  `~/.claudecode-web/token` with mode `0600`.
+- Every REST and WebSocket request requires the token.
+- Remote use should happen through SSH port forwarding, not by exposing the
+  server directly to the public internet.
+- The app can read, edit, create, and delete files in projects that Claude Code
+  can access. Treat it with the same trust level as the Claude Code CLI.
+- It is not designed for multi-user collaboration yet.
+
+Before publishing forks, check that you did not commit:
+
+- SSH hostnames, IP addresses, usernames, or private keys
+- Claude or Anthropic API keys/tokens
+- `.claudecode-web/`, `.claude/`, generated uploads, or personal transcripts
+
+## Skins
+
+Skins are component-level themes, not just color swaps. They can change:
+
+- Empty state copy and suggestions
+- Status text such as thinking, writing, approval, and tool running states
+- Message bubble styling and avatars
+- Sidebar, top bar, activity badge, and composer styling
+
+Current skins:
+
+- Warm Dusk: default focused workspace
+- Cyberpunk: neon terminal deck
+- DevChat: chat app style with a WeChat-inspired mark
+- Catgirl: playful pastel skin
+- Emochi: bold black/yellow Mochi skin with bundled logo
+
+Skins do not inject persona prompts into Claude. They only affect the web UI.
+
+## Roadmap
+
+- One-click switch between Claude Code and Codex backends
+- Right sidebar for webpage previews and file rendering
+- Mobile version
+- Richer file explorer and file tree
+- More command parity with Claude Code slash commands
+- Optional notifications for background activity
+
+## Development
+
+```bash
+npm install
+npm test
+npm run build
+```
+
+Useful scripts:
+
+```bash
+npm run dev:server
+npm run dev:web
+```
+
+Project layout:
+
+```text
+server/   Fastify backend, WebSocket protocol, Claude session lifecycle
+web/      Vite + React + Tailwind client
+launcher/ Optional laptop-side SSH launchers
+design/   Design notes and tokens
+```
+
+## License
+
+MIT. See [LICENSE](./LICENSE).

@@ -1,4 +1,5 @@
 import type { ChatItem, PermissionMode, SdkEvent, SessionStateSnapshot } from './types';
+import { cleanAssistantText } from './assistantText';
 
 export type ChatState = {
   items: ChatItem[];
@@ -70,11 +71,14 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
   }
 
   if (ev.type === 'assistant' && ev.message?.content) {
+    const streamedText = streamingText;
     busy = true;
     streamingText = '';
     for (const part of ev.message.content) {
       if (part.type === 'text' && typeof (part as any).text === 'string') {
-        items.push({ kind: 'assistant_text', id: rid(), text: (part as any).text });
+        const text = cleanAssistantText((part as any).text);
+        if (!text) continue;
+        items.push({ kind: 'assistant_text', id: rid(), text, streamed: isStreamHandoff(cleanAssistantText(streamedText), text) });
       } else if (part.type === 'thinking' && typeof (part as any).thinking === 'string') {
         items.push({ kind: 'thinking', id: rid(), text: (part as any).thinking });
       } else if (part.type === 'tool_use') {
@@ -121,6 +125,13 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
   }
 
   return { ...s, items, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
+}
+
+function isStreamHandoff(streamingText: string, finalText: string): boolean {
+  if (!streamingText || !finalText) return false;
+  const a = streamingText.replace(/\s+$/g, '');
+  const b = finalText.replace(/\s+$/g, '');
+  return a === b;
 }
 
 /** Optimistically append a user message on send (replaced when the echo arrives). */

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PermissionMode, SessionStateSnapshot, StoredSession } from '../types';
 import { MODEL_OPTIONS, modeLabel } from '../types';
+import type { SkinId } from '../skins';
+import { SKINS } from '../skins';
 import { Icon, type IconName } from './Icon';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 
@@ -10,6 +12,7 @@ type Action =
   | { kind: 'rename' }
   | { kind: 'refresh' }
   | { kind: 'set-model'; id: string }
+  | { kind: 'set-skin'; id: SkinId }
   | { kind: 'set-mode'; mode: PermissionMode }
   | { kind: 'resume'; claudeSessionId: string };
 
@@ -29,10 +32,11 @@ type Props = {
   onClose: () => void;
   state: SessionStateSnapshot | null;
   sessions: StoredSession[];
+  currentSkin: SkinId;
   onAction: (a: Action) => void;
 };
 
-export function CommandPalette({ open, onClose, state, sessions, onAction }: Props) {
+export function CommandPalette({ open, onClose, state, sessions, currentSkin, onAction }: Props) {
   const [q, setQ] = useState('');
   const [i, setI] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
@@ -64,6 +68,20 @@ export function CommandPalette({ open, onClose, state, sessions, onAction }: Pro
       });
     }
 
+    for (const skin of SKINS) {
+      const active = currentSkin === skin.id;
+      out.push({
+        id: `skin:${skin.id}`,
+        group: 'Skins',
+        label: `Use ${skin.label}`,
+        subtitle: skin.hint,
+        icon: 'palette',
+        active,
+        hint: active ? 'active' : 'switch',
+        action: { kind: 'set-skin', id: skin.id },
+      });
+    }
+
     for (const mode of ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as PermissionMode[]) {
       const active = state?.permissionMode === mode;
       out.push({
@@ -91,7 +109,7 @@ export function CommandPalette({ open, onClose, state, sessions, onAction }: Pro
     }
 
     return out;
-  }, [state, sessions]);
+  }, [currentSkin, state, sessions]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();

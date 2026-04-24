@@ -1,8 +1,25 @@
 {
   "name": "claudecode-web",
   "version": "0.1.0",
-  "private": true,
-  "description": "Self-hosted web client for remote Claude Code over SSH tunnel",
+  "description": "Self-hosted skinable web workspace for local or remote Claude Code",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fafawlf/claude-code-web.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fafawlf/claude-code-web/issues"
+  },
+  "homepage": "https://github.com/fafawlf/claude-code-web#readme",
+  "keywords": [
+    "claude-code",
+    "claude",
+    "web-ui",
+    "ssh",
+    "tui",
+    "agent",
+    "self-hosted"
+  ],
   "workspaces": [
     "server",
     "web"

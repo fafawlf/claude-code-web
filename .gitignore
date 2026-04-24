@@ -3,8 +3,12 @@ dist
 *.log
 .env
 .env.local
+.env.*
+!.env.example
 .DS_Store
 server/dist
 web/dist
 *.tsbuildinfo
 .claude/
+.claudecode-web/
+coverage/

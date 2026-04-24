@@ -31,9 +31,9 @@ export default {
         danger: 'var(--danger)',
       },
       fontFamily: {
-        sans: ['Inter', '-apple-system', 'system-ui', 'Segoe UI', 'Roboto', 'sans-serif'],
-        serif: ['ui-serif', 'Iowan Old Style', 'Georgia', 'serif'],
-        mono: ['JetBrains Mono', 'SF Mono', 'ui-monospace', 'Menlo', 'monospace'],
+        sans: ['var(--font-sans)', 'Inter', '-apple-system', 'system-ui', 'Segoe UI', 'Roboto', 'sans-serif'],
+        serif: ['var(--font-serif)', 'ui-serif', 'Iowan Old Style', 'Georgia', 'serif'],
+        mono: ['var(--font-mono)', 'JetBrains Mono', 'SF Mono', 'ui-monospace', 'Menlo', 'monospace'],
       },
       fontSize: {
         xs: ['11px', '16px'],

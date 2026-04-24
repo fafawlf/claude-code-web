@@ -58,7 +58,7 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
     return { ok: true };
   });
 
-  registerApi(app, opts.token, opts.defaultCwd);
+  registerApi(app, opts.token, opts.defaultCwd, sm, { host: opts.host, port: opts.port });
   registerWs(app, sm, opts.token, opts.defaultCwd);
 
   const host = opts.host ?? '127.0.0.1';

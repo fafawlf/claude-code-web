@@ -5,11 +5,14 @@ type Decision = 'approve' | 'reject';
 
 type Pending = {
   reqId: string;
+  plan: string;
   resolve: (v: Decision) => void;
   timer: NodeJS.Timeout;
 };
 
-type Emitter = (req: { reqId: string; plan: string }) => boolean;
+export type PendingPlanRequest = { reqId: string; plan: string };
+
+type Emitter = (req: PendingPlanRequest) => void;
 
 const TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -34,19 +37,19 @@ export class PlanBroker {
       if (signal.aborted) return onAbort();
       signal.addEventListener('abort', onAbort, { once: true });
 
-      this.pending.set(reqId, { reqId, resolve, timer });
+      this.pending.set(reqId, { reqId, plan, resolve, timer });
 
-      if (!this.emit({ reqId, plan })) {
-        clearTimeout(timer);
-        this.pending.delete(reqId);
-        resolve('reject');
-      }
+      this.emit({ reqId, plan });
     });
 
     if (decision === 'approve') {
       return { behavior: 'allow', updatedInput: { plan } };
     }
     return { behavior: 'deny', message: 'User rejected the plan; staying in plan mode.' };
+  }
+
+  getPending(): PendingPlanRequest[] {
+    return [...this.pending.values()].map((p) => ({ reqId: p.reqId, plan: p.plan }));
   }
 
   resolve(reqId: string, decision: Decision): boolean {

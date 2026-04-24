@@ -1,4 +1,12 @@
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+export type SessionRuntimeStatus = 'idle' | 'running' | 'waiting_permission' | 'waiting_plan' | 'error' | 'closed';
+
+export type ActiveToolInfo = {
+  toolUseId: string;
+  name: string;
+  startedAt: number;
+  inputSummary?: string;
+};
 
 export type SessionStateSnapshot = {
   sessionId: string;
@@ -6,10 +14,45 @@ export type SessionStateSnapshot = {
   cwd: string;
   model?: string;
   permissionMode: PermissionMode;
+  runtimeStatus: SessionRuntimeStatus;
+  attachedCount: number;
+  lastEventId: number;
+  lastEventAt: number;
+  activeTool?: ActiveToolInfo;
   tokensIn: number;
   tokensOut: number;
   cost?: number;
   viewerMode?: boolean;
+};
+
+export type ClaudeAuthInfo = {
+  source: 'api' | 'account' | 'none' | 'unknown';
+  plan?: 'max' | 'pro' | 'unknown';
+  label: string;
+  detail?: string;
+};
+
+export type ClaudeExecutableInfo = {
+  source: 'env' | 'path' | 'bundled' | 'missing';
+  label: string;
+  path?: string;
+  detail?: string;
+};
+
+export type ServerRuntimeInfo = {
+  host?: string;
+  port?: number;
+  platform: string;
+  arch: string;
+  node: string;
+};
+
+export type ServerInfo = {
+  cwd: string;
+  home: string;
+  auth: ClaudeAuthInfo;
+  claude?: ClaudeExecutableInfo;
+  server?: ServerRuntimeInfo;
 };
 
 // Client → server
@@ -21,7 +64,8 @@ export type ClientInterrupt = { type: 'interrupt' };
 export type ClientSetModel = { type: 'set_model'; model: string };
 export type ClientSetMode = { type: 'set_permission_mode'; mode: PermissionMode };
 export type ClientRefreshHistory = { type: 'refresh_history' };
-export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientSetModel | ClientSetMode | ClientRefreshHistory;
+export type ClientSessionClose = { type: 'session_close'; sessionId: string };
+export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientSetModel | ClientSetMode | ClientRefreshHistory | ClientSessionClose;
 
 // Server → client
 export type ServerReady = { type: 'ready'; state: SessionStateSnapshot };
@@ -29,9 +73,15 @@ export type ServerSdkEvent = { type: 'sdk_event'; id: number; event: SdkEvent };
 export type ServerSdkEventBatch = { type: 'sdk_events_batch'; events: Array<{ id: number; event: SdkEvent }> };
 export type ServerPermissionRequest = { type: 'permission_request'; reqId: string; toolName: string; toolUseId?: string; input: Record<string, unknown>; title?: string; displayName?: string; description?: string };
 export type ServerPlanProposed = { type: 'plan_proposed'; reqId: string; plan: string };
+export type PendingControl =
+  | ({ kind: 'permission' } & Omit<ServerPermissionRequest, 'type'>)
+  | ({ kind: 'plan' } & Omit<ServerPlanProposed, 'type'>);
+export type ServerPendingControl = { type: 'pending_control'; sessionId: string; control: PendingControl };
+export type ServerSessionsUpdate = { type: 'sessions_update'; sessions: SessionStateSnapshot[] };
 export type ServerStateUpdate = { type: 'state_update'; state: Partial<SessionStateSnapshot> };
+export type ServerHeartbeat = { type: 'heartbeat'; now: number; session?: SessionStateSnapshot; noActivityMs?: number };
 export type ServerError = { type: 'error'; message: string };
-export type ServerMessage = ServerReady | ServerSdkEvent | ServerSdkEventBatch | ServerPermissionRequest | ServerPlanProposed | ServerStateUpdate | ServerError;
+export type ServerMessage = ServerReady | ServerSdkEvent | ServerSdkEventBatch | ServerPermissionRequest | ServerPlanProposed | ServerPendingControl | ServerSessionsUpdate | ServerStateUpdate | ServerHeartbeat | ServerError;
 
 export type SdkEvent = {
   type: string;
@@ -54,7 +104,7 @@ export type SdkEvent = {
 
 export type ChatItem =
   | { kind: 'user'; id: string; text: string; optimistic?: boolean }
-  | { kind: 'assistant_text'; id: string; text: string }
+  | { kind: 'assistant_text'; id: string; text: string; streamed?: boolean }
   | { kind: 'thinking'; id: string; text: string }
   | { kind: 'tool_use'; id: string; toolUseId: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
   | { kind: 'system'; id: string; text: string; level: 'info' | 'error' };
@@ -76,7 +126,7 @@ export const MODEL_OPTIONS = [
 ] as const;
 
 // Shift+Tab cycles only through the three non-dangerous modes. bypass is
-// available from the ModeMenu / CommandPalette / slash command but NOT via
+// available from the command palette / slash command but NOT via
 // accidental Tab-cycling, because it auto-approves Bash too.
 export const MODE_ORDER: PermissionMode[] = ['default', 'acceptEdits', 'plan'];
 

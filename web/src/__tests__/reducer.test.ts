@@ -8,6 +8,10 @@ function baseState(): ChatState {
     sessionId: 'sess-1',
     cwd: '/tmp',
     permissionMode: 'default',
+    runtimeStatus: 'idle',
+    attachedCount: 0,
+    lastEventId: 0,
+    lastEventAt: Date.now(),
     tokensIn: 0,
     tokensOut: 0,
   };
@@ -56,6 +60,42 @@ test('final assistant message clears streamingText and appends text/tool_use ite
   assert.equal((s.items[0] as any).text, 'Here is the plan.');
   assert.equal(s.items[1].kind, 'tool_use');
   assert.equal((s.items[1] as any).name, 'Bash');
+});
+
+test('local model switch stdout notice is filtered from assistant messages', () => {
+  let s = baseState();
+  const ev: SdkEvent = {
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'text', text: '<local-command-stdout>Set model to claude-opus-4-7</local-command-stdout>' },
+      ],
+    },
+  } as unknown as SdkEvent;
+  s = applyEvent(s, ev, 1);
+  assert.equal(s.items.length, 0);
+  assert.equal(s.streamingText, '');
+});
+
+test('local model switch stdout can be stripped from a mixed assistant message', () => {
+  let s = baseState();
+  s = {
+    ...s,
+    streamingText: '<local-command-stdout>Set model to claude-opus-4-7</local-command-stdout>\nDone.',
+    busy: true,
+  };
+  const ev: SdkEvent = {
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'text', text: '<local-command-stdout>Set model to claude-opus-4-7</local-command-stdout>\nDone.' },
+      ],
+    },
+  } as unknown as SdkEvent;
+  s = applyEvent(s, ev, 1);
+  assert.equal(s.items.length, 1);
+  assert.equal((s.items[0] as any).text, 'Done.');
+  assert.equal((s.items[0] as any).streamed, true);
 });
 
 test('user event with text content creates a user ChatItem (regression)', () => {

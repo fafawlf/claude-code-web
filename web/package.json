@@ -1,7 +1,13 @@
 {
   "name": "@claudecode-web/web",
   "version": "0.1.0",
-  "private": true,
+  "description": "React web client for Claude Code Web",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fafawlf/claude-code-web.git",
+    "directory": "web"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +18,7 @@
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/nunito": "^5.2.7",
     "clsx": "^2.1.1",
     "markdown-to-jsx": "^9.7.16",
     "react": "^18.3.1",

@@ -8,6 +8,7 @@ export class WsClient {
   private ws?: WebSocket;
   private handler: WsHandler;
   private connHandler?: ConnectionHandler;
+  private openHandlers = new Set<() => void>();
   private token: string;
   private closed = false;
   private backoff = 500;
@@ -44,15 +45,13 @@ export class WsClient {
     ws.onopen = () => {
       this.backoff = 500;
       this.emit('open');
+      for (const cb of this.openHandlers) cb();
     };
   }
 
   onOpen(cb: () => void): void {
-    const check = () => {
-      if (this.ws?.readyState === WebSocket.OPEN) cb();
-      else setTimeout(check, 50);
-    };
-    check();
+    this.openHandlers.add(cb);
+    if (this.ws?.readyState === WebSocket.OPEN) cb();
   }
 
   send(m: ClientMessage): void {

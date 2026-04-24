@@ -1,66 +1,137 @@
-import { useMemo, useState } from 'react';
-import type { StoredSession } from '../types';
+import { useMemo, useState, type ReactNode } from 'react';
+import type { ActivitySessionViewModel, ActivitySummary } from '../activity';
+import { projectName, type ProjectEntry } from '../projectHistory';
+import type { SkinId } from '../skins';
+import type { SessionStateSnapshot, StoredSession } from '../types';
+import { ActivitySection } from './ActivitySection';
 import { Icon } from './Icon';
-import { groupSessions } from '../utils/groupSessions';
+
+type ProjectSessions = Record<string, StoredSession[]>;
 
 type Props = {
   cwd: string;
-  sessions: StoredSession[];
+  projects: ProjectEntry[];
+  projectSessions: ProjectSessions;
   activeId: string | null;
-  onNew: () => void;
-  onResume: (claudeId: string, title?: string) => void;
-  onView: (claudeId: string, title?: string) => void;
+  activeSession: SessionStateSnapshot | null;
+  activeDraftTitle?: string;
+  activitySummary: ActivitySummary;
+  activitySessions: ActivitySessionViewModel[];
+  onNewInProject: (cwd: string) => void;
+  onResume: (claudeId: string, title: string | undefined, cwd: string) => void;
+  onView: (claudeId: string, title: string | undefined, cwd: string) => void;
+  onOpenActivity: (sessionId: string, title?: string) => void;
+  onEndActivity: (sessionId: string) => void;
   onRefresh: () => void;
-  onRename: (claudeId: string, newTitle: string) => void;
+  onRename: (claudeId: string, newTitle: string, cwd: string) => void;
   connected: boolean;
   onOpenCommandPalette: () => void;
+  onOpenProject: () => void;
+  skin?: SkinId;
 };
 
-export function Sidebar({ cwd, sessions, activeId, onNew, onResume, onView, onRefresh, onRename, connected, onOpenCommandPalette }: Props) {
+type ProjectView = ProjectEntry & {
+  name: string;
+  sessions: StoredSession[];
+};
+
+export function Sidebar({
+  cwd,
+  projects,
+  projectSessions,
+  activeId,
+  activeSession,
+  activeDraftTitle,
+  activitySummary,
+  activitySessions,
+  onNewInProject,
+  onResume,
+  onView,
+  onOpenActivity,
+  onEndActivity,
+  onRefresh,
+  onRename,
+  connected,
+  onOpenCommandPalette,
+  onOpenProject,
+  skin = 'warm',
+}: Props) {
   const [search, setSearch] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const brand = skinBrand(skin);
 
-  const groups = useMemo(() => {
+  const projectViews = useMemo<ProjectView[]>(() => {
     const q = search.trim().toLowerCase();
-    const list = [...sessions].sort((a, b) => b.lastModified - a.lastModified);
-    const filtered = q
-      ? list.filter((s) => [s.customTitle, s.summary, s.firstPrompt].filter(Boolean).join(' ').toLowerCase().includes(q))
-      : list;
-    return groupSessions(filtered);
-  }, [sessions, search]);
+    return projects
+      .map((project) => {
+        const name = projectName(project.path);
+        const sessions = [...(projectSessions[project.path] ?? [])]
+          .sort((a, b) => b.lastModified - a.lastModified);
+        const filteredSessions = q
+          ? sessions.filter((s) => [s.customTitle, s.summary, s.firstPrompt].filter(Boolean).join(' ').toLowerCase().includes(q))
+          : sessions;
+        const matchesProject = !q || name.toLowerCase().includes(q) || project.path.toLowerCase().includes(q);
+        if (!matchesProject && filteredSessions.length === 0) return null;
+        return { ...project, name, sessions: matchesProject ? filteredSessions : filteredSessions };
+      })
+      .filter(Boolean) as ProjectView[];
+  }, [projectSessions, projects, search]);
 
   return (
-    <aside className="w-72 shrink-0 bg-bg-raised border-r border-border-subtle flex flex-col h-full">
-      <div className="px-4 pt-4 pb-3 flex items-center gap-2.5">
-        <div
-          className="w-[26px] h-[26px] rounded-md grid place-items-center text-text-inverse text-[13px] font-semibold"
-          style={{
-            background: 'linear-gradient(135deg, var(--accent) 0%, var(--accent-lo) 100%)',
-            boxShadow: 'inset 0 1px 0 rgba(255,230,200,.2)',
-          }}
-        >
-          cc
-        </div>
-        <div className="text-sm font-medium text-text-primary">claude-code-web</div>
+    <aside className={`app-sidebar skin-sidebar-${skin} w-72 shrink-0 bg-bg-raised border-r border-border-subtle flex flex-col h-full`}>
+      <div className="app-sidebar-header px-4 pt-4 pb-3 flex items-center gap-2.5">
+        {brand ? (
+          <div className="skin-sidebar-brand min-w-0 flex-1 flex items-center gap-2.5">
+            <span className="skin-sidebar-logo grid place-items-center shrink-0" aria-hidden>
+              <img src={brand.logo} alt="" />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-black text-text-primary">{brand.title}</span>
+              <span className="block truncate text-[10px] text-text-muted">{brand.subtitle}</span>
+            </span>
+          </div>
+        ) : (
+          <>
+            <span
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected ? 'bg-success shadow-[0_0_6px_rgba(138,168,118,.55)]' : 'bg-text-muted'}`}
+              title={connected ? 'connected' : 'disconnected'}
+            />
+            <div className="text-sm text-text-secondary">Projects</div>
+          </>
+        )}
         <button
           onClick={onOpenCommandPalette}
-          className="ml-auto kbd hover:text-text-primary transition-colors duration-hover"
-          title="Open command palette"
+          className="ml-auto w-7 h-7 rounded-sm grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover"
+          title="Command palette"
+          aria-label="Open command palette"
         >
-          ⌘K
+          <Icon name="command" size={14} />
+        </button>
+        <button
+          onClick={onRefresh}
+          className="w-7 h-7 rounded-sm grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover"
+          title="Refresh projects"
+          aria-label="Refresh projects"
+        >
+          ↻
+        </button>
+        <button
+          onClick={onOpenProject}
+          className="w-7 h-7 rounded-sm grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover"
+          title="Choose project folder"
+          aria-label="Choose project folder"
+        >
+          <Icon name="folder-plus" size={15} />
         </button>
       </div>
 
-      <div className="px-3 pb-2">
-        <button
-          onClick={onNew}
-          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-sm font-medium text-accent-hi bg-bg-accent-soft border border-accent/15 hover:bg-accent/[.18] hover:border-accent/30 transition-all duration-hover ease-out"
-        >
-          <Icon name="plus" size={16} />
-          New chat
-        </button>
-      </div>
+      <ActivitySection
+        summary={activitySummary}
+        sessions={activitySessions}
+        onOpen={onOpenActivity}
+        onEnd={onEndActivity}
+      />
 
       <div className="px-3 pb-2">
         <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-sm bg-bg-surface border border-transparent focus-within:border-border transition-colors duration-hover">
@@ -68,97 +139,218 @@ export function Sidebar({ cwd, sessions, activeId, onNew, onResume, onView, onRe
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search history…"
+            placeholder="Search projects…"
             className="flex-1 text-sm outline-none bg-transparent text-text-primary placeholder:text-text-muted"
           />
         </div>
       </div>
 
-      <div className="flex items-center justify-between px-4 pt-2">
-        <span className="text-[10px] uppercase tracking-[.06em] font-semibold text-text-muted">History</span>
-        <button onClick={onRefresh} className="text-[10px] text-text-muted hover:text-text-secondary transition-colors duration-hover" title="refresh">↻</button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-1.5 pb-3">
-        {groups.length === 0 && <div className="px-3.5 py-3 text-xs text-text-muted">{search ? 'No matches.' : 'No prior sessions.'}</div>}
-        {groups.map((g) => (
-          <div key={g.label}>
-            <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-[.06em] font-semibold text-text-muted">
-              {g.label}
-            </div>
-            {g.items.map((s) => {
-              const active = s.sessionId === activeId;
-              const title = s.customTitle ?? s.summary ?? s.firstPrompt ?? '(untitled)';
-              return (
-                <div key={s.sessionId} className="group relative mx-1 my-px rounded-sm hover:bg-bg-hover transition-colors duration-hover">
-                  {renamingId === s.sessionId ? (
-                    <input
-                      autoFocus
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onBlur={() => { if (draft.trim()) onRename(s.sessionId, draft.trim()); setRenamingId(null); }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') { e.currentTarget.blur(); }
-                        if (e.key === 'Escape') { setRenamingId(null); }
-                      }}
-                      className="w-full px-3 py-2 bg-bg-surface border border-border rounded text-sm text-text-primary outline-none"
-                    />
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => onResume(s.sessionId, title)}
-                        className={`w-full text-left px-3 py-2.5 rounded-sm transition-colors duration-hover ${active ? 'bg-bg-accent-soft shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
-                        title={s.sessionId}
-                      >
-                        <div className="text-sm text-text-primary line-clamp-2 pr-10">{title}</div>
-                        <div className="text-[11px] text-text-muted mt-0.5 flex gap-2 items-center">
-                          <Icon name="clock" size={10} />
-                          <span>{formatTime(s.lastModified)}</span>
-                          {s.gitBranch && <>
-                            <Icon name="git-branch" size={10} />
-                            <span className="truncate">{s.gitBranch}</span>
-                          </>}
-                        </div>
-                      </button>
-                      <div className="absolute top-1.5 right-1.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-hover">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onView(s.sessionId, title); }}
-                          className="w-[22px] h-[22px] rounded grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
-                          title="view (read-only — safe if session is active elsewhere)"
-                        ><Icon name="circle-dot" size={12} /></button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setRenamingId(s.sessionId); setDraft(s.customTitle ?? s.summary ?? ''); }}
-                          className="w-[22px] h-[22px] rounded grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
-                          title="rename"
-                        ><Icon name="pencil" size={12} /></button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+      <div className="flex-1 overflow-y-auto px-1.5 pb-4">
+        {projectViews.length === 0 && (
+          <div className="px-3.5 py-3 text-xs text-text-muted">{search ? 'No matches.' : 'No projects yet.'}</div>
+        )}
+        {projectViews.map((project) => (
+          <ProjectBlock
+            key={project.path}
+            project={project}
+            activeCwd={cwd}
+            activeId={activeId}
+            activeSession={activeSession}
+            activeDraftTitle={activeDraftTitle}
+            renamingId={renamingId}
+            draft={draft}
+            onDraft={setDraft}
+            onStartRename={(session) => {
+              setRenamingId(session.sessionId);
+              setDraft(session.customTitle ?? session.summary ?? session.firstPrompt ?? '');
+            }}
+            onEndRename={() => setRenamingId(null)}
+            onNewInProject={onNewInProject}
+            onResume={onResume}
+            onView={onView}
+            onRename={onRename}
+          />
         ))}
-      </div>
-
-      <div className="border-t border-border-subtle px-4 py-3">
-        <div className="text-[10px] uppercase tracking-[.06em] font-semibold text-text-muted mb-1">Project</div>
-        <div className="font-mono text-[11px] text-text-secondary break-all" title={cwd}>{cwd}</div>
       </div>
     </aside>
   );
 }
 
-function formatTime(t: number): string {
-  const d = new Date(t);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+function skinBrand(skin: SkinId): { title: ReactNode; subtitle: string; logo: string } | null {
+  if (skin === 'emochi') {
+    return {
+      title: <>Mochi <span className="text-accent">Code</span></>,
+      subtitle: 'deadpan code buddy',
+      logo: '/assets/emochi_logo.png',
+    };
   }
-  const yd = new Date(now);
-  yd.setDate(now.getDate() - 1);
-  if (d.toDateString() === yd.toDateString()) {
-    return 'Yesterday ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (skin === 'wechat') {
+    return {
+      title: <>Dev<span className="text-accent">Chat</span></>,
+      subtitle: 'chat-style coding',
+      logo: '/assets/wechat_logo.svg',
+    };
   }
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return null;
+}
+
+function ProjectBlock({
+  project,
+  activeCwd,
+  activeId,
+  activeSession,
+  activeDraftTitle,
+  renamingId,
+  draft,
+  onDraft,
+  onStartRename,
+  onEndRename,
+  onNewInProject,
+  onResume,
+  onView,
+  onRename,
+}: {
+  project: ProjectView;
+  activeCwd: string;
+  activeId: string | null;
+  activeSession: SessionStateSnapshot | null;
+  activeDraftTitle?: string;
+  renamingId: string | null;
+  draft: string;
+  onDraft: (value: string) => void;
+  onStartRename: (session: StoredSession) => void;
+  onEndRename: () => void;
+  onNewInProject: (cwd: string) => void;
+  onResume: (claudeId: string, title: string | undefined, cwd: string) => void;
+  onView: (claudeId: string, title: string | undefined, cwd: string) => void;
+  onRename: (claudeId: string, newTitle: string, cwd: string) => void;
+}) {
+  const activeProject = project.path === activeCwd;
+  const draftChat = activeDraftChat(project, activeSession, activeDraftTitle);
+  return (
+    <div className={`project-block pt-2 ${activeProject ? 'project-active' : ''}`}>
+      <div className={`project-folder-row group flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm ${activeProject ? 'text-text-primary' : 'text-text-secondary'} hover:bg-bg-hover transition-colors duration-hover`}>
+        <button
+          onClick={() => onNewInProject(project.path)}
+          className="min-w-0 flex-1 flex items-center gap-2 text-left"
+          title={`New chat in ${project.path}`}
+        >
+          <Icon name="folder" size={14} className="shrink-0 text-text-secondary" />
+          <span className="truncate text-sm">{project.name}</span>
+        </button>
+        <button
+          onClick={() => onNewInProject(project.path)}
+          className="w-6 h-6 rounded-sm grid place-items-center text-text-muted opacity-0 group-hover:opacity-100 hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
+          title={`New chat in ${project.name}`}
+          aria-label={`New chat in ${project.name}`}
+        >
+          <Icon name="plus" size={13} />
+        </button>
+      </div>
+
+      <div className="project-chat-list ml-[25px] pr-1">
+        {draftChat && (
+          <div className="group relative my-px">
+            <div
+              className="project-chat-row project-chat-active project-chat-draft w-full grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors duration-hover bg-bg-hover text-text-primary"
+              title={draftChat.title}
+            >
+              <span className="truncate text-sm">{draftChat.title}</span>
+              <span className="text-[11px] text-text-muted tabular-nums">{draftChat.status}</span>
+            </div>
+          </div>
+        )}
+        {project.sessions.length === 0 && !draftChat ? (
+          <div className="project-empty px-2 py-1.5 text-xs text-text-muted/70">No chats</div>
+        ) : project.sessions.map((session) => {
+          const active = session.sessionId === activeId;
+          const title = session.customTitle ?? session.summary ?? session.firstPrompt ?? '(untitled)';
+          return (
+            <div key={session.sessionId} className="group relative my-px">
+              {renamingId === session.sessionId ? (
+                <input
+                  autoFocus
+                  value={draft}
+                  onChange={(e) => onDraft(e.target.value)}
+                  onBlur={() => { if (draft.trim()) onRename(session.sessionId, draft.trim(), project.path); onEndRename(); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                    if (e.key === 'Escape') onEndRename();
+                  }}
+                  className="w-full px-2 py-1.5 bg-bg-surface border border-border rounded text-sm text-text-primary outline-none"
+                />
+              ) : (
+                <>
+                  <button
+                    onClick={() => onResume(session.sessionId, title, project.path)}
+                    className={`project-chat-row ${active ? 'project-chat-active' : ''} w-full grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors duration-hover ${active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'}`}
+                    title={title}
+                  >
+                    <span className="truncate text-sm">{title}</span>
+                    <span className="text-[11px] text-text-muted tabular-nums">{formatAge(session.lastModified)}</span>
+                  </button>
+                  <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-hover bg-bg-hover pl-1">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onView(session.sessionId, title, project.path); }}
+                      className="w-[21px] h-[21px] rounded grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
+                      title="view read-only"
+                    >
+                      <Icon name="circle-dot" size={11} />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onStartRename(session); }}
+                      className="w-[21px] h-[21px] rounded grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
+                      title="rename"
+                    >
+                      <Icon name="pencil" size={11} />
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function activeDraftChat(project: ProjectView, activeSession: SessionStateSnapshot | null, activeDraftTitle: string | undefined): { title: string; status: string } | null {
+  if (!activeSession || activeSession.cwd !== project.path || activeSession.viewerMode) return null;
+  if (activeSession.claudeSessionId && project.sessions.some((s) => s.sessionId === activeSession.claudeSessionId)) return null;
+
+  return {
+    title: trimTitle(activeDraftTitle) || 'New chat',
+    status: draftStatus(activeSession),
+  };
+}
+
+function draftStatus(s: SessionStateSnapshot): string {
+  switch (s.runtimeStatus) {
+    case 'running': return 'working';
+    case 'waiting_permission': return 'review';
+    case 'waiting_plan': return 'plan';
+    case 'error': return 'issue';
+    case 'closed': return 'closed';
+    case 'idle': return s.lastEventId > 0 || s.claudeSessionId ? formatAge(s.lastEventAt) : 'draft';
+  }
+}
+
+function trimTitle(text: string | undefined): string {
+  const oneLine = (text ?? '').replace(/\s+/g, ' ').trim();
+  if (!oneLine) return '';
+  return oneLine.length > 72 ? `${oneLine.slice(0, 69)}...` : oneLine;
+}
+
+function formatAge(t: number): string {
+  const diff = Math.max(0, Date.now() - t);
+  const min = Math.floor(diff / 60_000);
+  if (min < 1) return 'now';
+  if (min < 60) return `${min}m`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  const months = Math.floor(days / 30);
+  return `${months}mo`;
 }

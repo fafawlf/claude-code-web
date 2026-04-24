@@ -6,12 +6,16 @@ type PermissionDecision = { decision: 'allow' | 'deny'; scope?: 'once' | 'sessio
 type Pending = {
   reqId: string;
   toolName: string;
+  toolUseId?: string;
   input: Record<string, unknown>;
+  title?: string;
+  displayName?: string;
+  description?: string;
   resolve: (v: PermissionDecision) => void;
   timer: NodeJS.Timeout;
 };
 
-type Emitter = (req: {
+export type PendingPermissionRequest = {
   reqId: string;
   toolName: string;
   toolUseId?: string;
@@ -19,7 +23,9 @@ type Emitter = (req: {
   title?: string;
   displayName?: string;
   description?: string;
-}) => boolean; // returns true if something is listening
+};
+
+type Emitter = (req: PendingPermissionRequest) => void;
 
 const TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -66,9 +72,20 @@ export class PermissionBroker {
       if (meta.signal.aborted) return onAbort();
       meta.signal.addEventListener('abort', onAbort, { once: true });
 
-      this.pending.set(reqId, { reqId, toolName, input, resolve, timer });
+      const pending: Pending = {
+        reqId,
+        toolName,
+        toolUseId: meta.toolUseId,
+        input,
+        title: meta.title,
+        displayName: meta.displayName,
+        description: meta.description,
+        resolve,
+        timer,
+      };
+      this.pending.set(reqId, pending);
 
-      const delivered = this.emit({
+      this.emit({
         reqId,
         toolName,
         toolUseId: meta.toolUseId,
@@ -77,11 +94,6 @@ export class PermissionBroker {
         displayName: meta.displayName,
         description: meta.description,
       });
-      if (!delivered) {
-        clearTimeout(timer);
-        this.pending.delete(reqId);
-        resolve({ decision: 'deny' });
-      }
     });
 
     if (decision.decision === 'allow') {
@@ -91,6 +103,18 @@ export class PermissionBroker {
       return { behavior: 'allow', updatedInput: input };
     }
     return { behavior: 'deny', message: 'User declined this tool call.' };
+  }
+
+  getPending(): PendingPermissionRequest[] {
+    return [...this.pending.values()].map((p) => ({
+      reqId: p.reqId,
+      toolName: p.toolName,
+      toolUseId: p.toolUseId,
+      input: p.input,
+      title: p.title,
+      displayName: p.displayName,
+      description: p.description,
+    }));
   }
 
   resolve(reqId: string, decision: PermissionDecision): boolean {

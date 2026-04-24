@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import type { ChatItem } from '../types';
 import { Icon } from './Icon';
+import { copyTextToClipboard } from './CodeBlock';
 
 type Props = {
   item: Extract<ChatItem, { kind: 'tool_use' }>;
@@ -47,6 +49,7 @@ function countChanges(hunks: Hunk[]): { plus: number; minus: number } {
 }
 
 export function DiffBlock({ item, pendingReqId, onAccept, onReject }: Props) {
+  const [copied, setCopied] = useState(false);
   const { filePath, hunks } = extractHunks(item.name, item.input);
   const { plus, minus } = countChanges(hunks);
   const hasResult = !!item.result;
@@ -67,8 +70,23 @@ export function DiffBlock({ item, pendingReqId, onAccept, onReject }: Props) {
         <span className="font-mono text-[11px] text-text-muted">
           <span className="text-success">+{plus}</span> <span className="text-danger">−{minus}</span>
         </span>
+        <button
+          onClick={async () => {
+            const ok = await copyTextToClipboard(diffText(filePath, hunks));
+            if (ok) {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1400);
+            }
+          }}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-sm text-[11px] text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover"
+          title="Copy diff"
+          aria-label="Copy diff"
+        >
+          <Icon name={copied ? 'check' : 'copy'} size={12} />
+          {copied ? 'Copied' : 'Copy'}
+        </button>
       </div>
-      <div className="font-mono text-xs leading-[1.55]">
+      <div className="font-mono text-xs leading-[1.55] overflow-x-auto">
         {hunks.map((h, i) => <HunkView key={i} hunk={h} />)}
       </div>
       {pendingReqId ? (
@@ -103,20 +121,30 @@ function HunkView({ hunk }: { hunk: Hunk }) {
   return (
     <div>
       {oldLines.map((line, i) => (
-        <div key={`o${i}`} className="flex bg-danger/[.08]">
+        <div key={`o${i}`} className="flex min-w-max bg-danger/[.08]">
           <span className="w-12 px-2 text-right text-text-muted opacity-60 shrink-0 select-none">{i + 1}</span>
           <span className="w-4 text-center text-danger shrink-0">−</span>
-          <span className="pr-3.5 whitespace-pre-wrap break-all">{line || ' '}</span>
+          <span className="pr-3.5 whitespace-pre">{line || ' '}</span>
         </div>
       ))}
       {newLines.map((line, i) => (
-        <div key={`n${i}`} className="flex bg-success/[.08]">
+        <div key={`n${i}`} className="flex min-w-max bg-success/[.08]">
           <span className="w-12 px-2 text-right text-text-muted opacity-60 shrink-0 select-none">{i + 1}</span>
           <span className="w-4 text-center text-success shrink-0">+</span>
-          <span className="pr-3.5 whitespace-pre-wrap break-all">{line || ' '}</span>
+          <span className="pr-3.5 whitespace-pre">{line || ' '}</span>
         </div>
       ))}
       {hunk.replaceAll && <div className="px-3 py-0.5 text-[10px] text-text-muted bg-bg-base/50">replace_all</div>}
     </div>
   );
+}
+
+function diffText(filePath: string, hunks: Hunk[]): string {
+  const lines = [`--- ${filePath}`, `+++ ${filePath}`];
+  for (const h of hunks) {
+    if (h.replaceAll) lines.push('@@ replace_all @@');
+    for (const line of (h.oldText ? h.oldText.split('\n') : [])) lines.push(`-${line}`);
+    for (const line of (h.newText ? h.newText.split('\n') : [])) lines.push(`+${line}`);
+  }
+  return lines.join('\n');
 }

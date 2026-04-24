@@ -1,11 +1,11 @@
 import type { SVGProps } from 'react';
 
 export type IconName =
-  | 'folder' | 'chev-right' | 'chev-down' | 'search' | 'plus'
+  | 'folder' | 'folder-plus' | 'chev-right' | 'chev-down' | 'search' | 'plus'
   | 'send' | 'stop' | 'command' | 'brain' | 'zap'
   | 'shield' | 'terminal' | 'file' | 'check' | 'x'
   | 'pencil' | 'git-branch' | 'sparkles' | 'clock' | 'code'
-  | 'circle-dot' | 'list';
+  | 'circle-dot' | 'list' | 'copy' | 'paperclip' | 'palette';
 
 type Props = SVGProps<SVGSVGElement> & { name: IconName; size?: number };
 
@@ -33,6 +33,8 @@ function Path({ name }: { name: IconName }) {
   switch (name) {
     case 'folder':
       return <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />;
+    case 'folder-plus':
+      return (<><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" /></>);
     case 'chev-right':
       return <polyline points="9 6 15 12 9 18" />;
     case 'chev-down':
@@ -75,5 +77,11 @@ function Path({ name }: { name: IconName }) {
       return (<><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="2" fill="currentColor" /></>);
     case 'list':
       return (<><line x1="8" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="20" y2="12" /><line x1="8" y1="18" x2="20" y2="18" /><circle cx="4" cy="6" r="1" fill="currentColor" /><circle cx="4" cy="12" r="1" fill="currentColor" /><circle cx="4" cy="18" r="1" fill="currentColor" /></>);
+    case 'copy':
+      return (<><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>);
+    case 'paperclip':
+      return <path d="M21.4 11.6l-8.5 8.5a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />;
+    case 'palette':
+      return (<><path d="M12 3a9 9 0 0 0 0 18h1.5a2 2 0 0 0 1.7-3.1 1.6 1.6 0 0 1 1.3-2.5H18a6 6 0 0 0 0-12z" /><circle cx="7.5" cy="10" r="1" fill="currentColor" stroke="none" /><circle cx="10.5" cy="7" r="1" fill="currentColor" stroke="none" /><circle cx="14.5" cy="7.5" r="1" fill="currentColor" stroke="none" /></>);
   }
 }

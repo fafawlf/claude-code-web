@@ -4,19 +4,31 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
+export type ClaudeExecutableInfo = {
+  source: 'env' | 'path' | 'bundled' | 'missing';
+  label: string;
+  path?: string;
+  detail?: string;
+};
+
 // The SDK auto-picks a bundled native binary via optionalDependencies, but on
 // some systems it picks the wrong libc variant (musl vs glibc). Resolve a
 // working claude executable ourselves and pass it as pathToClaudeCodeExecutable.
-export function resolveClaudePath(): string | undefined {
+export function detectClaudeExecutable(): ClaudeExecutableInfo {
   // 1. Explicit override.
   const envPath = process.env.CLAUDE_CODE_PATH;
-  if (envPath && existsSync(envPath)) return envPath;
+  if (envPath && existsSync(envPath)) {
+    return { source: 'env', label: 'CLAUDE_CODE_PATH', path: envPath, detail: envPath };
+  }
 
   // 2. User's installed `claude` on PATH. Resolve symlinks so SDK gets the real binary.
   try {
     const which = execSync('command -v claude', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     if (which) {
-      try { return realpathSync(which); } catch { return which; }
+      const resolved = (() => {
+        try { return realpathSync(which); } catch { return which; }
+      })();
+      return { source: 'path', label: 'claude on PATH', path: resolved, detail: which };
     }
   } catch { /* fall through */ }
 
@@ -32,9 +44,19 @@ export function resolveClaudePath(): string | undefined {
     try {
       const pkgJson = require.resolve(`${pkg}/package.json`);
       const bin = pkgJson.replace(/package\.json$/, 'claude');
-      if (existsSync(bin)) return bin;
+      if (existsSync(bin)) {
+        return { source: 'bundled', label: 'Bundled Claude Code', path: bin, detail: pkg };
+      }
     } catch { /* not installed */ }
   }
 
-  return undefined;
+  return {
+    source: 'missing',
+    label: 'Claude executable not found',
+    detail: envPath ? `CLAUDE_CODE_PATH does not exist: ${envPath}` : 'Install claude or set CLAUDE_CODE_PATH',
+  };
+}
+
+export function resolveClaudePath(): string | undefined {
+  return detectClaudeExecutable().path;
 }

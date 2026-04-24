@@ -39,6 +39,7 @@ async function main() {
 
   const url = `http://${host}:${port}/?t=${token}`;
   const tunnelHint = `ssh -L ${port}:${host}:${port} <your-user>@<your-remote-host>`;
+  const localUrl = `http://localhost:${port}/?t=${token}`;
 
   const banner = [
     '',
@@ -46,11 +47,12 @@ async function main() {
     `  claudecode-web listening on ${host}:${port}`,
     `  project: ${cwd}`,
     '',
-    '  On your laptop:',
-    `    ${tunnelHint}`,
+    '  If Claude Code is on this computer:',
+    `    open ${localUrl}`,
     '',
-    '  Then open:',
-    `    ${url.replace(host, 'localhost')}`,
+    '  If this is a remote server:',
+    `    ${tunnelHint}`,
+    `    then open ${url.replace(host, 'localhost')}`,
     '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
     '',
   ].join('\n');

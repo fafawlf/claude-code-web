@@ -3,6 +3,14 @@
 // every assistant/tool variant.
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+export type SessionRuntimeStatus = 'idle' | 'running' | 'waiting_permission' | 'waiting_plan' | 'error' | 'closed';
+
+export type ActiveToolInfo = {
+  toolUseId: string;
+  name: string;
+  startedAt: number;
+  inputSummary?: string;
+};
 
 export type ClientHello = {
   type: 'hello';
@@ -33,6 +41,7 @@ export type ClientInterrupt = { type: 'interrupt' };
 export type ClientSetModel = { type: 'set_model'; model: string };
 export type ClientSetMode = { type: 'set_permission_mode'; mode: PermissionMode };
 export type ClientRefreshHistory = { type: 'refresh_history' };
+export type ClientSessionClose = { type: 'session_close'; sessionId: string };
 
 export type ClientMessage =
   | ClientHello
@@ -42,7 +51,8 @@ export type ClientMessage =
   | ClientInterrupt
   | ClientSetModel
   | ClientSetMode
-  | ClientRefreshHistory;
+  | ClientRefreshHistory
+  | ClientSessionClose;
 
 export type SessionStateSnapshot = {
   sessionId: string;
@@ -50,6 +60,11 @@ export type SessionStateSnapshot = {
   cwd: string;
   model?: string;
   permissionMode: PermissionMode;
+  runtimeStatus: SessionRuntimeStatus;
+  attachedCount: number;
+  lastEventId: number;
+  lastEventAt: number;
+  activeTool?: ActiveToolInfo;
   tokensIn: number;
   tokensOut: number;
   cost?: number;
@@ -74,9 +89,27 @@ export type ServerPlanProposed = {
   reqId: string;
   plan: string;
 };
+export type PendingControl =
+  | ({ kind: 'permission' } & Omit<ServerPermissionRequest, 'type'>)
+  | ({ kind: 'plan' } & Omit<ServerPlanProposed, 'type'>);
+export type ServerPendingControl = {
+  type: 'pending_control';
+  sessionId: string;
+  control: PendingControl;
+};
+export type ServerSessionsUpdate = {
+  type: 'sessions_update';
+  sessions: SessionStateSnapshot[];
+};
 export type ServerStateUpdate = {
   type: 'state_update';
   state: Partial<SessionStateSnapshot>;
+};
+export type ServerHeartbeat = {
+  type: 'heartbeat';
+  now: number;
+  session?: SessionStateSnapshot;
+  noActivityMs?: number;
 };
 export type ServerError = { type: 'error'; message: string };
 
@@ -86,5 +119,8 @@ export type ServerMessage =
   | ServerSdkEventBatch
   | ServerPermissionRequest
   | ServerPlanProposed
+  | ServerPendingControl
+  | ServerSessionsUpdate
   | ServerStateUpdate
+  | ServerHeartbeat
   | ServerError;
