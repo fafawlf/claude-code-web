@@ -31,20 +31,38 @@ export function registerApi(app: FastifyInstance, token: string, defaultCwd: str
 
   app.get('/api/info', async () => ({ cwd: defaultCwd, home: homedir() }));
 
-  // Directory browser: returns immediate sub-entries of `path`. No hard root,
-  // but the caller is expected to start from $HOME and navigate from there.
+  // Directory browser: returns immediate sub-entries of `path`. For each dir
+  // we also probe for a `.git` so the picker can show a small repo marker.
+  // Hidden dirs (leading dot) are skipped. No hard root — the caller is
+  // expected to start from $HOME and navigate from there.
   app.get('/api/dirs', async (req, reply) => {
     const q = req.query as { path?: string } | undefined;
     const target = resolveSafe(q?.path ?? homedir());
     try {
       const entries = await readdir(target, { withFileTypes: true });
-      const dirs = entries
+      const names = entries
         .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
         .map((e) => e.name)
         .sort((a, b) => a.localeCompare(b))
         .slice(0, 500);
+
+      // Parallel stat for .git — trivial on local FS; bounded by the 500 cap.
+      const enriched = await Promise.all(
+        names.map(async (name) => {
+          let hasGit = false;
+          try { await stat(join(target, name, '.git')); hasGit = true; } catch { /* */ }
+          return { name, hasGit };
+        })
+      );
+
       const parent = target === '/' ? null : target.split(sep).slice(0, -1).join(sep) || '/';
-      return { path: target, parent, dirs };
+      // Also detect whether the target itself is a git repo (useful for "use
+      // this folder" hinting at the top of the picker).
+      let targetHasGit = false;
+      try { await stat(join(target, '.git')); targetHasGit = true; } catch { /* */ }
+
+      // Keep `dirs` for backward compatibility with older clients.
+      return { path: target, parent, targetHasGit, entries: enriched, dirs: names };
     } catch (e) {
       return reply.code(400).send({ error: (e as Error).message });
     }

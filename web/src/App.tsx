@@ -13,6 +13,7 @@ import { EmptyState } from './components/EmptyState';
 import { CommandPalette, type CommandAction } from './components/CommandPalette';
 import { StatusBar } from './components/StatusBar';
 import { useKeyboard, isMod } from './hooks/useKeyboard';
+import { recordRecentCwd } from './utils/recentCwds';
 import { useToast } from './components/Toast';
 import type { SlashAction } from './components/SlashPalette';
 
@@ -89,7 +90,11 @@ export function App() {
 
   useEffect(() => {
     if (!authed || !token) return;
-    fetch(`/api/info?t=${encodeURIComponent(token)}`).then((r) => r.json()).then((j) => setDefaultCwd(j.cwd ?? ''));
+    fetch(`/api/info?t=${encodeURIComponent(token)}`).then((r) => r.json()).then((j) => {
+      setDefaultCwd(j.cwd ?? '');
+      // Expose home so CwdPicker can collapse /home/user → ~ in its UI.
+      if (j.home) (window as unknown as { __ccw_home__?: string }).__ccw_home__ = j.home;
+    });
     refreshSessions(state.state?.cwd);
   }, [authed, token]);
 
@@ -331,7 +336,7 @@ export function App() {
           token={token!}
           cwdPickerOpen={cwdPickerOpen}
           setCwdPickerOpen={setCwdPickerOpen}
-          onSelectCwd={(cwd) => newSession({ cwd })}
+          onSelectCwd={(cwd) => { recordRecentCwd(cwd); newSession({ cwd }); }}
           onSelectModel={setModel}
           onSelectMode={setMode}
           onRename={renameCurrent}
