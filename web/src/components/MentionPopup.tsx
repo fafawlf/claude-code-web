@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
+import { appUrl } from '../appUrl';
 
 type Props = {
   token: string;
@@ -15,7 +16,7 @@ export function MentionPopup({ token, cwd, query, onPick, onClose }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    const url = `/api/files?t=${encodeURIComponent(token)}&cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(query)}&limit=30`;
+    const url = appUrl(`/api/files?t=${encodeURIComponent(token)}&cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(query)}&limit=30`);
     fetch(url)
       .then((r) => r.json())
       .then((j) => { if (!cancelled) { setResults(j.results ?? []); setI(0); } })

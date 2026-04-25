@@ -8,6 +8,7 @@ import { splitStableMarkdown, useSmoothStreamText } from '../streaming';
 import { isEditLikeTool, shouldHideToolInTranscript } from '../toolDisplay';
 import { cleanStreamingAssistantText } from '../assistantText';
 import { contentForSkin, statusCopyForSkin } from '../skinContent';
+import { assetUrl } from '../appUrl';
 const STICK_THRESHOLD = 80; // px from bottom still counts as "at bottom"
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
@@ -242,7 +243,7 @@ function MessageAvatar({ skin, role, label }: { skin: SkinId; role: 'user' | 'as
   return (
     <div className={`skin-avatar skin-avatar-${role}`} title={label} aria-label={label}>
       {(skin === 'emochi' || skin === 'wechat') && role === 'assistant' ? (
-        <img className="skin-avatar-image" src={skin === 'emochi' ? '/assets/emochi_logo.png' : '/assets/wechat_logo.svg'} alt="" />
+        <img className="skin-avatar-image" src={skin === 'emochi' ? assetUrl('/assets/emochi_logo.png') : assetUrl('/assets/wechat_logo.svg')} alt="" />
       ) : (
         short
       )}

@@ -1,6 +1,7 @@
 import type { SkinId } from './skins';
 import type { IconName } from './components/Icon';
 import type { StatusKind } from './components/StatusBar';
+import { assetUrl } from './appUrl';
 
 export type SkinSuggestion = {
   icon: IconName;
@@ -227,7 +228,7 @@ const CONTENT: Record<SkinId, SkinContent> = {
   wechat: {
     empty: {
       mascot: 'DevChat',
-      mascotImage: '/assets/wechat_logo.svg',
+      mascotImage: assetUrl('/assets/wechat_logo.svg'),
       mascotAlt: 'DevChat',
       headline: 'DevChat 已连接',
       beforeCwd: '像聊天一样操作 ',
@@ -289,7 +290,7 @@ const CONTENT: Record<SkinId, SkinContent> = {
   emochi: {
     empty: {
       mascot: 'Mochi',
-      mascotImage: '/assets/emochi_logo.png',
+      mascotImage: assetUrl('/assets/emochi_logo.png'),
       mascotAlt: 'Mochi',
       headline: "Hi, I'm Mochi.",
       beforeCwd: 'Mochi is already inside ',

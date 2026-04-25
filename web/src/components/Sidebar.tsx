@@ -5,6 +5,7 @@ import type { SkinId } from '../skins';
 import type { SessionStateSnapshot, StoredSession } from '../types';
 import { ActivitySection } from './ActivitySection';
 import { Icon } from './Icon';
+import { assetUrl } from '../appUrl';
 
 type ProjectSessions = Record<string, StoredSession[]>;
 
@@ -181,14 +182,14 @@ function skinBrand(skin: SkinId): { title: ReactNode; subtitle: string; logo: st
     return {
       title: <>Mochi <span className="text-accent">Code</span></>,
       subtitle: 'deadpan code buddy',
-      logo: '/assets/emochi_logo.png',
+      logo: assetUrl('/assets/emochi_logo.png'),
     };
   }
   if (skin === 'wechat') {
     return {
       title: <>Dev<span className="text-accent">Chat</span></>,
       subtitle: 'chat-style coding',
-      logo: '/assets/wechat_logo.svg',
+      logo: assetUrl('/assets/wechat_logo.svg'),
     };
   }
   return null;

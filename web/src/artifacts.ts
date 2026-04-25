@@ -1,3 +1,5 @@
+import { appUrl } from './appUrl';
+
 export type ArtifactMatch = {
   raw: string;
   path: string;
@@ -53,7 +55,7 @@ export function artifactUrl(opts: { token: string; cwd: string; path: string; do
     path: opts.path.replace(/^@/, ''),
   });
   if (opts.download) params.set('download', '1');
-  return `/api/file?${params.toString()}`;
+  return appUrl(`/api/file?${params.toString()}`);
 }
 
 export function compactArtifactPath(path: string): string {

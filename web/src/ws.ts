@@ -1,4 +1,5 @@
 import type { ClientMessage, ServerMessage } from './types';
+import { appUrl } from './appUrl';
 
 export type WsHandler = (m: ServerMessage) => void;
 export type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';
@@ -30,7 +31,7 @@ export class WsClient {
     if (this.closed) return;
     this.emit(this.ws ? 'reconnecting' : 'connecting');
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}/ws?t=${encodeURIComponent(this.token)}`;
+    const url = `${proto}://${location.host}${appUrl(`/ws?t=${encodeURIComponent(this.token)}`)}`;
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.onmessage = (e) => {

@@ -22,6 +22,7 @@ import { useToast } from './components/Toast';
 import type { SlashAction } from './components/SlashPalette';
 import { normalizeProjectPath, readPinnedProjects, readRecentProjects, rememberProject, togglePinnedProject, type ProjectEntry } from './projectHistory';
 import { readSkin, skinById, writeSkin, type SkinId } from './skins';
+import { appUrl } from './appUrl';
 
 const EDIT_LIKE = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const SETUP_SEEN_KEY = 'ccw_setup_seen_v1';
@@ -115,7 +116,7 @@ export function App() {
 
   useEffect(() => {
     if (!token) { setAuthed(false); return; }
-    fetch(`/auth-check?t=${encodeURIComponent(token)}`)
+    fetch(appUrl(`/auth-check?t=${encodeURIComponent(token)}`))
       .then((r) => r.json())
       .then((j) => setAuthed(!!j.ok))
       .catch(() => setAuthed(false));
@@ -124,7 +125,7 @@ export function App() {
   const refreshProjectSessions = useCallback((cwd: string, primary = false) => {
     if (!token || !cwd) return;
     const normalized = normalizeProjectPath(cwd);
-    const url = `/api/sessions?t=${encodeURIComponent(token)}&cwd=${encodeURIComponent(normalized)}`;
+    const url = appUrl(`/api/sessions?t=${encodeURIComponent(token)}&cwd=${encodeURIComponent(normalized)}`);
     fetch(url)
       .then((r) => r.json())
       .then((j) => {
@@ -173,7 +174,7 @@ export function App() {
 
   useEffect(() => {
     if (!authed || !token) return;
-    fetch(`/api/info?t=${encodeURIComponent(token)}`)
+    fetch(appUrl(`/api/info?t=${encodeURIComponent(token)}`))
       .then((r) => r.json())
       .then((j) => {
         const info = j as ServerInfo;
@@ -437,7 +438,7 @@ export function App() {
     if (!state.state?.claudeSessionId || !token) return;
     setSessionTitle(title);
     try {
-      await fetch(`/api/session/rename?t=${encodeURIComponent(token)}`, {
+      await fetch(appUrl(`/api/session/rename?t=${encodeURIComponent(token)}`), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ claudeSessionId: state.state.claudeSessionId, title, cwd: state.state.cwd }),
@@ -451,7 +452,7 @@ export function App() {
     if (!token) return;
     const targetCwd = cwd ?? state.state?.cwd;
     try {
-      await fetch(`/api/session/rename?t=${encodeURIComponent(token)}`, {
+      await fetch(appUrl(`/api/session/rename?t=${encodeURIComponent(token)}`), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ claudeSessionId, title: newTitle, cwd: targetCwd }),
