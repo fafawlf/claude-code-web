@@ -42,6 +42,12 @@ export type ClientSetModel = { type: 'set_model'; model: string };
 export type ClientSetMode = { type: 'set_permission_mode'; mode: PermissionMode };
 export type ClientRefreshHistory = { type: 'refresh_history' };
 export type ClientSessionClose = { type: 'session_close'; sessionId: string };
+/** Ask for a fresh snapshot of all sessions. Used to populate the
+ *  drawer/sidebar on demand. The server no longer broadcasts sessions_update
+ *  automatically — that proved fatal on slow links (session-list snapshots
+ *  grow with history and fan out per activeTool transition, burying the WS
+ *  send queue). Clients request explicitly when they actually want the list. */
+export type ClientListSessions = { type: 'list_sessions' };
 
 export type ClientMessage =
   | ClientHello
@@ -52,7 +58,8 @@ export type ClientMessage =
   | ClientSetModel
   | ClientSetMode
   | ClientRefreshHistory
-  | ClientSessionClose;
+  | ClientSessionClose
+  | ClientListSessions;
 
 export type SessionStateSnapshot = {
   sessionId: string;
