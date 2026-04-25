@@ -68,5 +68,6 @@ test('mobile menu popovers use unclipped responsive classes', () => {
   }));
 
   assert.match(skin, /topbar-menu/);
+  assert.match(skin, /aria-haspopup="menu"/);
   assert.match(input, /composer-permission-button/);
 });
