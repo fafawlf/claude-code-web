@@ -414,7 +414,7 @@ function PermissionMenu({ mode, disabled, onSetMode }: { mode: PermissionMode; d
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 bottom-9 z-40 w-72 overflow-hidden rounded-md border border-border bg-bg-surface shadow-pop animate-modal-in origin-bottom-left">
+          <div className="composer-permission-popover absolute left-0 bottom-9 z-40 w-72 overflow-hidden rounded-md border border-border bg-bg-surface shadow-pop animate-modal-in origin-bottom-left">
             {PERMISSION_MODES.map((m) => {
               const active = activePermission === m;
               const isDanger = m === 'bypassPermissions';

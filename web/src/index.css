@@ -1054,13 +1054,8 @@
 
   .composer-shell .flex-1.flex.gap-2.items-center {
     min-width: 0;
-    overflow-x: auto;
+    overflow: visible;
     padding-bottom: 2px;
-    scrollbar-width: none;
-  }
-
-  .composer-shell .flex-1.flex.gap-2.items-center::-webkit-scrollbar {
-    display: none;
   }
 
   .composer-shortcut,
@@ -1139,6 +1134,10 @@
     margin-bottom: 0;
   }
 
+  .project-launcher-sidebar button[title="Pin project"] {
+    opacity: 1;
+  }
+
   .project-launcher-main {
     min-height: 0;
   }
@@ -1176,5 +1175,30 @@
 
   .folder-row-path {
     display: none;
+  }
+
+  .topbar-menu-popover {
+    position: fixed;
+    top: 54px;
+    left: 10px;
+    right: 10px;
+    z-index: 65;
+    width: auto;
+    max-height: min(420px, calc(100dvh - 72px));
+    overflow-y: auto;
+    transform: none;
+    transform-origin: top center;
+  }
+
+  .composer-permission-popover {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: max(82px, calc(env(safe-area-inset-bottom) + 82px));
+    z-index: 65;
+    width: auto;
+    max-height: min(360px, calc(100dvh - 120px));
+    overflow-y: auto;
+    transform-origin: bottom center;
   }
 }

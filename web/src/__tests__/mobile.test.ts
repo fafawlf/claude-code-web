@@ -4,6 +4,8 @@ import React, { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { TopBar } from '../components/TopBar';
 import { MessageList } from '../components/MessageList';
+import { InputBar } from '../components/InputBar';
+import { SkinMenu } from '../components/SkinMenu';
 
 (globalThis as unknown as { React: typeof React }).React = React;
 
@@ -44,4 +46,27 @@ test('MessageList marks mobile-safe scroll and bottom jump elements', () => {
 
   assert.match(html, /message-scroller/);
   assert.match(html, /message-list-content/);
+});
+
+test('mobile menu popovers use unclipped responsive classes', () => {
+  const skin = renderToStaticMarkup(createElement(SkinMenu, {
+    current: 'warm',
+    onSelect: () => {},
+  }));
+
+  const input = renderToStaticMarkup(createElement(InputBar, {
+    token: 't',
+    cwd: '/tmp',
+    mode: 'bypassPermissions',
+    busy: false,
+    ready: true,
+    onSend: () => {},
+    onStop: () => {},
+    onSlashAction: () => {},
+    onCycleMode: () => {},
+    onSetMode: () => {},
+  }));
+
+  assert.match(skin, /topbar-menu/);
+  assert.match(input, /composer-permission-button/);
 });

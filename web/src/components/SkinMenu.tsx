@@ -12,7 +12,7 @@ export function SkinMenu({ current, onSelect }: Props) {
   const [open, setOpen] = useState(false);
   const active = skinById(current);
   return (
-    <div className="relative">
+    <div className="topbar-menu relative">
       <button
         onClick={() => setOpen(!open)}
         className="chip"
@@ -26,7 +26,7 @@ export function SkinMenu({ current, onSelect }: Props) {
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 mt-1 w-64 z-20 bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-top-left">
+          <div className="topbar-menu-popover absolute left-0 mt-1 w-64 z-20 bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-top-left">
             {SKINS.map((skin) => {
               const selected = skin.id === current;
               return (

@@ -11,7 +11,7 @@ export function ModelMenu({ current, onSelect }: Props) {
   const [open, setOpen] = useState(false);
   const label = MODEL_OPTIONS.find((m) => current?.startsWith(m.id))?.label ?? current ?? 'default';
   return (
-    <div className="relative">
+    <div className="topbar-menu relative">
       <button onClick={() => setOpen(!open)} className="chip">
         <Icon name="brain" size={14} className="opacity-80" />
         <span>{label}</span>
@@ -20,7 +20,7 @@ export function ModelMenu({ current, onSelect }: Props) {
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 mt-1 w-64 z-20 bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-top-left">
+          <div className="topbar-menu-popover absolute left-0 mt-1 w-64 z-20 bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-top-left">
             {MODEL_OPTIONS.map((m) => {
               const active = current?.startsWith(m.id);
               return (
