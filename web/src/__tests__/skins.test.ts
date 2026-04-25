@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import React, { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DEFAULT_SKIN, readSkin, SKINS, skinById, writeSkin, type SkinStorageLike } from '../skins';
-import { contentForSkin, statusCopyForSkin, suggestionsForSkin } from '../skinContent';
+import { contentForSkin, statusCopyForSkin } from '../skinContent';
 import { SkinMenu } from '../components/SkinMenu';
 import { EmptyState } from '../components/EmptyState';
 import { StatusBar, type StatusKind } from '../components/StatusBar';
@@ -41,7 +41,6 @@ test('every skin exposes complete content and status copy', () => {
     const content = contentForSkin(skin.id);
     assert.ok(content.empty.headline);
     assert.ok(content.message.thoughtSummary);
-    assert.equal(suggestionsForSkin(skin.id).length, 3);
     for (const status of statuses) {
       assert.ok(statusCopyForSkin(skin.id, status).label);
     }
@@ -69,41 +68,35 @@ test('SkinMenu renders the active skin picker button', () => {
   assert.doesNotMatch(html, /Cyberpunk/);
 });
 
-test('EmptyState renders skin-specific suggestions and prompt personality', () => {
+test('EmptyState renders skin-specific personality without example prompt cards', () => {
   const cyber = renderToStaticMarkup(createElement(EmptyState, {
     skin: 'cyberpunk',
     cwd: '/root/app',
-    onUsePrompt: () => {},
     onOpenProject: () => {},
   }));
   const cat = renderToStaticMarkup(createElement(EmptyState, {
     skin: 'catgirl',
     cwd: '/root/app',
-    onUsePrompt: () => {},
     onOpenProject: () => {},
   }));
   const wechat = renderToStaticMarkup(createElement(EmptyState, {
     skin: 'wechat',
     cwd: '/root/app',
-    onUsePrompt: () => {},
     onOpenProject: () => {},
   }));
   const emochi = renderToStaticMarkup(createElement(EmptyState, {
     skin: 'emochi',
     cwd: '/root/app',
-    onUsePrompt: () => {},
     onOpenProject: () => {},
   }));
 
   assert.match(cyber, /JACK IN/);
-  assert.match(cyber, /BREACH THIS CODEBASE/);
   assert.match(cat, /主人/);
-  assert.match(cat, /带我逛逛代码窝呀/);
   assert.match(wechat, /DevChat 已连接/);
   assert.match(wechat, /\/assets\/wechat_logo\.svg/);
   assert.match(emochi, /Hi, I&#x27;m Mochi/);
   assert.match(emochi, /\/assets\/emochi_logo\.png/);
-  assert.match(emochi, /给我导览这个代码库/);
+  assert.doesNotMatch(cyber + cat + wechat + emochi, /skin-suggestion/);
 });
 
 test('StatusBar uses skin-specific thinking copy without losing controls', () => {

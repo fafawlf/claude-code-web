@@ -584,7 +584,7 @@ export function App() {
           connected={connected}
         />
         {showEmpty ? (
-          <EmptyState skin={skin} cwd={currentCwd} onUsePrompt={(t) => setInputSeed(t)} onOpenProject={() => setProjectLauncherOpen(true)} />
+          <EmptyState skin={skin} cwd={currentCwd} onOpenProject={() => setProjectLauncherOpen(true)} />
         ) : (
           <MessageList
             token={token!}

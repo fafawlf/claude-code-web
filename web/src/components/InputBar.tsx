@@ -26,10 +26,6 @@ type Props = {
 
 const PLACEHOLDERS = [
   'Ask Claude anything about this project…',
-  'Explain how the auth flow works.',
-  'Find every TODO and group them by file.',
-  'Refactor this to use async/await.',
-  'Why is the test on line 42 flaky?',
 ];
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;

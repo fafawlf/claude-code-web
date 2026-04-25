@@ -1,15 +1,6 @@
 import type { SkinId } from './skins';
-import type { IconName } from './components/Icon';
 import type { StatusKind } from './components/StatusBar';
 import { assetUrl } from './appUrl';
-
-export type SkinSuggestion = {
-  icon: IconName;
-  mark: string;
-  title: string;
-  body: string;
-  prompt: string;
-};
 
 export type SkinContent = {
   empty: {
@@ -39,130 +30,9 @@ export type SkinContent = {
   };
   decor: {
     emptyClass: string;
-    suggestionClass: string;
     messageClass: string;
   };
 };
-
-const WARM_SUGGESTIONS: SkinSuggestion[] = [
-  {
-    icon: 'sparkles',
-    mark: '01',
-    title: 'Codebase tour',
-    body: 'Give me a tour of this codebase — what are the major modules?',
-    prompt: 'Give me a tour of this codebase — what are the major modules and how do they fit together?',
-  },
-  {
-    icon: 'list',
-    mark: '02',
-    title: 'Find TODOs',
-    body: 'Find all TODOs and group them by file.',
-    prompt: 'Find all TODO comments in the repo and group them by file.',
-  },
-  {
-    icon: 'zap',
-    mark: '03',
-    title: 'Safe refactors',
-    body: 'Suggest three low-risk refactors for this week.',
-    prompt: 'Suggest three low-risk refactors I could ship this week. Show me before/after for each.',
-  },
-];
-
-const CYBERPUNK_SUGGESTIONS: SkinSuggestion[] = [
-  {
-    icon: 'terminal',
-    mark: 'BREACH',
-    title: 'BREACH THIS CODEBASE',
-    body: 'Map every module, flag chokepoints, surface the architecture.',
-    prompt: 'Give me a precise architecture map of this codebase. Identify major modules, data flow, risky seams, and the safest first improvements.',
-  },
-  {
-    icon: 'list',
-    mark: 'TRACE',
-    title: 'SCRAPE // TODOS',
-    body: 'Pull every TODO, group by file, rank by blast radius.',
-    prompt: 'Find every TODO or FIXME in this repo. Group them by file and rank them by risk and implementation effort.',
-  },
-  {
-    icon: 'zap',
-    mark: 'CUT',
-    title: 'SUGGEST SAFE CUTS',
-    body: 'Three low-risk refactors. Clean diffs. No surprises.',
-    prompt: 'Suggest three low-risk refactors I can ship safely. For each one, explain the before/after and likely test coverage.',
-  },
-];
-
-const WECHAT_SUGGESTIONS: SkinSuggestion[] = [
-  {
-    icon: 'sparkles',
-    mark: 'MAP',
-    title: '带我看一遍代码结构',
-    body: '先像聊天一样讲清楚这个项目怎么组织。',
-    prompt: '带我看一遍代码结构：主要模块是什么，它们怎么协作，哪些地方我应该先理解？',
-  },
-  {
-    icon: 'list',
-    mark: 'TODO',
-    title: '把所有 TODO 按文件分组',
-    body: '扫一遍待办，按文件和优先级整理。',
-    prompt: '把所有 TODO / FIXME 找出来，按文件分组，并给出处理优先级。',
-  },
-  {
-    icon: 'pencil',
-    mark: 'DIFF',
-    title: '推荐三个低风险重构',
-    body: '先给我可落地的小改动，不要大动干戈。',
-    prompt: '推荐这周可以做的三个低风险重构。每个都说明收益、风险和建议测试。',
-  },
-];
-
-const CATGIRL_SUGGESTIONS: SkinSuggestion[] = [
-  {
-    icon: 'sparkles',
-    mark: 'nya',
-    title: '带我逛逛代码窝呀~',
-    body: '先画一张项目小地图，告诉主人每个房间放了什么。',
-    prompt: '带我逛一遍这个代码仓库：主要模块是什么，各自负责什么，我应该从哪里开始读？',
-  },
-  {
-    icon: 'list',
-    mark: 'todo',
-    title: '把 TODO 都捞起来',
-    body: '用小爪子扒一遍，按文件分好堆。',
-    prompt: '找出仓库里所有 TODO / FIXME，按文件分组，并告诉我哪些最值得先处理。',
-  },
-  {
-    icon: 'zap',
-    mark: 'safe',
-    title: '推荐三个安全小改动',
-    body: '只要乖乖的小改动，不咬手的那种。',
-    prompt: '推荐三个低风险、容易验证的改进。请说明为什么安全，以及应该怎么测试。',
-  },
-];
-
-const EMOCHI_SUGGESTIONS: SkinSuggestion[] = [
-  {
-    icon: 'sparkles',
-    mark: 'MAP',
-    title: '给我导览这个代码库',
-    body: '列出主要模块和它们的作用。',
-    prompt: '给我导览这个代码库：列出主要模块、它们的作用、调用关系和我应该先读的入口。',
-  },
-  {
-    icon: 'list',
-    mark: 'TODO',
-    title: '找出所有 TODO',
-    body: '按文件分组，标出优先级。',
-    prompt: '找出所有 TODO / FIXME，按文件分组，标出优先级和推荐处理顺序。',
-  },
-  {
-    icon: 'zap',
-    mark: 'LOW RISK',
-    title: '推荐三个低风险重构',
-    body: '这周就能合的那种。',
-    prompt: '推荐三个低风险重构，要求这周能合入。每个说明收益、风险和测试方式。',
-  },
-];
 
 const CONTENT: Record<SkinId, SkinContent> = {
   warm: {
@@ -191,7 +61,6 @@ const CONTENT: Record<SkinId, SkinContent> = {
     },
     decor: {
       emptyClass: 'skin-empty-warm',
-      suggestionClass: 'skin-suggestion-warm',
       messageClass: 'skin-message-warm',
     },
   },
@@ -221,7 +90,6 @@ const CONTENT: Record<SkinId, SkinContent> = {
     },
     decor: {
       emptyClass: 'skin-empty-cyberpunk',
-      suggestionClass: 'skin-suggestion-cyberpunk',
       messageClass: 'skin-message-cyberpunk',
     },
   },
@@ -253,7 +121,6 @@ const CONTENT: Record<SkinId, SkinContent> = {
     },
     decor: {
       emptyClass: 'skin-empty-wechat',
-      suggestionClass: 'skin-suggestion-wechat',
       messageClass: 'skin-message-wechat',
     },
   },
@@ -283,7 +150,6 @@ const CONTENT: Record<SkinId, SkinContent> = {
     },
     decor: {
       emptyClass: 'skin-empty-catgirl',
-      suggestionClass: 'skin-suggestion-catgirl',
       messageClass: 'skin-message-catgirl',
     },
   },
@@ -315,7 +181,6 @@ const CONTENT: Record<SkinId, SkinContent> = {
     },
     decor: {
       emptyClass: 'skin-empty-emochi',
-      suggestionClass: 'skin-suggestion-emochi',
       messageClass: 'skin-message-emochi',
     },
   },
@@ -323,17 +188,6 @@ const CONTENT: Record<SkinId, SkinContent> = {
 
 export function contentForSkin(skin: SkinId): SkinContent {
   return CONTENT[skin] ?? CONTENT.warm;
-}
-
-export function suggestionsForSkin(skin: SkinId, _cwd?: string): SkinSuggestion[] {
-  switch (skin) {
-    case 'cyberpunk': return CYBERPUNK_SUGGESTIONS;
-    case 'wechat': return WECHAT_SUGGESTIONS;
-    case 'catgirl': return CATGIRL_SUGGESTIONS;
-    case 'emochi': return EMOCHI_SUGGESTIONS;
-    case 'warm':
-      return WARM_SUGGESTIONS;
-  }
 }
 
 export function statusCopyForSkin(skin: SkinId, status: StatusKind): { label: string; hint?: string } {
