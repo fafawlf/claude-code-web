@@ -53,6 +53,7 @@ test('ProjectLauncher renders a Finder-style project folder picker', () => {
 
   assert.match(html, /Choose project folder/);
   assert.match(html, /Project Finder/);
+  assert.match(html, /project-launcher/);
   assert.match(html, /Browsing folders on the machine running claudecode-web/);
   assert.match(html, /Current project/);
   assert.match(html, /Pinned/);

@@ -9,6 +9,7 @@ type Props = {
   state: SessionStateSnapshot | null;
   cwd: string;
   auth?: ClaudeAuthInfo | null;
+  onOpenSidebar?: () => void;
   onOpenProject: () => void;
   onSelectModel: (model: string) => void;
   skin: SkinId;
@@ -36,6 +37,17 @@ export function TopBar(p: Props) {
           className={`w-2 h-2 rounded-full mr-2 transition-colors duration-hover ${p.connected ? 'bg-success shadow-[0_0_6px_rgba(138,168,118,.6)]' : 'bg-text-muted'}`}
           title={p.connected ? 'connected' : 'disconnected'}
         />
+
+        {p.onOpenSidebar && (
+          <button
+            onClick={p.onOpenSidebar}
+            className="mobile-sidebar-button chip"
+            title="Open projects"
+            aria-label="Open projects"
+          >
+            <Icon name="list" size={15} className="opacity-80" />
+          </button>
+        )}
 
         <button onClick={p.onOpenProject} className="chip" title={p.cwd}>
           <Icon name="folder" size={14} className="opacity-80" />
@@ -94,12 +106,12 @@ export function TopBar(p: Props) {
               placeholder="Session title…"
             />
           ) : p.sessionTitle ? (
-            <button onClick={() => { setRenaming(true); setDraft(p.sessionTitle ?? ''); }} className="px-2 py-1 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover max-w-[220px] truncate" title="rename">
+            <button onClick={() => { setRenaming(true); setDraft(p.sessionTitle ?? ''); }} className="topbar-session-title px-2 py-1 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover max-w-[220px] truncate" title="rename">
               {p.sessionTitle}
             </button>
           ) : null}
-          <span title="tokens in + out">{tok} tok</span>
-          {cost && <span title="session cost">{cost}</span>}
+          <span className="topbar-tokens" title="tokens in + out">{tok} tok</span>
+          {cost && <span className="topbar-cost" title="session cost">{cost}</span>}
         </div>
       </header>
 

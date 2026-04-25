@@ -75,8 +75,8 @@ function MessageListImpl({ token, cwd, skin, items, busy, streamingText, pending
 
   return (
     <div className="relative flex-1 min-h-0">
-      <div ref={scrollerRef} className="h-full overflow-y-auto">
-      <div ref={contentRef} className="min-h-full max-w-[720px] mx-auto px-6 pt-8 pb-44 flex flex-col justify-end gap-[18px]">
+      <div ref={scrollerRef} className="message-scroller h-full overflow-y-auto">
+      <div ref={contentRef} className="message-list-content min-h-full max-w-[720px] mx-auto px-6 pt-8 pb-44 flex flex-col justify-end gap-[18px]">
         {items.filter((it) => !shouldHideToolInTranscript(it)).map((it) => (
           <Bubble
             key={it.id}
@@ -99,7 +99,7 @@ function MessageListImpl({ token, cwd, skin, items, busy, streamingText, pending
       {showJump && (
         <button
           onClick={() => { stickToBottomRef.current = true; setShowJump(false); scrollToBottom(); }}
-          className="absolute left-1/2 -translate-x-1/2 bottom-36 px-3 py-1.5 rounded-full bg-bg-surface border border-border text-xs text-text-secondary hover:text-text-primary hover:border-accent/50 shadow-pop transition-all duration-hover"
+          className="jump-latest-button absolute left-1/2 -translate-x-1/2 bottom-36 px-3 py-1.5 rounded-full bg-bg-surface border border-border text-xs text-text-secondary hover:text-text-primary hover:border-accent/50 shadow-pop transition-all duration-hover"
         >
           {content.status.jumpToLatest}
         </button>

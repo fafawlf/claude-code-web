@@ -62,6 +62,7 @@ export function App() {
   const lastEventAtRef = useRef<number>(Date.now());
   const [secondsSinceLastEvent, setSecondsSinceLastEvent] = useState(0);
   const [projectLauncherOpen, setProjectLauncherOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [recentProjects, setRecentProjects] = useState<ProjectEntry[]>(() => readRecentProjects());
   const [pinnedProjects, setPinnedProjects] = useState<string[]>(() => readPinnedProjects());
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -279,6 +280,15 @@ export function App() {
     return () => { client.close(); };
   }, [authed, token, toast, enqueueEvent, commitState, refreshSessions]);
 
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSidebarOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sidebarOpen]);
+
   const newSession = useCallback((opts?: { cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string; viewerMode?: boolean }) => {
     pendingRef.current = [];
     activeSessionIdRef.current = null;
@@ -387,7 +397,7 @@ export function App() {
   const handlePaletteAction = useCallback((a: CommandAction) => {
     switch (a.kind) {
       case 'new-chat': newSession({ cwd: state.state?.cwd }); break;
-      case 'open-cwd': setProjectLauncherOpen(true); break;
+      case 'open-cwd': setSidebarOpen(false); setProjectLauncherOpen(true); break;
       case 'rename': openRename(); break;
       case 'refresh': refreshSessions(state.state?.cwd); break;
       case 'set-model': setModel(a.id); break;
@@ -404,16 +414,16 @@ export function App() {
 
   const onSlash = useCallback((a: SlashAction) => {
     if (a.kind === 'new') newSession({ cwd: state.state?.cwd });
-    else if (a.kind === 'cwd') setProjectLauncherOpen(true);
+    else if (a.kind === 'cwd') { setSidebarOpen(false); setProjectLauncherOpen(true); }
     else if (a.kind === 'model') setModel(a.id);
     else if (a.kind === 'mode') setMode(a.mode);
-    else if (a.kind === 'history') { /* sidebar always visible */ }
+    else if (a.kind === 'history') setSidebarOpen(true);
   }, [newSession, state.state?.cwd, setModel, setMode]);
 
   useKeyboard(useCallback((e: KeyboardEvent) => {
     if (e.key === 'k' && isMod(e)) { e.preventDefault(); setPaletteOpen((v) => !v); return; }
     if (e.key === 'n' && isMod(e)) { e.preventDefault(); newSession({ cwd: state.state?.cwd }); return; }
-    if (e.key === 'o' && isMod(e)) { e.preventDefault(); setProjectLauncherOpen(true); return; }
+    if (e.key === 'o' && isMod(e)) { e.preventDefault(); setSidebarOpen(false); setProjectLauncherOpen(true); return; }
     if (e.shiftKey && e.key === 'Tab' && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLInputElement)) {
       e.preventDefault();
       const cur = state.state?.permissionMode ?? 'default';
@@ -511,28 +521,35 @@ export function App() {
   );
 
   return (
-    <div className="flex h-full">
-      <Sidebar
-        cwd={currentCwd}
-        projects={projectEntries}
-        projectSessions={projectSessions}
-        activeId={state.state?.claudeSessionId ?? null}
-        activeSession={state.state}
-        activeDraftTitle={activeDraftTitle}
-        activitySummary={activitySummary}
-        activitySessions={activitySessions}
-        onNewInProject={(cwd) => newSession({ cwd })}
-        onResume={(claudeId, title, cwd) => newSession({ cwd, resumeClaudeId: claudeId, title })}
-        onView={(claudeId, title, cwd) => newSession({ cwd, resumeClaudeId: claudeId, title, viewerMode: true })}
-        onOpenActivity={attachLiveSession}
-        onEndActivity={closeLiveSession}
-        onRefresh={() => refreshProjects(projectEntries, currentCwd)}
-        onRename={renameInList}
-        onOpenCommandPalette={() => setPaletteOpen(true)}
-        onOpenProject={() => setProjectLauncherOpen((v) => !v)}
-        connected={connected}
-        skin={skin}
+    <div className="app-shell flex h-full">
+      <div
+        className={`mobile-sidebar-backdrop ${sidebarOpen ? 'is-open' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+        aria-hidden
       />
+      <div className={`sidebar-shell ${sidebarOpen ? 'is-open' : ''}`}>
+        <Sidebar
+          cwd={currentCwd}
+          projects={projectEntries}
+          projectSessions={projectSessions}
+          activeId={state.state?.claudeSessionId ?? null}
+          activeSession={state.state}
+          activeDraftTitle={activeDraftTitle}
+          activitySummary={activitySummary}
+          activitySessions={activitySessions}
+          onNewInProject={(cwd) => { setSidebarOpen(false); newSession({ cwd }); }}
+          onResume={(claudeId, title, cwd) => { setSidebarOpen(false); newSession({ cwd, resumeClaudeId: claudeId, title }); }}
+          onView={(claudeId, title, cwd) => { setSidebarOpen(false); newSession({ cwd, resumeClaudeId: claudeId, title, viewerMode: true }); }}
+          onOpenActivity={(sessionId, title) => { setSidebarOpen(false); attachLiveSession(sessionId, title); }}
+          onEndActivity={closeLiveSession}
+          onRefresh={() => refreshProjects(projectEntries, currentCwd)}
+          onRename={renameInList}
+          onOpenCommandPalette={() => { setSidebarOpen(false); setPaletteOpen(true); }}
+          onOpenProject={() => { setSidebarOpen(false); setProjectLauncherOpen((v) => !v); }}
+          connected={connected}
+          skin={skin}
+        />
+      </div>
       {projectLauncherOpen && (
         <ProjectLauncher
           token={token!}
@@ -541,7 +558,7 @@ export function App() {
           pinned={pinnedProjects}
           busy={state.busy}
           onClose={() => setProjectLauncherOpen(false)}
-          onPick={(cwd) => newSession({ cwd })}
+          onPick={(cwd) => { setSidebarOpen(false); newSession({ cwd }); }}
           onTogglePin={toggleProjectPin}
         />
       )}
@@ -550,7 +567,8 @@ export function App() {
           state={state.state}
           cwd={currentCwd}
           auth={authInfo}
-          onOpenProject={() => setProjectLauncherOpen((v) => !v)}
+          onOpenSidebar={() => setSidebarOpen(true)}
+          onOpenProject={() => { setSidebarOpen(false); setProjectLauncherOpen((v) => !v); }}
           onSelectModel={setModel}
           skin={skin}
           onSelectSkin={setSkin}

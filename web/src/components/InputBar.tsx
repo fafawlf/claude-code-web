@@ -335,15 +335,15 @@ function InputBarImpl(p: Props) {
               title="Upload file or image"
             >
               <Icon name="paperclip" size={12} />
-              Attach
+              <span className="composer-tool-label">Attach</span>
             </button>
             <PlanToggle mode={p.mode} disabled={!p.ready || !!p.readOnly} onSetMode={p.onSetMode} />
             <PermissionMenu mode={p.mode} disabled={!p.ready || !!p.readOnly} onSetMode={p.onSetMode} />
-            <span className="h-4 w-px bg-border-subtle" />
-            <span className="inline-flex items-center gap-1.5"><span className="kbd">⌘K</span></span>
-            <span className="inline-flex items-center gap-1.5"><span className="kbd">@</span></span>
-            <span className="inline-flex items-center gap-1.5"><span className="kbd">/</span></span>
-            <span className="inline-flex items-center gap-1.5"><span className="kbd">⇧⇥</span> mode</span>
+            <span className="composer-divider h-4 w-px bg-border-subtle" />
+            <span className="composer-shortcut inline-flex items-center gap-1.5"><span className="kbd">⌘K</span></span>
+            <span className="composer-shortcut inline-flex items-center gap-1.5"><span className="kbd">@</span></span>
+            <span className="composer-shortcut inline-flex items-center gap-1.5"><span className="kbd">/</span></span>
+            <span className="composer-shortcut inline-flex items-center gap-1.5"><span className="kbd">⇧⇥</span> mode</span>
           </div>
           <SendButton busy={p.busy} active={hasText} uploading={uploading} onSend={submit} onStop={p.onStop} ready={p.ready} />
         </div>

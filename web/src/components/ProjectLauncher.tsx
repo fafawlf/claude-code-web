@@ -105,7 +105,7 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
   };
 
   return (
-    <div className="fixed left-1/2 top-[7vh] z-50 w-[760px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-hidden rounded-lg border border-border-subtle bg-bg-surface shadow-modal" role="dialog" aria-modal="true" aria-label="Project Finder">
+    <div className="project-launcher fixed left-1/2 top-[7vh] z-50 w-[760px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-hidden rounded-lg border border-border-subtle bg-bg-surface shadow-modal" role="dialog" aria-modal="true" aria-label="Project Finder">
       <div className="h-11 border-b border-border-subtle bg-bg-raised/70 px-4 flex items-center gap-3">
         <div className="flex items-center gap-1.5" aria-hidden>
           <span className="w-3 h-3 rounded-full bg-danger/80" />
@@ -125,8 +125,8 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
         </button>
       </div>
 
-      <div className="flex min-h-[460px] max-h-[72vh]">
-        <aside className="w-48 shrink-0 border-r border-border-subtle bg-bg-raised/45 p-2 overflow-y-auto">
+      <div className="project-launcher-body flex min-h-[460px] max-h-[72vh]">
+        <aside className="project-launcher-sidebar w-48 shrink-0 border-r border-border-subtle bg-bg-raised/45 p-2 overflow-y-auto">
           <FinderSection title="Favorites">
             <FinderShortcut label="Current project" path={current} active={browsePath === current} onPick={openPath} />
             {pinned.map((path) => (
@@ -142,8 +142,8 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
           )}
         </aside>
 
-        <main className="min-w-0 flex-1 flex flex-col">
-          <div className="px-4 py-3 border-b border-border-subtle">
+        <main className="project-launcher-main min-w-0 flex-1 flex flex-col">
+          <div className="project-launcher-toolbar px-4 py-3 border-b border-border-subtle">
             <div className="flex items-center gap-2">
               <button
                 onClick={() => data?.parent && openPath(data.parent)}
@@ -214,7 +214,7 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
             {busy && <div className="mt-2 text-[11px] text-warning">Current chat will keep working in Activity.</div>}
           </div>
 
-          <div className="flex-1 overflow-y-auto bg-bg-base/40">
+          <div className="project-launcher-list flex-1 overflow-y-auto bg-bg-base/40">
             {loading && <LoadingRows />}
             {err && <div className="m-4 rounded-md border border-danger/25 bg-danger/10 p-3 text-sm text-danger">{err}</div>}
             {!loading && !err && data && (
@@ -255,7 +255,7 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
             )}
           </div>
 
-          <div className="h-14 border-t border-border-subtle bg-bg-raised/45 px-4 flex items-center gap-3">
+          <div className="project-launcher-footer h-14 border-t border-border-subtle bg-bg-raised/45 px-4 flex items-center gap-3">
             <div className="min-w-0 flex-1">
               <div className="text-[10px] uppercase tracking-[.06em] text-text-muted font-semibold">Selected</div>
               <div className="font-mono text-[11px] text-text-secondary truncate" title={selectedPath}>{selectedPath}</div>
@@ -332,7 +332,7 @@ function FolderRow({ label, path, selected, muted, emphasized, onSelect, onOpen 
     >
       <Icon name={muted ? 'chev-right' : 'folder'} size={14} className={muted ? 'rotate-180 text-text-muted' : emphasized ? 'text-accent' : 'text-text-muted'} />
       <span className={`truncate text-sm ${emphasized ? 'font-medium' : ''}`}>{label}</span>
-      <span className="truncate font-mono text-[11px] text-text-muted">{path}</span>
+      <span className="folder-row-path truncate font-mono text-[11px] text-text-muted">{path}</span>
     </button>
   );
 }
