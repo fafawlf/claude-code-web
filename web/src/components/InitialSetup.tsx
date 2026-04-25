@@ -18,9 +18,9 @@ export function InitialSetup({ cwd, home, auth, claude, server, onDone, onOpenPr
   const [mode, setMode] = useState<Mode>(() => readPreferredMode());
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-bg-base/72 px-4 backdrop-blur-[10px]" role="dialog" aria-modal="true" aria-label="Initial setup">
-      <div className="w-full max-w-[760px] overflow-hidden rounded-lg border border-border-subtle bg-bg-surface shadow-modal">
-        <div className="border-b border-border-subtle bg-bg-raised/70 px-5 py-4">
+    <div className="setup-overlay fixed inset-0 z-[70] flex items-center justify-center bg-bg-base/72 px-4 backdrop-blur-[10px]" role="dialog" aria-modal="true" aria-label="Initial setup">
+      <div className="setup-card w-full max-w-[760px] overflow-hidden rounded-lg border border-border-subtle bg-bg-surface shadow-modal">
+        <div className="setup-header border-b border-border-subtle bg-bg-raised/70 px-5 py-4">
           <div className="flex items-start gap-3">
             <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border-subtle bg-bg-base text-accent-hi">
               <Icon name="terminal" size={16} />
@@ -34,7 +34,7 @@ export function InitialSetup({ cwd, home, auth, claude, server, onDone, onOpenPr
           </div>
         </div>
 
-        <div className="grid gap-4 p-5 md:grid-cols-[1.15fr_.85fr]">
+        <div className="setup-body grid gap-4 p-5 md:grid-cols-[1.15fr_.85fr]">
           <div className="space-y-3">
             <SetupMode
               active={mode === 'local'}
@@ -65,7 +65,7 @@ export function InitialSetup({ cwd, home, auth, claude, server, onDone, onOpenPr
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle bg-bg-raised/40 px-5 py-4">
+        <div className="setup-footer flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle bg-bg-raised/40 px-5 py-4">
           <p className="max-w-[460px] text-xs leading-5 text-text-muted">
             You can use the same UI for local Claude Code or a remote Claude Code host. The only difference is where this server process is running.
           </p>

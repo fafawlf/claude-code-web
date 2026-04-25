@@ -1177,6 +1177,72 @@
     display: none;
   }
 
+  .setup-overlay {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
+  }
+
+  .setup-card {
+    display: flex;
+    max-width: none;
+    max-height: 100%;
+    min-height: 0;
+    flex-direction: column;
+    border-radius: 16px;
+  }
+
+  .setup-header {
+    flex: 0 0 auto;
+    padding: 16px;
+  }
+
+  .setup-header h2 {
+    font-size: 15px;
+  }
+
+  .setup-header p {
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  .setup-body {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 14px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .setup-body code {
+    white-space: nowrap;
+  }
+
+  .setup-footer {
+    position: sticky;
+    bottom: 0;
+    flex: 0 0 auto;
+    padding: 12px 14px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .setup-footer p {
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  .setup-footer > div {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .setup-footer button {
+    justify-content: center;
+    min-width: 0;
+    padding-inline: 10px;
+  }
+
   .topbar-menu-popover {
     position: fixed;
     top: 54px;

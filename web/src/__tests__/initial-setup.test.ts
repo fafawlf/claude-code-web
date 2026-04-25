@@ -18,6 +18,10 @@ test('InitialSetup explains local and remote Claude Code modes', () => {
   }));
 
   assert.match(html, /Set up Claude Code Web/);
+  assert.match(html, /setup-overlay/);
+  assert.match(html, /setup-card/);
+  assert.match(html, /setup-body/);
+  assert.match(html, /setup-footer/);
   assert.match(html, /Local Claude Code/);
   assert.match(html, /Remote server over SSH/);
   assert.match(html, /folder picker, Bash, and file edits are local/);
