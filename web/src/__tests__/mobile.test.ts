@@ -95,6 +95,9 @@ test('mobile viewport helper ignores visual offset while computing keyboard heig
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
   assert.match(source, /layoutHeight - visualHeight/);
+  assert.match(source, /fixedProbe/);
+  assert.match(source, /keyboardCompensation/);
+  assert.match(source, /fixedBottom > visualHeight \+ 8/);
   assert.doesNotMatch(source, /offsetTop/);
   assert.doesNotMatch(source, /visualBottom/);
   assert.match(source, /document\.addEventListener\('focusin'/);

@@ -828,6 +828,7 @@ function writeStoredActiveSession(sessionId: string | null, state: SessionStateS
 function installMobileViewportVars(): () => void {
   const root = document.documentElement;
   const vv = window.visualViewport;
+  const fixedProbe = document.createElement('div');
   let raf = 0;
   let settleTimer = 0;
   let focused = false;
@@ -835,6 +836,10 @@ function installMobileViewportVars(): () => void {
   let settledKeyboard = 0;
   let pendingKeyboard = 0;
   let layoutHeight = Math.max(window.innerHeight, vv?.height ?? 0, root.clientHeight);
+
+  fixedProbe.setAttribute('aria-hidden', 'true');
+  fixedProbe.style.cssText = 'position:fixed;left:0;bottom:0;width:1px;height:1px;visibility:hidden;pointer-events:none;';
+  document.body.appendChild(fixedProbe);
 
   const update = () => {
     const visualHeight = vv?.height ?? window.innerHeight;
@@ -859,11 +864,15 @@ function installMobileViewportVars(): () => void {
       settleTimer = window.setTimeout(() => {
         settled = true;
         settledKeyboard = pendingKeyboard;
-        root.style.setProperty('--keyboard-offset', `${Math.round(settledKeyboard)}px`);
+        schedule();
       }, 180);
     }
+    const fixedBottom = fixedProbe.getBoundingClientRect().bottom;
+    const keyboardCompensation = focused && keyboard > 0 && fixedBottom > visualHeight + 8
+      ? Math.min(keyboard, Math.max(0, fixedBottom - visualHeight))
+      : 0;
     root.style.setProperty('--vvh', `${Math.round(visualHeight)}px`);
-    root.style.setProperty('--keyboard-offset', `${Math.round(keyboard)}px`);
+    root.style.setProperty('--keyboard-offset', `${Math.round(keyboardCompensation)}px`);
   };
 
   const schedule = () => {
@@ -910,6 +919,7 @@ function installMobileViewportVars(): () => void {
     document.removeEventListener('focusin', onFocusIn);
     document.removeEventListener('focusout', onFocusOut);
     vv?.removeEventListener('resize', schedule);
+    fixedProbe.remove();
   };
 }
 
