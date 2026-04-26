@@ -829,6 +829,11 @@ function installMobileViewportVars(): () => void {
   const root = document.documentElement;
   const vv = window.visualViewport;
   let raf = 0;
+  let settleTimer = 0;
+  let focused = false;
+  let settled = false;
+  let settledKeyboard = 0;
+  let pendingKeyboard = 0;
   let layoutHeight = Math.max(window.innerHeight, vv?.height ?? 0, root.clientHeight);
 
   const update = () => {
@@ -837,7 +842,26 @@ function installMobileViewportVars(): () => void {
     layoutHeight = Math.max(layoutHeight, window.innerHeight, visualHeight, root.clientHeight);
     const visualBottom = visualTop + visualHeight;
     const rawKeyboard = Math.max(0, layoutHeight - visualBottom);
-    const keyboard = rawKeyboard > 80 ? rawKeyboard : 0;
+    let keyboard = rawKeyboard > 80 ? rawKeyboard : 0;
+    if (focused && settled) {
+      if (keyboard === 0) {
+        settled = false;
+        settledKeyboard = 0;
+      } else if (Math.abs(keyboard - settledKeyboard) < 96) {
+        keyboard = settledKeyboard;
+      } else {
+        settled = false;
+      }
+    }
+    if (focused && !settled && keyboard > 0) {
+      pendingKeyboard = keyboard;
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => {
+        settled = true;
+        settledKeyboard = pendingKeyboard;
+        root.style.setProperty('--keyboard-offset', `${Math.round(settledKeyboard)}px`);
+      }, 180);
+    }
     root.style.setProperty('--vvh', `${Math.round(visualHeight)}px`);
     root.style.setProperty('--keyboard-offset', `${Math.round(keyboard)}px`);
   };
@@ -849,10 +873,25 @@ function installMobileViewportVars(): () => void {
       update();
     });
   };
-  const onFocusIn = (event: FocusEvent) => { if (isKeyboardInput(event.target)) schedule(); };
-  const onFocusOut = () => window.setTimeout(schedule, 80);
+  const onFocusIn = (event: FocusEvent) => {
+    if (!isKeyboardInput(event.target)) return;
+    focused = true;
+    settled = false;
+    settledKeyboard = 0;
+    schedule();
+  };
+  const onFocusOut = () => {
+    focused = false;
+    settled = false;
+    settledKeyboard = 0;
+    window.clearTimeout(settleTimer);
+    window.setTimeout(schedule, 80);
+  };
   const onOrientation = () => {
     layoutHeight = 0;
+    settled = false;
+    settledKeyboard = 0;
+    window.clearTimeout(settleTimer);
     window.setTimeout(schedule, 120);
   };
 
@@ -862,15 +901,14 @@ function installMobileViewportVars(): () => void {
   document.addEventListener('focusin', onFocusIn);
   document.addEventListener('focusout', onFocusOut);
   vv?.addEventListener('resize', schedule);
-  vv?.addEventListener('scroll', schedule);
   return () => {
     if (raf) cancelAnimationFrame(raf);
+    window.clearTimeout(settleTimer);
     window.removeEventListener('resize', schedule);
     window.removeEventListener('orientationchange', onOrientation);
     document.removeEventListener('focusin', onFocusIn);
     document.removeEventListener('focusout', onFocusOut);
     vv?.removeEventListener('resize', schedule);
-    vv?.removeEventListener('scroll', schedule);
   };
 }
 
