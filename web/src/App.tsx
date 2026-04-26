@@ -828,51 +828,19 @@ function writeStoredActiveSession(sessionId: string | null, state: SessionStateS
 function installMobileViewportVars(): () => void {
   const root = document.documentElement;
   const vv = window.visualViewport;
+  const viewportProbe = document.createElement('div');
   let raf = 0;
-  let settleTimer = 0;
-  let focused = false;
-  let settled = false;
-  let settledKeyboard = 0;
-  let pendingKeyboard = 0;
-  let baseVisualTop = vv?.offsetTop ?? 0;
-  let touchStartY = 0;
-  let layoutHeight = Math.max(window.innerHeight, vv?.height ?? 0, root.clientHeight);
+  viewportProbe.setAttribute('aria-hidden', 'true');
+  viewportProbe.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;visibility:hidden;pointer-events:none;';
+  document.body.appendChild(viewportProbe);
 
   const update = () => {
     const visualHeight = vv?.height ?? window.innerHeight;
     const visualTop = vv?.offsetTop ?? 0;
-    if (!focused) {
-      layoutHeight = Math.max(window.innerHeight, visualHeight, root.clientHeight);
-      baseVisualTop = visualTop;
-    }
-    const rawKeyboard = Math.max(0, layoutHeight - visualHeight);
-    let keyboard = rawKeyboard > 80 ? rawKeyboard : 0;
-    if (focused && settled) {
-      if (keyboard === 0) {
-        settled = false;
-        settledKeyboard = 0;
-      } else if (Math.abs(keyboard - settledKeyboard) < 96) {
-        keyboard = settledKeyboard;
-      } else {
-        settled = false;
-      }
-    }
-    if (focused && !settled && keyboard > 0) {
-      pendingKeyboard = keyboard;
-      baseVisualTop = visualTop;
-      window.clearTimeout(settleTimer);
-      settleTimer = window.setTimeout(() => {
-        settled = true;
-        settledKeyboard = pendingKeyboard;
-        baseVisualTop = vv?.offsetTop ?? 0;
-        root.style.setProperty('--keyboard-offset', `${Math.round(settledKeyboard)}px`);
-        schedule();
-      }, 180);
-    }
-    const viewportPan = focused && settled ? Math.max(0, visualTop - baseVisualTop) : 0;
+    const fixedTop = viewportProbe.getBoundingClientRect().top;
+    const shellTop = fixedTop < -1 ? visualTop : 0;
     root.style.setProperty('--vvh', `${Math.round(visualHeight)}px`);
-    root.style.setProperty('--keyboard-offset', `${Math.round(keyboard)}px`);
-    root.style.setProperty('--viewport-pan', `${Math.round(viewportPan)}px`);
+    root.style.setProperty('--vv-top', `${Math.round(shellTop)}px`);
   };
 
   const schedule = () => {
@@ -882,73 +850,30 @@ function installMobileViewportVars(): () => void {
       update();
     });
   };
-  const onFocusIn = (event: FocusEvent) => {
-    if (!isKeyboardInput(event.target)) return;
-    focused = true;
-    settled = false;
-    settledKeyboard = 0;
-    baseVisualTop = vv?.offsetTop ?? 0;
-    layoutHeight = Math.max(layoutHeight, window.innerHeight, vv?.height ?? 0, root.clientHeight);
+  const onFocusChange = (event: FocusEvent) => {
+    if (event.type === 'focusin' && !isKeyboardInput(event.target)) return;
     schedule();
   };
-  const onFocusOut = () => {
-    focused = false;
-    settled = false;
-    settledKeyboard = 0;
-    baseVisualTop = vv?.offsetTop ?? 0;
-    root.style.setProperty('--viewport-pan', '0px');
-    window.clearTimeout(settleTimer);
-    window.setTimeout(schedule, 80);
-  };
   const onOrientation = () => {
-    layoutHeight = 0;
-    settled = false;
-    settledKeyboard = 0;
-    baseVisualTop = vv?.offsetTop ?? 0;
-    root.style.setProperty('--viewport-pan', '0px');
-    window.clearTimeout(settleTimer);
     window.setTimeout(schedule, 120);
-  };
-  const onTouchStart = (event: TouchEvent) => {
-    touchStartY = event.touches[0]?.clientY ?? touchStartY;
-  };
-  const onTouchMove = (event: TouchEvent) => {
-    if (!focused) return;
-    const target = event.target instanceof Element ? event.target : null;
-    const scroller = target?.closest('.message-scroller') as HTMLElement | null;
-    if (!scroller) {
-      event.preventDefault();
-      return;
-    }
-    const y = event.touches[0]?.clientY ?? touchStartY;
-    const deltaY = touchStartY - y;
-    const atTop = scroller.scrollTop <= 0;
-    const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
-    if ((deltaY < 0 && atTop) || (deltaY > 0 && atBottom)) {
-      event.preventDefault();
-    }
   };
 
   update();
   window.addEventListener('resize', schedule, { passive: true });
   window.addEventListener('orientationchange', onOrientation, { passive: true });
-  document.addEventListener('focusin', onFocusIn);
-  document.addEventListener('focusout', onFocusOut);
+  document.addEventListener('focusin', onFocusChange);
+  document.addEventListener('focusout', onFocusChange);
   vv?.addEventListener('resize', schedule);
   vv?.addEventListener('scroll', schedule);
-  document.addEventListener('touchstart', onTouchStart, { passive: true });
-  document.addEventListener('touchmove', onTouchMove, { passive: false });
   return () => {
     if (raf) cancelAnimationFrame(raf);
-    window.clearTimeout(settleTimer);
     window.removeEventListener('resize', schedule);
     window.removeEventListener('orientationchange', onOrientation);
-    document.removeEventListener('focusin', onFocusIn);
-    document.removeEventListener('focusout', onFocusOut);
+    document.removeEventListener('focusin', onFocusChange);
+    document.removeEventListener('focusout', onFocusChange);
     vv?.removeEventListener('resize', schedule);
     vv?.removeEventListener('scroll', schedule);
-    document.removeEventListener('touchstart', onTouchStart);
-    document.removeEventListener('touchmove', onTouchMove);
+    viewportProbe.remove();
   };
 }
 

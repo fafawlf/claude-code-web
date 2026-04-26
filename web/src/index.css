@@ -33,7 +33,7 @@
     --skin-bg-image: none;
     --skin-overlay: transparent;
     --skin-overlay-opacity: 0;
-    --viewport-pan: 0px;
+    --vv-top: 0px;
   }
 
   html[data-skin="cyberpunk"] {
@@ -855,7 +855,10 @@
   }
 
   .app-shell {
-    position: relative;
+    position: fixed;
+    top: var(--vv-top, 0px);
+    left: 0;
+    right: 0;
     width: 100%;
     max-width: 100vw;
     height: var(--vvh, 100dvh);
@@ -1000,14 +1003,12 @@
   }
 
   .composer-wrap {
-    position: fixed;
+    position: absolute;
     left: max(10px, env(safe-area-inset-left));
     right: max(10px, env(safe-area-inset-right));
     bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 45;
     width: auto;
-    transform: translate3d(0, var(--viewport-pan, 0px), 0);
-    will-change: transform;
     contain: layout paint style;
   }
 
