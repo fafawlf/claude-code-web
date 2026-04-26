@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AgentProviderId, PermissionMode } from '../types';
 import { MODE_ORDER, modeHint, modeLabel } from '../types';
 import { SlashPalette, type SlashAction } from './SlashPalette';
@@ -30,6 +30,7 @@ const PLACEHOLDERS = [
 ];
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 type Attachment = {
   id: string;
@@ -86,11 +87,13 @@ function InputBarImpl(p: Props) {
     safeWritePromptDraft(p.cwd, text);
   }, [p.cwd, text]);
 
-  useEffect(() => {
+  useIsoLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = '0px';
-    el.style.height = Math.min(Math.max(el.scrollHeight, 24), 160) + 'px';
+    el.style.height = 'auto';
+    const next = Math.min(Math.max(el.scrollHeight, 24), 160);
+    const nextHeight = `${next}px`;
+    if (el.style.height !== nextHeight) el.style.height = nextHeight;
   }, [text]);
 
   useEffect(() => {

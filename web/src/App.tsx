@@ -828,25 +828,68 @@ function writeStoredActiveSession(sessionId: string | null, state: SessionStateS
 function installMobileViewportVars(): () => void {
   const root = document.documentElement;
   const vv = window.visualViewport;
+  let focused = false;
+  let lockedKeyboard = 0;
+  let raf = 0;
+
   const update = () => {
     const visualHeight = vv?.height ?? window.innerHeight;
-    const keyboard = vv
+    const rawKeyboard = vv
       ? Math.max(0, window.innerHeight - visualHeight - vv.offsetTop)
       : 0;
+    let keyboard = rawKeyboard > 80 ? rawKeyboard : 0;
+    if (focused) {
+      if (keyboard > lockedKeyboard) lockedKeyboard = keyboard;
+      else if (keyboard > 0 && lockedKeyboard > 0) keyboard = lockedKeyboard;
+      else lockedKeyboard = 0;
+    } else {
+      lockedKeyboard = keyboard;
+    }
     root.style.setProperty('--vvh', `${Math.round(visualHeight)}px`);
     root.style.setProperty('--keyboard-offset', `${Math.round(keyboard)}px`);
   };
-  update();
-  window.addEventListener('resize', update, { passive: true });
-  window.addEventListener('orientationchange', update, { passive: true });
-  vv?.addEventListener('resize', update);
-  vv?.addEventListener('scroll', update);
-  return () => {
-    window.removeEventListener('resize', update);
-    window.removeEventListener('orientationchange', update);
-    vv?.removeEventListener('resize', update);
-    vv?.removeEventListener('scroll', update);
+
+  const schedule = () => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      update();
+    });
   };
+  const onFocusIn = (event: FocusEvent) => {
+    if (!isKeyboardInput(event.target)) return;
+    focused = true;
+    schedule();
+  };
+  const onFocusOut = () => {
+    focused = false;
+    lockedKeyboard = 0;
+    window.setTimeout(schedule, 80);
+  };
+
+  update();
+  window.addEventListener('resize', schedule, { passive: true });
+  window.addEventListener('orientationchange', schedule, { passive: true });
+  document.addEventListener('focusin', onFocusIn);
+  document.addEventListener('focusout', onFocusOut);
+  vv?.addEventListener('resize', schedule);
+  vv?.addEventListener('scroll', schedule);
+  return () => {
+    if (raf) cancelAnimationFrame(raf);
+    window.removeEventListener('resize', schedule);
+    window.removeEventListener('orientationchange', schedule);
+    document.removeEventListener('focusin', onFocusIn);
+    document.removeEventListener('focusout', onFocusOut);
+    vv?.removeEventListener('resize', schedule);
+    vv?.removeEventListener('scroll', schedule);
+  };
+}
+
+function isKeyboardInput(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (!(target instanceof HTMLInputElement)) return target.isContentEditable;
+  return !['button', 'checkbox', 'file', 'hidden', 'radio', 'range', 'submit'].includes(target.type);
 }
 
 function readSelectedProvider(): AgentProviderId {
