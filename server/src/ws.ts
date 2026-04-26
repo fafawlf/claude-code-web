@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket, RawData } from 'ws';
 import type { SessionManager } from './session/SessionManager.js';
-import type { ClaudeSession } from './session/ClaudeSession.js';
-import type { ClientHello, ClientMessage, ServerMessage, PermissionMode } from './protocol.js';
+import type { AgentSession } from './agents/types.js';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type ClientHello, type ClientMessage, type ServerMessage, type PermissionMode } from './protocol.js';
 import { timingSafeEqualStr } from './auth.js';
 
 export function registerWs(app: FastifyInstance, sm: SessionManager, token: string, defaultCwd: string) {
@@ -14,7 +14,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
       return;
     }
 
-    let session: ClaudeSession | undefined;
+    let session: AgentSession | undefined;
     let attachedId: string | undefined;
     let unsubEvents: (() => void) | undefined;
     let unsubState: (() => void) | undefined;
@@ -41,7 +41,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
       attachedId = undefined;
     };
 
-    const sendPending = (s: ClaudeSession) => {
+    const sendPending = (s: AgentSession) => {
       for (const control of s.getPendingControls()) {
         send(socket, { type: 'pending_control', sessionId: s.id, control });
         if (control.kind === 'permission') {
@@ -53,7 +53,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
       }
     };
 
-    const attach = async (s: ClaudeSession, afterId: number) => {
+    const attach = async (s: AgentSession, afterId: number) => {
       session = s;
       attachedId = s.id;
       sm.attach(s.id);
@@ -149,12 +149,22 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
   });
 }
 
-export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaultCwd: string): { session: ClaudeSession; replayAfterId: number; recovered: boolean } {
+export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaultCwd: string): { session: AgentSession; replayAfterId: number; recovered: boolean } {
+  const requestedNodeId = msg.nodeId ?? DEFAULT_NODE_ID;
+  const requestedProvider = msg.provider ?? DEFAULT_AGENT_PROVIDER;
   if (msg.sessionId) {
     const existing = sm.get(msg.sessionId);
-    if (existing) return { session: existing, replayAfterId: msg.lastEventId ?? 0, recovered: false };
+    if (existing) {
+      const state = existing.getState();
+      if (state.nodeId !== requestedNodeId || state.provider !== requestedProvider) {
+        throw new Error(`Session belongs to ${state.nodeId}/${state.provider}, not ${requestedNodeId}/${requestedProvider}`);
+      }
+      return { session: existing, replayAfterId: msg.lastEventId ?? 0, recovered: false };
+    }
   }
   const session = sm.create({
+    nodeId: requestedNodeId,
+    provider: requestedProvider,
     cwd: msg.cwd ?? defaultCwd,
     resume: msg.resumeClaudeId,
     model: msg.model,

@@ -4,6 +4,10 @@
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
 export type SessionRuntimeStatus = 'idle' | 'running' | 'waiting_permission' | 'waiting_plan' | 'error' | 'closed';
+export type AgentProviderId = 'claude' | 'codex';
+
+export const DEFAULT_NODE_ID = 'local';
+export const DEFAULT_AGENT_PROVIDER: AgentProviderId = 'claude';
 
 export type ActiveToolInfo = {
   toolUseId: string;
@@ -14,6 +18,8 @@ export type ActiveToolInfo = {
 
 export type ClientHello = {
   type: 'hello';
+  nodeId?: string;
+  provider?: AgentProviderId;
   sessionId?: string;
   resumeClaudeId?: string;
   cwd?: string;
@@ -56,6 +62,9 @@ export type ClientMessage =
 
 export type SessionStateSnapshot = {
   sessionId: string;
+  nodeId: string;
+  nodeLabel?: string;
+  provider: AgentProviderId;
   claudeSessionId?: string;
   cwd: string;
   model?: string;

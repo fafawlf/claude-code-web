@@ -2,7 +2,7 @@ import { query, getSessionMessages, type Options, type Query, type SDKMessage, t
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveClaudePath } from './resolveClaudePath.js';
-import type { PendingControl, PermissionMode, SessionRuntimeStatus, SessionStateSnapshot } from '../protocol.js';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type AgentProviderId, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
 
 export type SessionEvent = { id: number; event: SDKMessage };
 export type EventListener = (ev: SessionEvent) => void;
@@ -89,6 +89,9 @@ export class ClaudeSession {
 
   constructor(opts: {
     id: string;
+    nodeId?: string;
+    nodeLabel?: string;
+    provider?: AgentProviderId;
     cwd: string;
     resume?: string;
     model?: string;
@@ -102,6 +105,9 @@ export class ClaudeSession {
     this.viewerMode = !!opts.viewerMode;
     this.state = {
       sessionId: opts.id,
+      nodeId: opts.nodeId ?? DEFAULT_NODE_ID,
+      nodeLabel: opts.nodeLabel,
+      provider: opts.provider ?? DEFAULT_AGENT_PROVIDER,
       cwd: opts.cwd,
       // When resuming, the Claude session id is known up-front; helps the UI
       // show the right title / rename target without waiting for the first

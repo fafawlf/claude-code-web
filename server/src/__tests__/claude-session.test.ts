@@ -11,6 +11,8 @@ test('initial state: permissionMode defaults to default when not provided', () =
   assert.equal(s.getState().permissionMode, 'default');
   assert.equal(s.getState().cwd, '/tmp');
   assert.equal(s.getState().sessionId, 'id-1');
+  assert.equal(s.getState().nodeId, 'local');
+  assert.equal(s.getState().provider, 'claude');
   assert.equal((s as any).query, undefined);
   void s.close();
 });

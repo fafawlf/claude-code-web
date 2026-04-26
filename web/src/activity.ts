@@ -1,11 +1,14 @@
 import type { ChatState } from './reducer';
 import type { ChatItem, SessionRuntimeStatus, SessionStateSnapshot, StoredSession } from './types';
+import { cachedChatState } from './sessionCache';
 
 export type ActivityStatus = 'needs_review' | 'plan_ready' | 'working' | 'issue' | 'finished';
 export type ActivityTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success';
 
 export type ActivitySessionViewModel = {
   sessionId: string;
+  nodeId: string;
+  provider: SessionStateSnapshot['provider'];
   title: string;
   subtitle: string;
   status: ActivityStatus;
@@ -44,12 +47,14 @@ export function deriveActivitySessions({ liveSessions, activeSessionId, cache, s
   const storedByClaudeId = new Map(storedSessions.map((s) => [s.sessionId, s]));
 
   return liveSessions
-    .filter((s) => shouldShowActivitySession(s, activeSessionId, cache.get(s.sessionId), s.claudeSessionId ? storedByClaudeId.get(s.claudeSessionId) : undefined))
+    .filter((s) => shouldShowActivitySession(s, activeSessionId, cachedChatState(cache, s), s.claudeSessionId ? storedByClaudeId.get(s.claudeSessionId) : undefined))
     .map((s) => {
       const status = activityStatus(s.runtimeStatus);
       return {
         sessionId: s.sessionId,
-        title: activityTitle(s, cache.get(s.sessionId), s.claudeSessionId ? storedByClaudeId.get(s.claudeSessionId) : undefined, now),
+        nodeId: s.nodeId,
+        provider: s.provider,
+        title: activityTitle(s, cachedChatState(cache, s), s.claudeSessionId ? storedByClaudeId.get(s.claudeSessionId) : undefined, now),
         subtitle: activitySubtitle(s, now),
         status,
         statusLabel: activityStatusLabel(s.runtimeStatus),

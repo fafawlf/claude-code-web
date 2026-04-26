@@ -1,17 +1,27 @@
 import { randomUUID } from 'node:crypto';
-import { ClaudeSession, type PermissionListener, type PlanListener } from './ClaudeSession.js';
-import type { PermissionMode, SessionStateSnapshot } from '../protocol.js';
+import { ClaudeProvider } from '../agents/ClaudeProvider.js';
+import type { AgentProvider, AgentSession } from '../agents/types.js';
+import type { PermissionListener, PlanListener } from './ClaudeSession.js';
+import type { AgentProviderId, PermissionMode, SessionStateSnapshot } from '../protocol.js';
 
 const MAX_CONCURRENT = 8;
 type ManagerListener = (sessions: SessionStateSnapshot[]) => void;
 
 export class SessionManager {
-  private sessions = new Map<string, ClaudeSession>();
+  private sessions = new Map<string, AgentSession>();
   private subscribers = new Map<string, number>(); // sessionId → attached-WS count
   private unsubs = new Map<string, Array<() => void>>();
   private listeners = new Set<ManagerListener>();
+  private providers = new Map<AgentProviderId, AgentProvider>();
+
+  constructor(providers: AgentProvider[] = [new ClaudeProvider()]) {
+    for (const provider of providers) this.providers.set(provider.id, provider);
+  }
 
   create(opts: {
+    nodeId?: string;
+    nodeLabel?: string;
+    provider?: AgentProviderId;
     cwd: string;
     resume?: string;
     model?: string;
@@ -19,7 +29,7 @@ export class SessionManager {
     viewerMode?: boolean;
     onPermission?: PermissionListener;
     onPlan?: PlanListener;
-  }): ClaudeSession {
+  }): AgentSession {
     // If at or over the cap, only reap sessions that are closed or clearly idle.
     // Running/waiting background tasks are first-class now and must survive tab
     // switches until the user explicitly closes them.
@@ -28,14 +38,15 @@ export class SessionManager {
       throw new Error(`Concurrent session limit (${MAX_CONCURRENT}) reached. Close a background session first.`);
     }
     const id = randomUUID();
-    const session = new ClaudeSession({ id, ...opts });
+    const provider = this.providerFor(opts.provider ?? 'claude');
+    const session = provider.createSession({ id, ...opts });
     this.sessions.set(id, session);
     this.track(id, session);
     this.notify();
     return session;
   }
 
-  get(id: string): ClaudeSession | undefined { return this.sessions.get(id); }
+  get(id: string): AgentSession | undefined { return this.sessions.get(id); }
 
   getSnapshot(id: string): SessionStateSnapshot | undefined {
     const s = this.sessions.get(id);
@@ -107,15 +118,21 @@ export class SessionManager {
     }
   }
 
-  private track(id: string, session: ClaudeSession): void {
+  private track(id: string, session: AgentSession): void {
     this.unsubs.set(id, [
       session.subscribeState(() => this.notify()),
       session.subscribeControls(() => this.notify()),
     ]);
   }
 
-  private snapshot(session: ClaudeSession): SessionStateSnapshot {
+  private snapshot(session: AgentSession): SessionStateSnapshot {
     return { ...session.getState(), attachedCount: this.subscribers.get(session.id) ?? 0 };
+  }
+
+  private providerFor(id: AgentProviderId): AgentProvider {
+    const provider = this.providers.get(id);
+    if (!provider) throw new Error(`Provider ${id} is not available yet on this node`);
+    return provider;
   }
 
   private notify(): void {

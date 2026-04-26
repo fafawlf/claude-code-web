@@ -8,6 +8,7 @@ import { SessionManager } from './session/SessionManager.js';
 import { registerWs } from './ws.js';
 import { registerApi } from './api.js';
 import { timingSafeEqualStr } from './auth.js';
+import { NodeRegistry } from './nodes/NodeRegistry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +22,7 @@ export type StartOptions = {
 export async function startServer(opts: StartOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: 'info' } });
   const sm = new SessionManager();
+  const nodes = new NodeRegistry(opts.defaultCwd);
 
   await app.register(fastifyWebsocket);
 
@@ -58,7 +60,7 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
     return { ok: true };
   });
 
-  registerApi(app, opts.token, opts.defaultCwd, sm, { host: opts.host, port: opts.port });
+  registerApi(app, opts.token, opts.defaultCwd, sm, nodes, { host: opts.host, port: opts.port });
   registerWs(app, sm, opts.token, opts.defaultCwd);
 
   const host = opts.host ?? '127.0.0.1';

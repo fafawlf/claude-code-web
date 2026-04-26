@@ -6,6 +6,8 @@ export function buildReconnectHello(activeSessionId: string | null, state: ChatS
   const snap = state.state;
   return {
     type: 'hello',
+    nodeId: snap?.nodeId,
+    provider: snap?.provider,
     sessionId: activeSessionId,
     lastEventId,
     cwd: snap?.cwd,

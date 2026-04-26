@@ -8,6 +8,8 @@ import { timingSafeEqualStr } from './auth.js';
 import { detectClaudeAuthInfo } from './authInfo.js';
 import type { SessionManager } from './session/SessionManager.js';
 import { detectClaudeExecutable } from './session/resolveClaudePath.js';
+import { detectCodexExecutable } from './agents/resolveCodexPath.js';
+import { NodeRegistry } from './nodes/NodeRegistry.js';
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv',
@@ -24,6 +26,7 @@ export function registerApi(
   token: string,
   defaultCwd: string,
   sm: SessionManager,
+  nodes: NodeRegistry = new NodeRegistry(defaultCwd),
   runtime: { host?: string; port?: number } = {}
 ) {
   app.addHook('onRequest', async (req, reply) => {
@@ -46,8 +49,10 @@ export function registerApi(
   app.get('/api/info', async () => ({
     cwd: defaultCwd,
     home: homedir(),
+    node: nodes.get('local'),
     auth: detectClaudeAuthInfo(),
     claude: detectClaudeExecutable(),
+    codex: detectCodexExecutable(),
     server: {
       host: runtime.host ?? '127.0.0.1',
       port: runtime.port,
@@ -56,6 +61,30 @@ export function registerApi(
       node: process.version,
     },
   }));
+
+  app.get('/api/nodes', async () => ({ nodes: nodes.list() }));
+
+  app.get('/api/node/info', async (req, reply) => {
+    const q = req.query as { nodeId?: string } | undefined;
+    const node = nodes.get(q?.nodeId);
+    if (!node) return reply.code(404).send({ error: 'Node not found' });
+    if (node.kind !== 'local') return reply.code(501).send({ error: 'SSH nodes are not wired yet' });
+    return {
+      node,
+      cwd: node.defaultCwd,
+      home: homedir(),
+      auth: detectClaudeAuthInfo(),
+      claude: detectClaudeExecutable(),
+      codex: detectCodexExecutable(),
+      server: {
+        host: runtime.host ?? '127.0.0.1',
+        port: runtime.port,
+        platform: platform(),
+        arch: arch(),
+        node: process.version,
+      },
+    };
+  });
 
   app.get('/api/live-sessions', async () => ({ sessions: sm.listSnapshots() }));
 

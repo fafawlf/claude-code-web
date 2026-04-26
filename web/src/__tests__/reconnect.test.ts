@@ -7,6 +7,8 @@ import type { SessionStateSnapshot } from '../types';
 function snap(): SessionStateSnapshot {
   return {
     sessionId: 'live-1',
+    nodeId: 'do',
+    provider: 'claude',
     claudeSessionId: 'claude-1',
     cwd: '/root/chatgpt',
     model: 'claude-opus-4-7',
@@ -24,6 +26,8 @@ test('buildReconnectHello includes recovery fields for expired server-side live 
   const state = withReady(initialState, snap());
   assert.deepEqual(buildReconnectHello('live-1', state, 10), {
     type: 'hello',
+    nodeId: 'do',
+    provider: 'claude',
     sessionId: 'live-1',
     lastEventId: 10,
     cwd: '/root/chatgpt',

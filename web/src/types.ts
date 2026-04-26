@@ -1,5 +1,9 @@
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
 export type SessionRuntimeStatus = 'idle' | 'running' | 'waiting_permission' | 'waiting_plan' | 'error' | 'closed';
+export type AgentProviderId = 'claude' | 'codex';
+
+export const DEFAULT_NODE_ID = 'local';
+export const DEFAULT_AGENT_PROVIDER: AgentProviderId = 'claude';
 
 export type ActiveToolInfo = {
   toolUseId: string;
@@ -10,6 +14,9 @@ export type ActiveToolInfo = {
 
 export type SessionStateSnapshot = {
   sessionId: string;
+  nodeId: string;
+  nodeLabel?: string;
+  provider: AgentProviderId;
   claudeSessionId?: string;
   cwd: string;
   model?: string;
@@ -39,6 +46,22 @@ export type ClaudeExecutableInfo = {
   detail?: string;
 };
 
+export type CodexExecutableInfo = {
+  source: 'env' | 'path' | 'missing';
+  label: string;
+  path?: string;
+  detail?: string;
+};
+
+export type NodeInfo = {
+  id: string;
+  label: string;
+  kind: 'local' | 'ssh';
+  defaultCwd: string;
+  providers: AgentProviderId[];
+  connected?: boolean;
+};
+
 export type ServerRuntimeInfo = {
   host?: string;
   port?: number;
@@ -50,13 +73,15 @@ export type ServerRuntimeInfo = {
 export type ServerInfo = {
   cwd: string;
   home: string;
+  node?: NodeInfo;
   auth: ClaudeAuthInfo;
   claude?: ClaudeExecutableInfo;
+  codex?: CodexExecutableInfo;
   server?: ServerRuntimeInfo;
 };
 
 // Client → server
-export type ClientHello = { type: 'hello'; sessionId?: string; resumeClaudeId?: string; cwd?: string; model?: string; permissionMode?: PermissionMode; lastEventId?: number; viewerMode?: boolean };
+export type ClientHello = { type: 'hello'; nodeId?: string; provider?: AgentProviderId; sessionId?: string; resumeClaudeId?: string; cwd?: string; model?: string; permissionMode?: PermissionMode; lastEventId?: number; viewerMode?: boolean };
 export type ClientUserMessage = { type: 'user'; text: string };
 export type ClientPermissionResponse = { type: 'permission_response'; reqId: string; decision: 'allow' | 'deny'; scope?: 'once' | 'session' };
 export type ClientPlanResponse = { type: 'plan_response'; reqId: string; decision: 'approve' | 'reject' };

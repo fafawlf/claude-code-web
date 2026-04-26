@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SessionManager } from '../session/SessionManager.js';
+import { ClaudeSession } from '../session/ClaudeSession.js';
+import type { AgentProvider, AgentSession, AgentSessionOptions } from '../agents/types.js';
 
 // We don't actually exercise Claude. Fresh sessions are lazy and don't spawn
 // the SDK subprocess until the first user prompt, so these tests can focus on
@@ -12,6 +14,14 @@ function makeOpts() {
     onPermission: () => {},
     onPlan: () => {},
   };
+}
+
+class FakeCodexProvider implements AgentProvider {
+  readonly id = 'codex' as const;
+  readonly label = 'Codex';
+  createSession(opts: AgentSessionOptions): AgentSession {
+    return new ClaudeSession({ ...opts, provider: this.id });
+  }
 }
 
 test('attach and detach track subscribers correctly', async () => {
@@ -73,4 +83,19 @@ test('remove closes and forgets the session', async () => {
   const s = sm.create(makeOpts());
   await sm.remove(s.id);
   assert.equal(sm.get(s.id), undefined);
+});
+
+test('provider registry dispatches session creation by provider id', async () => {
+  const sm = new SessionManager([new FakeCodexProvider()]);
+  const s = sm.create({ ...makeOpts(), provider: 'codex' });
+
+  assert.equal(s.getState().provider, 'codex');
+  await sm.closeAll();
+});
+
+test('provider registry reports unavailable providers', async () => {
+  const sm = new SessionManager();
+
+  assert.throws(() => sm.create({ ...makeOpts(), provider: 'codex' }), /provider codex is not available/i);
+  await sm.closeAll();
 });

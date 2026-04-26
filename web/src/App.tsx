@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { WsClient, type ConnectionState } from './ws';
 import { applyEvent, applyStateDelta, initialState, addSystem, addUserOptimistic, withReady, type ChatState } from './reducer';
-import { cachedLastEventId, rememberChatState } from './sessionCache';
+import { cachedChatState, cachedLastEventId, forgetChatState, rememberChatState } from './sessionCache';
 import { buildReconnectHello } from './reconnect';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
 import type { ClaudeAuthInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
@@ -206,7 +206,7 @@ export function App() {
         pendingRef.current = [];
         lastEventAtRef.current = Date.now();
         activeSessionIdRef.current = m.state.sessionId;
-        const cached = cacheRef.current.get(m.state.sessionId) ?? { ...initialState };
+        const cached = cachedChatState(cacheRef.current, m.state) ?? { ...initialState };
         commitState(() => withReady(cached, m.state));
         setRecentProjects(rememberProject(m.state.cwd));
         setPendingEdits(new Map());
@@ -275,7 +275,7 @@ export function App() {
       client.send(buildReconnectHello(
         activeId,
         stateRef.current,
-        activeId ? cachedLastEventId(cacheRef.current, activeId) : 0
+        activeId && stateRef.current.state ? cachedLastEventId(cacheRef.current, stateRef.current.state) : 0
       ));
     });
     return () => { client.close(); };
@@ -312,18 +312,26 @@ export function App() {
   const attachLiveSession = useCallback((sessionId: string, title?: string) => {
     pendingRef.current = [];
     activeSessionIdRef.current = sessionId;
-    const cached = cacheRef.current.get(sessionId) ?? { ...initialState };
+    const live = liveSessions.find((s) => s.sessionId === sessionId);
+    const cached = cachedChatState(cacheRef.current, live ?? sessionId) ?? { ...initialState };
     commitState(cached);
     setPendingEdits(new Map());
     setNonEditPermReq(null);
     setPlanProposed(null);
     setSessionTitle(title);
-    wsRef.current?.send({ type: 'hello', sessionId, lastEventId: cachedLastEventId(cacheRef.current, sessionId) });
-  }, [commitState]);
+    wsRef.current?.send({
+      type: 'hello',
+      nodeId: live?.nodeId,
+      provider: live?.provider,
+      sessionId,
+      lastEventId: cachedLastEventId(cacheRef.current, live ?? sessionId),
+    });
+  }, [commitState, liveSessions]);
 
   const closeLiveSession = useCallback((sessionId: string) => {
     wsRef.current?.send({ type: 'session_close', sessionId });
-    cacheRef.current.delete(sessionId);
+    const live = liveSessions.find((s) => s.sessionId === sessionId);
+    forgetChatState(cacheRef.current, live ?? sessionId);
     setLiveSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
     if (activeSessionIdRef.current === sessionId) {
       activeSessionIdRef.current = null;
@@ -333,7 +341,7 @@ export function App() {
       setPlanProposed(null);
       setSessionTitle(undefined);
     }
-  }, [commitState]);
+  }, [commitState, liveSessions]);
 
   const sendUser = useCallback((text: string) => {
     if (!text.trim()) return;
