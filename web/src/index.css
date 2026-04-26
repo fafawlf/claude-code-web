@@ -835,8 +835,8 @@
   html,
   body,
   #root {
-    height: 100%;
-    min-height: 100svh;
+    height: var(--vvh, 100dvh);
+    min-height: var(--vvh, 100dvh);
     max-width: 100%;
     overflow: hidden;
   }
@@ -845,7 +845,11 @@
     overscroll-behavior: none;
     overscroll-behavior-x: none;
     position: fixed;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: auto;
+    width: 100%;
     touch-action: pan-y;
   }
 
@@ -853,7 +857,8 @@
     position: relative;
     width: 100%;
     max-width: 100vw;
-    height: 100svh;
+    height: var(--vvh, 100dvh);
+    min-height: var(--vvh, 100dvh);
     overflow: hidden;
   }
 
@@ -898,7 +903,7 @@
 
   .sidebar-shell .app-sidebar {
     width: 100%;
-    height: 100svh;
+    height: var(--vvh, 100dvh);
     box-shadow: 18px 0 42px rgba(0, 0, 0, .28);
   }
 
@@ -968,7 +973,7 @@
 
   .message-list-content {
     max-width: none;
-    padding: 18px 14px calc(214px + var(--keyboard-offset, 0px));
+    padding: 18px 14px 156px;
     gap: 14px;
   }
 

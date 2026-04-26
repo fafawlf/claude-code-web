@@ -83,12 +83,12 @@ test('mobile layout pins composer to visual viewport without horizontal page ove
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 
   assert.match(html, /interactive-widget=overlays-content/);
-  assert.match(css, /--keyboard-offset/);
+  assert.match(css, /height:\s*var\(--vvh,\s*100dvh\)/);
   assert.match(css, /\.composer-wrap\s*\{[^}]*position:\s*fixed/s);
   assert.doesNotMatch(css, /\.composer-wrap\s*\{[^}]*translate3d\(0,\s*calc\(-1 \* var\(--keyboard-offset/s);
-  assert.match(css, /\.message-list-content\s*\{[^}]*var\(--keyboard-offset/s);
+  assert.doesNotMatch(css, /\.message-list-content\s*\{[^}]*var\(--keyboard-offset/s);
   assert.match(css, /overflow-x:\s*hidden/);
-  assert.match(css, /height:\s*100svh/);
+  assert.doesNotMatch(css, /height:\s*100svh/);
 });
 
 test('mobile viewport helper ignores visual offset while computing keyboard height', () => {
