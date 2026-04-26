@@ -26,6 +26,7 @@ import { appUrl } from './appUrl';
 
 const EDIT_LIKE = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const SETUP_SEEN_KEY = 'ccw_setup_seen_v1';
+const ACTIVE_SESSION_KEY = 'ccw_active_session_v1';
 
 function getToken(): string | null {
   const url = new URL(window.location.href);
@@ -42,11 +43,15 @@ function getToken(): string | null {
 export function App() {
   const token = getToken();
   const toast = useToast();
+  const restoredActiveRef = useRef<StoredActiveSession | null>(readStoredActiveSession());
+  const initialChatState = restoredActiveRef.current
+    ? withReady({ ...initialState }, restoredActiveRef.current.state)
+    : initialState;
   const [authed, setAuthed] = useState<boolean | null>(null);
-  const [state, setState] = useState<ChatState>(initialState);
-  const stateRef = useRef<ChatState>(initialState);
+  const [state, setState] = useState<ChatState>(initialChatState);
+  const stateRef = useRef<ChatState>(initialChatState);
   const cacheRef = useRef<Map<string, ChatState>>(new Map());
-  const activeSessionIdRef = useRef<string | null>(null);
+  const activeSessionIdRef = useRef<string | null>(restoredActiveRef.current?.sessionId ?? null);
   const liveStatusRef = useRef<Map<string, SessionStateSnapshot['runtimeStatus']>>(new Map());
   const [nonEditPermReq, setNonEditPermReq] = useState<ServerPermissionRequest | null>(null);
   const [pendingEdits, setPendingEdits] = useState<Map<string, ServerPermissionRequest>>(new Map());
@@ -86,6 +91,7 @@ export function App() {
       const next = typeof nextState === 'function' ? nextState(prev) : nextState;
       stateRef.current = next;
       rememberChatState(cacheRef.current, activeSessionIdRef.current, next);
+      writeStoredActiveSession(activeSessionIdRef.current, next.state);
       return next;
     });
   }, []);
@@ -388,6 +394,7 @@ export function App() {
     setLiveSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
     if (activeSessionIdRef.current === sessionId) {
       activeSessionIdRef.current = null;
+      writeStoredActiveSession(null, null);
       commitState(initialState);
       setPendingEdits(new Map());
       setNonEditPermReq(null);
@@ -786,6 +793,35 @@ function safeReadSkin(): SkinId {
 function safeReadLocalStorage(key: string): string | null {
   try { return window.localStorage.getItem(key); }
   catch { return null; }
+}
+
+type StoredActiveSession = {
+  sessionId: string;
+  state: SessionStateSnapshot;
+};
+
+function readStoredActiveSession(): StoredActiveSession | null {
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredActiveSession>;
+    if (!parsed.sessionId || !parsed.state?.sessionId) return null;
+    return { sessionId: parsed.sessionId, state: parsed.state as SessionStateSnapshot };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredActiveSession(sessionId: string | null, state: SessionStateSnapshot | null): void {
+  try {
+    if (!sessionId || !state) {
+      window.localStorage.removeItem(ACTIVE_SESSION_KEY);
+      return;
+    }
+    window.localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify({ sessionId, state }));
+  } catch {
+    // localStorage can be unavailable in private contexts.
+  }
 }
 
 function readSelectedProvider(): AgentProviderId {
