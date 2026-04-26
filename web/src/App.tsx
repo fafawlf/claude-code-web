@@ -838,10 +838,10 @@ function installMobileViewportVars(): () => void {
 
   const update = () => {
     const visualHeight = vv?.height ?? window.innerHeight;
-    const visualTop = vv?.offsetTop ?? 0;
-    layoutHeight = Math.max(layoutHeight, window.innerHeight, visualHeight, root.clientHeight);
-    const visualBottom = visualTop + visualHeight;
-    const rawKeyboard = Math.max(0, layoutHeight - visualBottom);
+    if (!focused) {
+      layoutHeight = Math.max(window.innerHeight, visualHeight, root.clientHeight);
+    }
+    const rawKeyboard = Math.max(0, layoutHeight - visualHeight);
     let keyboard = rawKeyboard > 80 ? rawKeyboard : 0;
     if (focused && settled) {
       if (keyboard === 0) {
@@ -878,6 +878,7 @@ function installMobileViewportVars(): () => void {
     focused = true;
     settled = false;
     settledKeyboard = 0;
+    layoutHeight = Math.max(layoutHeight, window.innerHeight, vv?.height ?? 0, root.clientHeight);
     schedule();
   };
   const onFocusOut = () => {
