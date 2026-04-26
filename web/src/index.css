@@ -990,7 +990,7 @@
   }
 
   .jump-latest-button {
-    bottom: calc(164px + var(--keyboard-offset, 0px));
+    bottom: 164px;
   }
 
   .composer-wrap {
@@ -1000,8 +1000,6 @@
     bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 45;
     width: auto;
-    transform: translate3d(0, calc(-1 * var(--keyboard-offset, 0px)), 0);
-    will-change: transform;
     contain: layout paint style;
   }
 
@@ -1232,7 +1230,7 @@
     position: fixed;
     left: 10px;
     right: 10px;
-    bottom: calc(max(82px, calc(env(safe-area-inset-bottom) + 82px)) + var(--keyboard-offset, 0px));
+    bottom: max(82px, calc(env(safe-area-inset-bottom) + 82px));
     z-index: 65;
     width: auto;
     max-height: min(360px, calc(100dvh - 120px));
