@@ -5,7 +5,7 @@ import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, isAbsolute, sep } from 'node:path';
 import { arch, homedir, platform } from 'node:os';
 import { timingSafeEqualStr } from './auth.js';
-import { detectClaudeAuthInfo } from './authInfo.js';
+import { detectClaudeAuthInfo, detectCodexAuthInfo } from './authInfo.js';
 import type { SessionManager } from './session/SessionManager.js';
 import { detectClaudeExecutable } from './session/resolveClaudePath.js';
 import { detectCodexExecutable } from './agents/resolveCodexPath.js';
@@ -51,6 +51,7 @@ export function registerApi(
     home: homedir(),
     node: nodes.get('local'),
     auth: detectClaudeAuthInfo(),
+    codexAuth: detectCodexAuthInfo(),
     claude: detectClaudeExecutable(),
     codex: detectCodexExecutable(),
     server: {
@@ -74,6 +75,7 @@ export function registerApi(
       cwd: node.defaultCwd,
       home: homedir(),
       auth: detectClaudeAuthInfo(),
+      codexAuth: detectCodexAuthInfo(),
       claude: detectClaudeExecutable(),
       codex: detectCodexExecutable(),
       server: {

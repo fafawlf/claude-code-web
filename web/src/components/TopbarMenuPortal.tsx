@@ -5,13 +5,14 @@ type Props = {
   anchorRef: RefObject<HTMLElement>;
   onClose: () => void;
   children: ReactNode;
+  width?: number;
 };
 
-export function TopbarMenuPortal({ anchorRef, onClose, children }: Props) {
+export function TopbarMenuPortal({ anchorRef, onClose, children, width = 256 }: Props) {
   const [style, setStyle] = useState<CSSProperties>(() => fallbackStyle());
 
   useEffect(() => {
-    const update = () => setStyle(positionMenu(anchorRef.current));
+    const update = () => setStyle(positionMenu(anchorRef.current, width));
     update();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -24,7 +25,7 @@ export function TopbarMenuPortal({ anchorRef, onClose, children }: Props) {
       window.removeEventListener('scroll', update, true);
       window.removeEventListener('keydown', onKey);
     };
-  }, [anchorRef, onClose]);
+  }, [anchorRef, onClose, width]);
 
   if (typeof document === 'undefined') return null;
 
@@ -42,7 +43,7 @@ export function TopbarMenuPortal({ anchorRef, onClose, children }: Props) {
   );
 }
 
-function positionMenu(anchor: HTMLElement | null): CSSProperties {
+function positionMenu(anchor: HTMLElement | null, width: number): CSSProperties {
   if (!anchor || typeof window === 'undefined') return fallbackStyle();
   const rect = anchor.getBoundingClientRect();
   const gap = 6;
@@ -57,7 +58,6 @@ function positionMenu(anchor: HTMLElement | null): CSSProperties {
     };
   }
 
-  const width = 256;
   const left = Math.min(Math.max(margin, Math.round(rect.left)), Math.max(margin, window.innerWidth - width - margin));
   return {
     position: 'fixed',

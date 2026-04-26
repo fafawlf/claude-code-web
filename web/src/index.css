@@ -919,6 +919,7 @@
     white-space: nowrap;
   }
 
+  .app-topbar .agent-menu-label,
   .app-topbar .node-provider-label {
     display: inline-block;
     max-width: 38vw;

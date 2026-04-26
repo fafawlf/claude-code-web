@@ -636,6 +636,8 @@ export function App() {
           state={state.state}
           cwd={currentCwd}
           auth={authInfo}
+          codexAuth={serverInfo?.codexAuth}
+          codexDefaultModel={serverInfo?.codex?.defaultModel}
           nodes={nodes}
           selectedNodeId={selectedNodeId}
           selectedProvider={selectedProvider}

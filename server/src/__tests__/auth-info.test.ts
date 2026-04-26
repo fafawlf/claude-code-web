@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectClaudeAuthInfo } from '../authInfo.js';
+import { detectClaudeAuthInfo, detectCodexAuthInfo } from '../authInfo.js';
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), 'ccw-auth-'));
@@ -13,6 +13,12 @@ function writeCredentials(home: string, payload: unknown) {
   const dir = join(home, '.claude');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, '.credentials.json'), JSON.stringify(payload), 'utf8');
+}
+
+function writeCodexFile(home: string, name: string, content: string) {
+  const dir = join(home, '.codex');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, name), content, 'utf8');
 }
 
 test('detectClaudeAuthInfo reports API key auth first', () => {
@@ -74,6 +80,39 @@ test('detectClaudeAuthInfo handles account with unknown plan and no auth', () =>
     assert.equal(none.source, 'none');
   } finally {
     rmSync(accountHome, { recursive: true, force: true });
+    rmSync(emptyHome, { recursive: true, force: true });
+  }
+});
+
+test('detectCodexAuthInfo reports ChatGPT Codex Pro when GPT-5.5 is available', () => {
+  const home = tempHome();
+  try {
+    writeCodexFile(home, 'auth.json', JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'redacted' } }));
+    writeCodexFile(home, 'config.toml', 'model = "gpt-5.5"\n');
+    const info = detectCodexAuthInfo({ env: {}, home });
+
+    assert.equal(info.source, 'chatgpt');
+    assert.equal(info.plan, 'pro');
+    assert.equal(info.label, 'Codex Pro');
+    assert.match(info.detail ?? '', /gpt-5\.5/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('detectCodexAuthInfo reports OpenAI API and missing auth safely', () => {
+  const apiHome = tempHome();
+  const emptyHome = tempHome();
+  try {
+    writeCodexFile(apiHome, 'auth.json', JSON.stringify({ auth_mode: 'api', OPENAI_API_KEY: 'redacted' }));
+    const api = detectCodexAuthInfo({ env: {}, home: apiHome });
+    const none = detectCodexAuthInfo({ env: {}, home: emptyHome });
+
+    assert.equal(api.source, 'api');
+    assert.equal(api.label, 'OpenAI API');
+    assert.equal(none.source, 'none');
+  } finally {
+    rmSync(apiHome, { recursive: true, force: true });
     rmSync(emptyHome, { recursive: true, force: true });
   }
 });

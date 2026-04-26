@@ -1,15 +1,15 @@
 import { useState } from 'react';
-import type { AgentProviderId, ClaudeAuthInfo, NodeInfo, SessionStateSnapshot } from '../types';
+import type { AgentProviderId, ClaudeAuthInfo, CodexAuthInfo, NodeInfo, SessionStateSnapshot } from '../types';
 import type { SkinId } from '../skins';
-import { ModelMenu } from './ModelMenu';
-import { NodeProviderMenu } from './NodeProviderMenu';
-import { SkinMenu } from './SkinMenu';
+import { AgentMenu } from './AgentMenu';
 import { Icon } from './Icon';
 
 type Props = {
   state: SessionStateSnapshot | null;
   cwd: string;
   auth?: ClaudeAuthInfo | null;
+  codexAuth?: CodexAuthInfo | null;
+  codexDefaultModel?: string;
   nodes?: NodeInfo[];
   selectedNodeId?: string;
   selectedProvider?: AgentProviderId;
@@ -32,8 +32,6 @@ export function TopBar(p: Props) {
   const s = p.state;
 
   const cwdShort = p.cwd ? shortPath(p.cwd) : '…';
-  const tok = s ? formatTokens(s.tokensIn + s.tokensOut) : '—';
-  const cost = s?.cost ? `$${s.cost.toFixed(3)}` : null;
   const currentProvider = s?.provider ?? p.selectedProvider;
   const currentNodeId = s?.nodeId ?? p.selectedNodeId;
 
@@ -62,19 +60,21 @@ export function TopBar(p: Props) {
           <Icon name="chev-down" size={12} className="opacity-50" />
         </button>
 
-        <Separator />
-
-        <NodeProviderMenu
+        <AgentMenu
           nodes={p.nodes ?? []}
           currentNodeId={currentNodeId}
           currentProvider={currentProvider}
-          onSelect={p.onSelectNodeProvider}
+          currentModel={s?.model}
+          codexDefaultModel={p.codexDefaultModel}
+          auth={p.auth}
+          codexAuth={p.codexAuth}
+          skin={p.skin}
+          onSelectNodeProvider={p.onSelectNodeProvider}
+          onSelectModel={p.onSelectModel}
+          onSelectSkin={p.onSelectSkin}
         />
-        <ModelMenu current={s?.model} provider={currentProvider} onSelect={p.onSelectModel} />
-        <SkinMenu current={p.skin} onSelect={p.onSelectSkin} />
 
         <div className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
-          <AuthBadge auth={p.auth} />
           {s?.viewerMode && (
             <>
               <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-warning/10 text-warning border border-warning/30">
@@ -123,36 +123,10 @@ export function TopBar(p: Props) {
               {p.sessionTitle}
             </button>
           ) : null}
-          <span className="topbar-tokens" title="tokens in + out">{tok} tok</span>
-          {cost && <span className="topbar-cost" title="session cost">{cost}</span>}
         </div>
       </header>
 
     </>
-  );
-}
-
-function Separator() {
-  return <div className="w-px h-3.5 bg-border-subtle mx-1.5" />;
-}
-
-function AuthBadge({ auth }: { auth?: ClaudeAuthInfo | null }) {
-  if (!auth) return null;
-  const cls = auth.source === 'api'
-    ? 'text-accent-hi bg-bg-accent-soft border-accent/20'
-    : auth.plan === 'max'
-      ? 'text-warning bg-warning/10 border-warning/25'
-      : auth.plan === 'pro'
-        ? 'text-success bg-success/10 border-success/25'
-        : auth.source === 'none'
-          ? 'text-danger bg-danger/10 border-danger/25'
-          : 'text-text-secondary bg-bg-raised/60 border-border-subtle';
-  const title = auth.detail ? `${auth.label} · ${auth.detail}` : auth.label;
-  return (
-    <span className={`auth-badge inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] font-medium ${cls}`} title={title}>
-      <Icon name={auth.source === 'api' ? 'terminal' : 'shield'} size={11} />
-      {auth.label}
-    </span>
   );
 }
 
@@ -163,10 +137,4 @@ function shortPath(p: string): string {
   const parts = s.split('/').filter(Boolean);
   if (parts.length <= 3) return s;
   return (s.startsWith('~') ? '~/' : '/') + '…/' + parts.slice(-2).join('/');
-}
-
-function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return (n / 1000).toFixed(1) + 'k';
-  return (n / 1_000_000).toFixed(2) + 'M';
 }

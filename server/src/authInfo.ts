@@ -1,10 +1,18 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { readCodexDefaultModel } from './agents/resolveCodexPath.js';
 
 export type ClaudeAuthInfo = {
   source: 'api' | 'account' | 'none' | 'unknown';
   plan?: 'max' | 'pro' | 'unknown';
+  label: string;
+  detail?: string;
+};
+
+export type CodexAuthInfo = {
+  source: 'chatgpt' | 'api' | 'none' | 'unknown';
+  plan?: 'pro' | 'unknown';
   label: string;
   detail?: string;
 };
@@ -37,6 +45,38 @@ export function detectClaudeAuthInfo(opts: DetectOptions = {}): ClaudeAuthInfo {
   return { source: 'none', label: 'No Claude auth', detail: 'API key or claude login not detected' };
 }
 
+export function detectCodexAuthInfo(opts: DetectOptions = {}): CodexAuthInfo {
+  const env = opts.env ?? process.env;
+  const home = opts.home ?? homedir();
+  const authPath = join(home, '.codex', 'auth.json');
+  const defaultModel = readCodexDefaultModel(home);
+  const hasGpt55 = defaultModel === 'gpt-5.5' || codexModelCacheHas(home, 'gpt-5.5');
+
+  if (existsSync(authPath)) {
+    try {
+      const auth = JSON.parse(readFileSync(authPath, 'utf8')) as Record<string, unknown>;
+      const mode = typeof auth.auth_mode === 'string' ? auth.auth_mode : undefined;
+      if (mode === 'chatgpt' || auth.tokens) {
+        return {
+          source: 'chatgpt',
+          plan: hasGpt55 ? 'pro' : 'unknown',
+          label: hasGpt55 ? 'Codex Pro' : 'Codex ChatGPT',
+          detail: [mode === 'chatgpt' ? 'ChatGPT login' : 'Codex login', defaultModel ? `default ${defaultModel}` : undefined].filter(Boolean).join(' · '),
+        };
+      }
+      if (mode === 'api' || auth.OPENAI_API_KEY) {
+        return { source: 'api', label: 'OpenAI API', detail: 'Codex API key login' };
+      }
+      return { source: 'unknown', label: 'Codex auth', detail: 'Codex auth file detected' };
+    } catch {
+      return { source: 'unknown', label: 'Codex auth', detail: 'Could not read Codex auth status' };
+    }
+  }
+
+  if (env.OPENAI_API_KEY) return { source: 'api', label: 'OpenAI API', detail: 'OPENAI_API_KEY' };
+  return { source: 'none', label: 'No Codex auth', detail: 'Run codex login' };
+}
+
 function inferPlanFromCredentials(file: string): ClaudeAuthInfo['plan'] {
   try {
     const raw = readFileSync(file, 'utf8');
@@ -64,4 +104,14 @@ function collectLikelyPlanValues(value: unknown): string[] {
   };
   visit(value);
   return out;
+}
+
+function codexModelCacheHas(home: string, slug: string): boolean {
+  try {
+    const raw = readFileSync(join(home, '.codex', 'models_cache.json'), 'utf8');
+    const parsed = JSON.parse(raw) as { models?: Array<{ slug?: string }> };
+    return parsed.models?.some((m) => m.slug === slug) ?? false;
+  } catch {
+    return false;
+  }
 }

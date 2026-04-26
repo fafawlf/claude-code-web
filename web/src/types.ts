@@ -40,6 +40,13 @@ export type ClaudeAuthInfo = {
   detail?: string;
 };
 
+export type CodexAuthInfo = {
+  source: 'chatgpt' | 'api' | 'none' | 'unknown';
+  plan?: 'pro' | 'unknown';
+  label: string;
+  detail?: string;
+};
+
 export type ClaudeExecutableInfo = {
   source: 'env' | 'path' | 'bundled' | 'missing';
   label: string;
@@ -52,6 +59,7 @@ export type CodexExecutableInfo = {
   label: string;
   path?: string;
   detail?: string;
+  defaultModel?: string;
 };
 
 export type NodeInfo = {
@@ -76,6 +84,7 @@ export type ServerInfo = {
   home: string;
   node?: NodeInfo;
   auth: ClaudeAuthInfo;
+  codexAuth?: CodexAuthInfo;
   claude?: ClaudeExecutableInfo;
   codex?: CodexExecutableInfo;
   server?: ServerRuntimeInfo;
@@ -152,9 +161,10 @@ export const MODEL_OPTIONS = [
 ] as const;
 
 export const CODEX_MODEL_OPTIONS = [
+  { id: 'gpt-5.5', label: 'GPT-5.5', hint: 'frontier coding' },
+  { id: 'gpt-5.4', label: 'GPT-5.4', hint: 'newer reasoning' },
   { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', hint: 'Codex-optimized' },
   { id: 'gpt-5.2', label: 'GPT-5.2', hint: 'general agent' },
-  { id: 'gpt-5.4', label: 'GPT-5.4', hint: 'newer reasoning' },
 ] as const;
 
 export function modelOptionsForProvider(provider: AgentProviderId | undefined) {
@@ -171,6 +181,12 @@ export function providerLabel(provider: AgentProviderId | undefined): string {
 
 export function defaultModelLabel(provider: AgentProviderId | undefined): string {
   return provider === 'codex' ? 'Codex default' : 'default';
+}
+
+export function modelLabel(provider: AgentProviderId | undefined, model?: string, fallbackModel?: string): string {
+  const effective = model ?? fallbackModel;
+  if (!effective) return defaultModelLabel(provider);
+  return modelOptionsForProvider(provider).find((m) => effective.startsWith(m.id))?.label ?? effective;
 }
 
 // Shift+Tab cycles only through the three non-dangerous modes. bypass is

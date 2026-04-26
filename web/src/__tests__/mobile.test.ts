@@ -29,9 +29,8 @@ test('TopBar exposes a mobile projects drawer trigger without replacing project 
 
   assert.match(html, /mobile-sidebar-button/);
   assert.match(html, /Open projects/);
-  assert.match(html, /Open command|Change skin|API/);
-  assert.match(html, /This machine/);
   assert.match(html, /Claude Code/);
+  assert.doesNotMatch(html, /API/);
   assert.match(html, /random shit/);
 });
 
