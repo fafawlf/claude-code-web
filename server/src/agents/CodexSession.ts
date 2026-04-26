@@ -1,4 +1,7 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
@@ -13,6 +16,24 @@ type CodexJsonEvent = {
   type?: string;
   thread_id?: string;
   message?: string;
+  timestamp?: string;
+  payload?: {
+    id?: string;
+    type?: string;
+    role?: string;
+    message?: string;
+    content?: Array<{ type?: string; text?: string }>;
+    name?: string;
+    arguments?: string;
+    call_id?: string;
+    output?: string;
+    command?: string[];
+    aggregated_output?: string;
+    exit_code?: number;
+    last_agent_message?: string;
+    model?: string;
+    [key: string]: unknown;
+  };
   usage?: { input_tokens?: number; cached_input_tokens?: number; output_tokens?: number };
   item?: {
     id?: string;
@@ -41,6 +62,12 @@ export class CodexSession {
   private controlListeners = new Set<ControlListener>();
   private stderrTail = '';
   private activeTurn?: ActiveToolInfo;
+  private historyReadyResolve!: () => void;
+  private seenAssistantTexts = new Set<string>();
+  private seenUserTexts = new Set<string>();
+  private seenToolCalls = new Set<string>();
+  private seenToolResults = new Set<string>();
+  private resultPushedForTurn = false;
 
   constructor(opts: AgentSessionOptions) {
     this.id = opts.id;
@@ -68,11 +95,14 @@ export class CodexSession {
     this.planBroker = new PlanBroker(() => {
       throw new Error('Codex provider does not expose plan approval yet');
     });
-    this.historyReady = Promise.resolve();
+    this.historyReady = new Promise<void>((resolve) => { this.historyReadyResolve = resolve; });
+    if (opts.resume) void this.loadHistory(opts.resume);
+    else this.historyReadyResolve();
   }
 
   sendUser(text: string): void {
     if (this.closed || this.state.viewerMode) return;
+    this.seenUserTexts.add(normalizeForDedupe(text));
     this.pushEvent({ type: 'user', message: { role: 'user', content: text } });
     if (this.running) {
       this.pendingPrompts.push(text);
@@ -152,6 +182,7 @@ export class CodexSession {
 
     this.running = true;
     this.stderrTail = '';
+    this.resultPushedForTurn = false;
     this.activeTurn = {
       toolUseId: `codex_turn_${this.nextEventId}`,
       name: 'Codex',
@@ -245,6 +276,21 @@ export class CodexSession {
 
   private handleCodexEvent(event: CodexJsonEvent): void {
     switch (event.type) {
+      case 'session_meta':
+        if (event.payload?.id) {
+          this.updateState({
+            providerSessionId: event.payload.id,
+            claudeSessionId: event.payload.id,
+            model: typeof event.payload.model === 'string' ? event.payload.model : this.state.model,
+          });
+        }
+        break;
+      case 'event_msg':
+        this.handleCodexEventMessage(event.payload);
+        break;
+      case 'response_item':
+        this.handleCodexResponseItem(event.payload);
+        break;
       case 'thread.started':
         if (event.thread_id) {
           this.updateState({
@@ -261,7 +307,7 @@ export class CodexSession {
         break;
       case 'turn.completed':
         this.updateUsage(event.usage);
-        this.pushEvent({ type: 'result' });
+        this.pushResult();
         break;
       case 'error':
         if (event.message && !event.message.startsWith('Reconnecting...')) {
@@ -275,10 +321,77 @@ export class CodexSession {
     }
   }
 
+  private handleCodexEventMessage(payload: CodexJsonEvent['payload']): void {
+    if (!payload) return;
+    switch (payload.type) {
+      case 'task_started':
+        this.updateState({ runtimeStatus: 'running', activeTool: this.activeTurn });
+        break;
+      case 'user_message':
+        if (typeof payload.message === 'string') this.pushUserText(payload.message);
+        break;
+      case 'agent_message':
+        if (typeof payload.message === 'string') this.pushAssistantText(payload.message);
+        break;
+      case 'exec_command_end': {
+        const callId = typeof payload.call_id === 'string' ? payload.call_id : undefined;
+        if (callId) {
+          this.pushToolResult(callId, payload.aggregated_output ?? '', (payload.exit_code ?? 0) !== 0);
+        }
+        break;
+      }
+      case 'task_complete':
+        if (typeof payload.last_agent_message === 'string') this.pushAssistantText(payload.last_agent_message);
+        this.pushResult();
+        break;
+    }
+  }
+
+  private handleCodexResponseItem(payload: CodexJsonEvent['payload']): void {
+    if (!payload) return;
+    if (payload.type === 'message' && payload.role === 'assistant' && Array.isArray(payload.content)) {
+      const text = payload.content
+        .filter((part) => part?.type === 'output_text' && typeof part.text === 'string')
+        .map((part) => part.text)
+        .join('');
+      this.pushAssistantText(text);
+      return;
+    }
+    if (payload.type === 'function_call') {
+      const callId = typeof payload.call_id === 'string' ? payload.call_id : `codex_tool_${this.nextEventId}`;
+      if (this.seenToolCalls.has(callId)) return;
+      this.seenToolCalls.add(callId);
+      const name = codexToolName(typeof payload.name === 'string' ? payload.name : 'CodexTool');
+      const input = parseCodexArguments(payload.arguments);
+      this.pushEvent({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: callId, name, input }] },
+      });
+      this.updateState({
+        runtimeStatus: 'running',
+        activeTool: {
+          toolUseId: callId,
+          name,
+          startedAt: Date.now(),
+          inputSummary: summarizeCodexToolInput(name, input),
+        },
+      });
+      return;
+    }
+    if (payload.type === 'function_call_output') {
+      const callId = typeof payload.call_id === 'string' ? payload.call_id : undefined;
+      if (callId) this.pushToolResult(callId, payload.output ?? '', false);
+      return;
+    }
+    if ((payload.type === 'reasoning' || payload.type === 'thinking') && typeof payload.text === 'string' && payload.text.trim()) {
+      this.pushEvent({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: payload.text }] } });
+    }
+  }
+
   private handleCompletedItem(item: CodexJsonEvent['item']): void {
     if (!item) return;
     if (item.type === 'agent_message' && typeof item.text === 'string' && item.text.trim()) {
-      this.pushEvent({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: item.text }] } });
+      this.pushAssistantText(item.text);
       return;
     }
     if ((item.type === 'reasoning' || item.type === 'thinking') && typeof item.text === 'string' && item.text.trim()) {
@@ -314,6 +427,56 @@ export class CodexSession {
     for (const listener of this.listeners) { try { listener(se); } catch { /* noop */ } }
   }
 
+  private pushUserText(text: string): void {
+    const normalized = normalizeForDedupe(text);
+    if (!normalized || this.seenUserTexts.has(normalized)) return;
+    this.seenUserTexts.add(normalized);
+    this.pushEvent({ type: 'user', message: { role: 'user', content: text } });
+  }
+
+  private pushAssistantText(text: string): void {
+    const normalized = normalizeForDedupe(text);
+    if (!normalized || this.seenAssistantTexts.has(normalized)) return;
+    this.seenAssistantTexts.add(normalized);
+    this.pushEvent({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } });
+  }
+
+  private pushToolResult(toolUseId: string, content: unknown, isError: boolean): void {
+    if (this.seenToolResults.has(toolUseId)) return;
+    this.seenToolResults.add(toolUseId);
+    this.pushEvent({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolUseId, content: String(content ?? ''), is_error: isError }],
+      },
+    });
+    if (this.state.activeTool?.toolUseId === toolUseId) {
+      this.updateState({ activeTool: this.activeTurn });
+    }
+  }
+
+  private pushResult(): void {
+    if (this.resultPushedForTurn) return;
+    this.resultPushedForTurn = true;
+    this.pushEvent({ type: 'result' });
+    this.updateState({ runtimeStatus: 'idle', activeTool: undefined });
+  }
+
+  private async loadHistory(resumeId: string): Promise<void> {
+    try {
+      const file = findCodexSessionFile(resumeId);
+      if (!file) return;
+      const lines = readFileSync(file, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean);
+      for (const line of lines) this.parseJsonLine(line, (event) => this.handleCodexEvent(event));
+    } finally {
+      if (!this.running && this.state.runtimeStatus === 'running') {
+        this.updateState({ runtimeStatus: 'idle', activeTool: undefined });
+      }
+      this.historyReadyResolve();
+    }
+  }
+
   private updateState(delta: Partial<SessionStateSnapshot>): void {
     this.state = { ...this.state, ...delta };
     for (const listener of this.stateListeners) { try { listener(delta); } catch { /* noop */ } }
@@ -323,14 +486,15 @@ export class CodexSession {
     this.running = false;
     this.child = undefined;
     this.activeTurn = undefined;
-    this.updateState({ runtimeStatus: status, activeTool: undefined });
+    if (status === 'idle') this.pushResult();
+    else this.updateState({ runtimeStatus: status, activeTool: undefined });
     const next = this.pendingPrompts.shift();
     if (next && !this.closed) this.startTurn(next);
   }
 }
 
 function codexToolName(type: string): string {
-  if (/command|exec/i.test(type)) return 'Command';
+  if (/command|exec/i.test(type)) return 'Bash';
   return 'CodexTool';
 }
 
@@ -342,4 +506,62 @@ function summarizePrompt(prompt: string): string {
   const normalized = prompt.replace(/\s+/g, ' ').trim();
   if (normalized.length <= 120) return normalized;
   return `${normalized.slice(0, 117)}...`;
+}
+
+function parseCodexArguments(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      if (typeof obj.cmd === 'string' && typeof obj.command !== 'string') obj.command = obj.cmd;
+      return obj;
+    }
+  } catch {
+    // Fall through to a raw value; older Codex builds may not JSON-encode args.
+  }
+  return { value };
+}
+
+function summarizeCodexToolInput(name: string, input: Record<string, unknown>): string | undefined {
+  const value =
+    name === 'Bash' ? input.cmd ?? input.command :
+    input.file_path ?? input.path ?? Object.values(input)[0];
+  if (Array.isArray(value)) return value.join(' ').slice(0, 120);
+  if (typeof value !== 'string') return undefined;
+  return value.length > 120 ? `${value.slice(0, 117)}...` : value;
+}
+
+function normalizeForDedupe(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function codexHome(): string {
+  return process.env.CODEX_HOME || join(homedir(), '.codex');
+}
+
+function findCodexSessionFile(sessionId: string): string | undefined {
+  const root = join(codexHome(), 'sessions');
+  if (!existsSync(root)) return undefined;
+  let best: { path: string; mtime: number } | undefined;
+  const walk = (dir: string, depth: number) => {
+    if (depth > 5) return;
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(path, depth + 1);
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl') && basename(entry.name).includes(sessionId)) {
+        const mtime = statSync(path).mtimeMs;
+        if (!best || mtime >= best.mtime) best = { path, mtime };
+      }
+    }
+  };
+  walk(root, 0);
+  return best?.path;
 }
