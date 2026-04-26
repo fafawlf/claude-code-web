@@ -11,7 +11,7 @@ export function buildReconnectHello(activeSessionId: string | null, state: ChatS
     sessionId: activeSessionId,
     lastEventId,
     cwd: snap?.cwd,
-    resumeClaudeId: snap?.claudeSessionId,
+    resumeClaudeId: snap?.providerSessionId ?? snap?.claudeSessionId,
     model: snap?.model,
     permissionMode: snap?.permissionMode,
     viewerMode: snap?.viewerMode,

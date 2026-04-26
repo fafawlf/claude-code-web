@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import type { ClaudeAuthInfo, SessionStateSnapshot } from '../types';
+import type { AgentProviderId, ClaudeAuthInfo, NodeInfo, SessionStateSnapshot } from '../types';
 import type { SkinId } from '../skins';
 import { ModelMenu } from './ModelMenu';
+import { NodeProviderMenu } from './NodeProviderMenu';
 import { SkinMenu } from './SkinMenu';
 import { Icon } from './Icon';
 
@@ -9,8 +10,12 @@ type Props = {
   state: SessionStateSnapshot | null;
   cwd: string;
   auth?: ClaudeAuthInfo | null;
+  nodes?: NodeInfo[];
+  selectedNodeId?: string;
+  selectedProvider?: AgentProviderId;
   onOpenSidebar?: () => void;
   onOpenProject: () => void;
+  onSelectNodeProvider: (nodeId: string, provider: AgentProviderId) => void;
   onSelectModel: (model: string) => void;
   skin: SkinId;
   onSelectSkin: (skin: SkinId) => void;
@@ -29,6 +34,8 @@ export function TopBar(p: Props) {
   const cwdShort = p.cwd ? shortPath(p.cwd) : '…';
   const tok = s ? formatTokens(s.tokensIn + s.tokensOut) : '—';
   const cost = s?.cost ? `$${s.cost.toFixed(3)}` : null;
+  const currentProvider = s?.provider ?? p.selectedProvider;
+  const currentNodeId = s?.nodeId ?? p.selectedNodeId;
 
   return (
     <>
@@ -57,7 +64,13 @@ export function TopBar(p: Props) {
 
         <Separator />
 
-        <ModelMenu current={s?.model} onSelect={p.onSelectModel} />
+        <NodeProviderMenu
+          nodes={p.nodes ?? []}
+          currentNodeId={currentNodeId}
+          currentProvider={currentProvider}
+          onSelect={p.onSelectNodeProvider}
+        />
+        <ModelMenu current={s?.model} provider={currentProvider} onSelect={p.onSelectModel} />
         <SkinMenu current={p.skin} onSelect={p.onSelectSkin} />
 
         <div className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
@@ -84,12 +97,12 @@ export function TopBar(p: Props) {
               )}
             </>
           )}
-          {s?.claudeSessionId && (
+          {(s?.providerSessionId ?? s?.claudeSessionId) && (
             <span
               className="session-id-pill font-mono text-[10px] text-text-muted hover:text-text-secondary transition-colors duration-hover cursor-default px-1.5 py-0.5 rounded bg-bg-raised/60 border border-border-subtle"
-              title={`Session ${s.claudeSessionId}`}
+              title={`Session ${s.providerSessionId ?? s.claudeSessionId}`}
             >
-              #{s.claudeSessionId.slice(0, 7)}
+              #{(s.providerSessionId ?? s.claudeSessionId)!.slice(0, 7)}
             </span>
           )}
           {renaming ? (

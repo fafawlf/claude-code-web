@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import type { PermissionMode } from '../types';
+import type { AgentProviderId, PermissionMode } from '../types';
 import { MODE_ORDER, modeHint, modeLabel } from '../types';
 import { SlashPalette, type SlashAction } from './SlashPalette';
 import { MentionPopup } from './MentionPopup';
@@ -13,6 +13,7 @@ type Props = {
   token: string;
   cwd: string;
   mode: PermissionMode;
+  provider?: AgentProviderId;
   busy: boolean;
   ready: boolean;
   readOnly?: boolean;
@@ -346,7 +347,7 @@ function InputBarImpl(p: Props) {
         </div>
 
         {slashQuery !== null && (
-          <SlashPalette query={slashQuery} onPick={pickSlash} onClose={() => setSlashQuery(null)} />
+          <SlashPalette query={slashQuery} provider={p.provider} onPick={pickSlash} onClose={() => setSlashQuery(null)} />
         )}
         {mentionQuery !== null && slashQuery === null && (
           <MentionPopup token={p.token} cwd={p.cwd} query={mentionQuery} onPick={insertMention} onClose={() => setMentionQuery(null)} />

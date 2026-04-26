@@ -30,3 +30,8 @@ export function detectCodexExecutable(): CodexExecutableInfo {
     detail: envPath ? `CODEX_PATH does not exist: ${envPath}` : 'Install codex or set CODEX_PATH',
   };
 }
+
+export function resolveCodexPath(): string | undefined {
+  const info = detectCodexExecutable();
+  return info.source === 'missing' ? undefined : info.path;
+}

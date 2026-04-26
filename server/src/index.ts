@@ -61,7 +61,7 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
   });
 
   registerApi(app, opts.token, opts.defaultCwd, sm, nodes, { host: opts.host, port: opts.port });
-  registerWs(app, sm, opts.token, opts.defaultCwd);
+  registerWs(app, sm, opts.token, opts.defaultCwd, nodes);
 
   const host = opts.host ?? '127.0.0.1';
   await app.listen({ host, port: opts.port });

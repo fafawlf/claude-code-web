@@ -20,6 +20,7 @@ This is an independent open-source project and is not affiliated with Anthropic.
 ## Highlights
 
 - Web chat UI for local or remote Claude Code
+- Experimental local Codex provider, selectable from the same top bar
 - Project launcher with recent and pinned projects
 - Markdown rendering, copyable code blocks, prompt history, smooth streaming
 - Upload files and images by picker, paste, or drag/drop
@@ -39,6 +40,8 @@ Requirements:
 - Claude Code available on the machine running the server
 - Claude Code auth already configured, either by `claude login` or the same
   environment variables you use with the Claude CLI
+- Optional: Codex CLI available on the machine running the server if you want
+  the Codex provider in the engine picker
 
 ```bash
 git clone https://github.com/fafawlf/claude-code-web.git
@@ -113,6 +116,37 @@ Do not commit real SSH hosts, usernames, or tokens.
 Keep `--host` on `127.0.0.1` unless you are deliberately putting another
 trusted access layer in front of the server.
 
+## Nodes And Engines
+
+Claude Code Web now has a node/engine selector in the top bar. Today:
+
+- `This machine · Claude Code` runs Claude Code on the machine hosting this
+  web server.
+- `This machine · Codex` appears when the server can find `codex` on `PATH` or
+  `CODEX_PATH`.
+- Extra SSH nodes can be described with `CCW_NODES_JSON`, but remote execution
+  is still guarded behind the next architecture step. Configured SSH host/user
+  details are not returned by the public `/api/nodes` response.
+
+Example SSH node config shape:
+
+```bash
+export CCW_NODES_JSON='{
+  "nodes": [
+    {
+      "id": "do",
+      "label": "DO workspace",
+      "kind": "ssh",
+      "defaultCwd": "/root/workspace",
+      "providers": ["claude", "codex"],
+      "ssh": { "host": "your-host", "user": "your-user", "port": 22 }
+    }
+  ]
+}'
+```
+
+Do not commit real node configs, hostnames, tokens, or keys.
+
 ## Security Model
 
 Claude Code Web is built for a single user over localhost or an SSH tunnel.
@@ -154,7 +188,9 @@ Skins do not inject persona prompts into Claude. They only affect the web UI.
 
 ## Roadmap
 
-- One-click switch between Claude Code and Codex backends
+- Full SSH node execution/proxying, so one UI can switch between laptop and
+  remote workspaces
+- Deeper Codex parity: history browsing, approvals, and richer tool events
 - Right sidebar for webpage previews and file rendering
 - Mobile version
 - Richer file explorer and file tree

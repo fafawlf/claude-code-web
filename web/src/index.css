@@ -919,6 +919,14 @@
     white-space: nowrap;
   }
 
+  .app-topbar .node-provider-label {
+    display: inline-block;
+    max-width: 38vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .app-topbar .ml-auto {
     margin-left: 4px;
     gap: 6px;

@@ -4,8 +4,9 @@ import type { SessionManager } from './session/SessionManager.js';
 import type { AgentSession } from './agents/types.js';
 import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type ClientHello, type ClientMessage, type ServerMessage, type PermissionMode } from './protocol.js';
 import { timingSafeEqualStr } from './auth.js';
+import { NodeRegistry } from './nodes/NodeRegistry.js';
 
-export function registerWs(app: FastifyInstance, sm: SessionManager, token: string, defaultCwd: string) {
+export function registerWs(app: FastifyInstance, sm: SessionManager, token: string, defaultCwd: string, nodes = new NodeRegistry(defaultCwd)) {
   app.get('/ws', { websocket: true }, (socket: WebSocket, req) => {
     const provided = (req.query as { t?: string } | undefined)?.t ?? '';
     if (!provided || !timingSafeEqualStr(provided, token)) {
@@ -102,7 +103,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
         detach();
 
         try {
-          const resolved = resolveHelloSession(sm, msg, defaultCwd);
+          const resolved = resolveHelloSession(sm, msg, defaultCwd, nodes);
           await attach(resolved.session, resolved.replayAfterId);
         } catch (e) {
           return send(socket, { type: 'error', message: (e as Error).message });
@@ -149,9 +150,17 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
   });
 }
 
-export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaultCwd: string): { session: AgentSession; replayAfterId: number; recovered: boolean } {
+export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaultCwd: string, nodes = new NodeRegistry(defaultCwd)): { session: AgentSession; replayAfterId: number; recovered: boolean } {
   const requestedNodeId = msg.nodeId ?? DEFAULT_NODE_ID;
   const requestedProvider = msg.provider ?? DEFAULT_AGENT_PROVIDER;
+  const node = nodes.get(requestedNodeId);
+  if (!node) throw new Error(`Node ${requestedNodeId} is not configured`);
+  if (!node.providers.includes(requestedProvider)) {
+    throw new Error(`${node.label} does not provide ${requestedProvider}`);
+  }
+  if (node.kind !== 'local') {
+    throw new Error(`SSH node ${node.label} is configured, but remote execution is not wired in this build yet`);
+  }
   if (msg.sessionId) {
     const existing = sm.get(msg.sessionId);
     if (existing) {
@@ -164,8 +173,9 @@ export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaul
   }
   const session = sm.create({
     nodeId: requestedNodeId,
+    nodeLabel: node.label,
     provider: requestedProvider,
-    cwd: msg.cwd ?? defaultCwd,
+    cwd: msg.cwd ?? node.defaultCwd ?? defaultCwd,
     resume: msg.resumeClaudeId,
     model: msg.model,
     permissionMode: msg.permissionMode,

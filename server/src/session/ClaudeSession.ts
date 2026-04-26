@@ -108,6 +108,7 @@ export class ClaudeSession {
       nodeId: opts.nodeId ?? DEFAULT_NODE_ID,
       nodeLabel: opts.nodeLabel,
       provider: opts.provider ?? DEFAULT_AGENT_PROVIDER,
+      providerSessionId: opts.resume,
       cwd: opts.cwd,
       // When resuming, the Claude session id is known up-front; helps the UI
       // show the right title / rename target without waiting for the first
@@ -226,7 +227,7 @@ export class ClaudeSession {
   private pushEvent(event: SDKMessage): void {
     const anyEv = event as any;
     if (!this.state.claudeSessionId && anyEv.session_id) {
-      this.updateState({ claudeSessionId: anyEv.session_id });
+      this.updateState({ claudeSessionId: anyEv.session_id, providerSessionId: anyEv.session_id });
     }
     const activeToolDelta = this.activeToolDelta(event);
     const id = this.nextEventId++;

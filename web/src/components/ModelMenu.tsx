@@ -1,17 +1,19 @@
 import { useRef, useState } from 'react';
-import { MODEL_OPTIONS } from '../types';
+import { defaultModelLabel, modelOptionsForProvider, type AgentProviderId } from '../types';
 import { Icon } from './Icon';
 import { TopbarMenuPortal } from './TopbarMenuPortal';
 
 type Props = {
   current?: string;
+  provider?: AgentProviderId;
   onSelect: (modelId: string) => void;
 };
 
-export function ModelMenu({ current, onSelect }: Props) {
+export function ModelMenu({ current, provider, onSelect }: Props) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const label = MODEL_OPTIONS.find((m) => current?.startsWith(m.id))?.label ?? current ?? 'default';
+  const options = modelOptionsForProvider(provider);
+  const label = options.find((m) => current?.startsWith(m.id))?.label ?? current ?? defaultModelLabel(provider);
   return (
     <div className="topbar-menu relative">
       <button ref={buttonRef} onClick={() => setOpen(!open)} className="chip" aria-expanded={open} aria-haspopup="menu">
@@ -21,7 +23,7 @@ export function ModelMenu({ current, onSelect }: Props) {
       </button>
       {open && (
         <TopbarMenuPortal anchorRef={buttonRef} onClose={() => setOpen(false)}>
-          {MODEL_OPTIONS.map((m) => {
+          {options.map((m) => {
             const active = current?.startsWith(m.id);
             return (
               <button

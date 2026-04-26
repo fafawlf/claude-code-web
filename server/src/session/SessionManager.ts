@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ClaudeProvider } from '../agents/ClaudeProvider.js';
+import { CodexProvider } from '../agents/CodexProvider.js';
 import type { AgentProvider, AgentSession } from '../agents/types.js';
 import type { PermissionListener, PlanListener } from './ClaudeSession.js';
 import type { AgentProviderId, PermissionMode, SessionStateSnapshot } from '../protocol.js';
@@ -14,7 +15,7 @@ export class SessionManager {
   private listeners = new Set<ManagerListener>();
   private providers = new Map<AgentProviderId, AgentProvider>();
 
-  constructor(providers: AgentProvider[] = [new ClaudeProvider()]) {
+  constructor(providers: AgentProvider[] = [new ClaudeProvider(), new CodexProvider()]) {
     for (const provider of providers) this.providers.set(provider.id, provider);
   }
 

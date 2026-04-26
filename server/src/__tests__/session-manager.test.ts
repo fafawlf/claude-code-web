@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SessionManager } from '../session/SessionManager.js';
+import { ClaudeProvider } from '../agents/ClaudeProvider.js';
 import { ClaudeSession } from '../session/ClaudeSession.js';
 import type { AgentProvider, AgentSession, AgentSessionOptions } from '../agents/types.js';
 
@@ -94,7 +95,7 @@ test('provider registry dispatches session creation by provider id', async () =>
 });
 
 test('provider registry reports unavailable providers', async () => {
-  const sm = new SessionManager();
+  const sm = new SessionManager([new ClaudeProvider()]);
 
   assert.throws(() => sm.create({ ...makeOpts(), provider: 'codex' }), /provider codex is not available/i);
   await sm.closeAll();

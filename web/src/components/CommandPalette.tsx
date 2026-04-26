@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { PermissionMode, SessionStateSnapshot, StoredSession } from '../types';
-import { MODEL_OPTIONS, modeLabel } from '../types';
+import type { AgentProviderId, PermissionMode, SessionStateSnapshot, StoredSession } from '../types';
+import { modelOptionsForProvider, modeLabel } from '../types';
 import type { SkinId } from '../skins';
 import { SKINS } from '../skins';
 import { Icon, type IconName } from './Icon';
@@ -33,10 +33,11 @@ type Props = {
   state: SessionStateSnapshot | null;
   sessions: StoredSession[];
   currentSkin: SkinId;
+  currentProvider?: AgentProviderId;
   onAction: (a: Action) => void;
 };
 
-export function CommandPalette({ open, onClose, state, sessions, currentSkin, onAction }: Props) {
+export function CommandPalette({ open, onClose, state, sessions, currentSkin, currentProvider, onAction }: Props) {
   const [q, setQ] = useState('');
   const [i, setI] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
@@ -54,7 +55,7 @@ export function CommandPalette({ open, onClose, state, sessions, currentSkin, on
     out.push({ id: 'act:rename', group: 'Actions', label: 'Rename current session', icon: 'pencil', action: { kind: 'rename' } });
     out.push({ id: 'act:refresh', group: 'Actions', label: 'Refresh history', icon: 'clock', action: { kind: 'refresh' } });
 
-    for (const m of MODEL_OPTIONS) {
+    for (const m of modelOptionsForProvider(state?.provider ?? currentProvider)) {
       const active = state?.model?.startsWith(m.id);
       out.push({
         id: `model:${m.id}`,
@@ -109,7 +110,7 @@ export function CommandPalette({ open, onClose, state, sessions, currentSkin, on
     }
 
     return out;
-  }, [currentSkin, state, sessions]);
+  }, [currentProvider, currentSkin, state, sessions]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();

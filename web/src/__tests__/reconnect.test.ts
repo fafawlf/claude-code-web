@@ -38,6 +38,16 @@ test('buildReconnectHello includes recovery fields for expired server-side live 
   });
 });
 
+test('buildReconnectHello resumes provider-neutral sessions with providerSessionId first', () => {
+  const state = withReady(initialState, {
+    ...snap(),
+    provider: 'codex',
+    providerSessionId: 'codex-thread-1',
+    claudeSessionId: undefined,
+  });
+  assert.equal(buildReconnectHello('live-1', state, 10).resumeClaudeId, 'codex-thread-1');
+});
+
 test('buildReconnectHello creates a plain hello before any active session exists', () => {
   assert.deepEqual(buildReconnectHello(null, initialState, 0), { type: 'hello' });
 });

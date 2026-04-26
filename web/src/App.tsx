@@ -4,8 +4,8 @@ import { applyEvent, applyStateDelta, initialState, addSystem, addUserOptimistic
 import { cachedChatState, cachedLastEventId, forgetChatState, rememberChatState } from './sessionCache';
 import { buildReconnectHello } from './reconnect';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
-import type { ClaudeAuthInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
-import { modeLabel, MODE_ORDER } from './types';
+import type { AgentProviderId, ClaudeAuthInfo, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, modeLabel, MODE_ORDER } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MessageList } from './components/MessageList';
 import { PermissionModal } from './components/PermissionModal';
@@ -57,6 +57,10 @@ export function App() {
   const [defaultCwd, setDefaultCwd] = useState<string>('');
   const [authInfo, setAuthInfo] = useState<ClaudeAuthInfo | null>(null);
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
+  const [nodes, setNodes] = useState<NodeInfo[]>([]);
+  const [nodesLoaded, setNodesLoaded] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string>(() => safeReadLocalStorage('ccw_selected_node') ?? DEFAULT_NODE_ID);
+  const [selectedProvider, setSelectedProvider] = useState<AgentProviderId>(() => readSelectedProvider());
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const connected = connection === 'open';
   const [sessionTitle, setSessionTitle] = useState<string | undefined>(undefined);
@@ -71,6 +75,11 @@ export function App() {
   const [setupSeen, setSetupSeen] = useState<boolean>(() => readSetupSeen());
   const [skin, setSkinState] = useState<SkinId>(() => safeReadSkin());
   const wsRef = useRef<WsClient | null>(null);
+  const selectedNodeIdRef = useRef(selectedNodeId);
+  const selectedProviderRef = useRef(selectedProvider);
+
+  useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
+  useEffect(() => { selectedProviderRef.current = selectedProvider; }, [selectedProvider]);
 
   const commitState = useCallback((nextState: ChatState | ((prev: ChatState) => ChatState)) => {
     setState((prev) => {
@@ -155,6 +164,18 @@ export function App() {
 
   const currentCwd = state.state?.cwd ?? defaultCwd;
 
+  const selectNodeSilently = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    selectedNodeIdRef.current = nodeId;
+    try { window.localStorage.setItem('ccw_selected_node', nodeId); } catch { /* localStorage can be unavailable */ }
+  }, []);
+
+  const selectProviderSilently = useCallback((provider: AgentProviderId) => {
+    setSelectedProvider(provider);
+    selectedProviderRef.current = provider;
+    try { window.localStorage.setItem('ccw_selected_provider', provider); } catch { /* localStorage can be unavailable */ }
+  }, []);
+
   const allKnownSessions = useMemo(() => {
     const byId = new Map<string, StoredSession>();
     for (const list of Object.values(projectSessions)) {
@@ -181,9 +202,29 @@ export function App() {
         setServerInfo(info);
         setDefaultCwd(info.cwd ?? '');
         setAuthInfo(info.auth ?? null);
+        if (info.node) {
+          setNodes((prev) => prev.length ? prev : [info.node!]);
+          if (!safeReadLocalStorage('ccw_selected_node')) selectNodeSilently(info.node.id);
+        }
         if (info.home) (window as unknown as { __ccw_home__?: string }).__ccw_home__ = info.home;
       });
-  }, [authed, token]);
+  }, [authed, selectNodeSilently, token]);
+
+  useEffect(() => {
+    if (!authed || !token) return;
+    fetch(appUrl(`/api/nodes?t=${encodeURIComponent(token)}`))
+      .then((r) => r.json())
+      .then((j) => {
+        const list = (j.nodes ?? []) as NodeInfo[];
+        setNodes(list);
+        const preferred = list.find((n) => n.id === selectedNodeIdRef.current) ?? list[0];
+        if (!preferred) return;
+        if (preferred.id !== selectedNodeIdRef.current) selectNodeSilently(preferred.id);
+        if (!preferred.providers.includes(selectedProviderRef.current)) selectProviderSilently(preferred.providers[0] ?? DEFAULT_AGENT_PROVIDER);
+      })
+      .catch(() => {})
+      .finally(() => setNodesLoaded(true));
+  }, [authed, selectNodeSilently, selectProviderSilently, token]);
 
   useEffect(() => {
     if (!authed || !token) return;
@@ -200,12 +241,14 @@ export function App() {
   }, [authed, currentCwd, projectEntries, projectSessions, refreshProjectSessions, token]);
 
   useEffect(() => {
-    if (!authed || !token) return;
+    if (!authed || !token || !nodesLoaded || nodes.length === 0) return;
     const onMessage = (m: ServerMessage) => {
       if (m.type === 'ready') {
         pendingRef.current = [];
         lastEventAtRef.current = Date.now();
         activeSessionIdRef.current = m.state.sessionId;
+        selectNodeSilently(m.state.nodeId);
+        selectProviderSilently(m.state.provider);
         const cached = cachedChatState(cacheRef.current, m.state) ?? { ...initialState };
         commitState(() => withReady(cached, m.state));
         setRecentProjects(rememberProject(m.state.cwd));
@@ -272,6 +315,10 @@ export function App() {
     client.connect();
     client.onOpen(() => {
       const activeId = activeSessionIdRef.current;
+      if (!activeId) {
+        client.send({ type: 'hello', nodeId: selectedNodeIdRef.current, provider: selectedProviderRef.current });
+        return;
+      }
       client.send(buildReconnectHello(
         activeId,
         stateRef.current,
@@ -279,7 +326,7 @@ export function App() {
       ));
     });
     return () => { client.close(); };
-  }, [authed, token, toast, enqueueEvent, commitState, refreshSessions]);
+  }, [authed, token, nodes.length, nodesLoaded, toast, enqueueEvent, commitState, refreshSessions, selectNodeSilently, selectProviderSilently]);
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -290,7 +337,7 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [sidebarOpen]);
 
-  const newSession = useCallback((opts?: { cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string; viewerMode?: boolean }) => {
+  const newSession = useCallback((opts?: { nodeId?: string; provider?: AgentProviderId; cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string; viewerMode?: boolean }) => {
     pendingRef.current = [];
     activeSessionIdRef.current = null;
     commitState(initialState);
@@ -298,16 +345,22 @@ export function App() {
     setNonEditPermReq(null);
     setPlanProposed(null);
     setSessionTitle(opts?.title);
+    const nodeId = opts?.nodeId ?? selectedNodeIdRef.current;
+    const provider = opts?.provider ?? selectedProviderRef.current;
+    selectNodeSilently(nodeId);
+    selectProviderSilently(provider);
     if (opts?.cwd) setRecentProjects(rememberProject(opts.cwd));
     wsRef.current?.send({
       type: 'hello',
+      nodeId,
+      provider,
       cwd: opts?.cwd,
       resumeClaudeId: opts?.resumeClaudeId,
       model: opts?.model,
       permissionMode: opts?.mode,
       viewerMode: opts?.viewerMode,
     });
-  }, [commitState]);
+  }, [commitState, selectNodeSilently, selectProviderSilently]);
 
   const attachLiveSession = useCallback((sessionId: string, title?: string) => {
     pendingRef.current = [];
@@ -391,6 +444,13 @@ export function App() {
     wsRef.current?.send({ type: 'set_model', model });
     toast.push(`Model: ${model}`, { level: 'success' });
   }, [toast, commitState]);
+  const selectNodeProvider = useCallback((nodeId: string, provider: AgentProviderId) => {
+    const node = nodes.find((n) => n.id === nodeId);
+    selectNodeSilently(nodeId);
+    selectProviderSilently(provider);
+    newSession({ nodeId, provider, cwd: node?.defaultCwd ?? currentCwd });
+    toast.push(`${node?.label ?? nodeId}: ${provider === 'codex' ? 'Codex' : 'Claude Code'}`, { level: 'success' });
+  }, [currentCwd, newSession, nodes, selectNodeSilently, selectProviderSilently, toast]);
   const setSkin = useCallback((next: SkinId) => {
     setSkinState(next);
     try { writeSkin(next); } catch { /* localStorage can be unavailable */ }
@@ -576,8 +636,12 @@ export function App() {
           state={state.state}
           cwd={currentCwd}
           auth={authInfo}
+          nodes={nodes}
+          selectedNodeId={selectedNodeId}
+          selectedProvider={selectedProvider}
           onOpenSidebar={() => setSidebarOpen(true)}
           onOpenProject={() => { setSidebarOpen(false); setProjectLauncherOpen((v) => !v); }}
+          onSelectNodeProvider={selectNodeProvider}
           onSelectModel={setModel}
           skin={skin}
           onSelectSkin={setSkin}
@@ -629,6 +693,7 @@ export function App() {
           token={token!}
           cwd={currentCwd}
           mode={state.state?.permissionMode ?? 'default'}
+          provider={state.state?.provider ?? selectedProvider}
           busy={state.busy}
           ready={connected && !!state.state && !state.state?.viewerMode}
           readOnly={!!state.state?.viewerMode}
@@ -654,6 +719,7 @@ export function App() {
         state={state.state}
         sessions={allKnownSessions}
         currentSkin={skin}
+        currentProvider={state.state?.provider ?? selectedProvider}
         onAction={handlePaletteAction}
       />
       {!setupSeen && (
@@ -713,4 +779,13 @@ function rememberSetupSeen() {
 function safeReadSkin(): SkinId {
   try { return readSkin(); }
   catch { return 'warm'; }
+}
+
+function safeReadLocalStorage(key: string): string | null {
+  try { return window.localStorage.getItem(key); }
+  catch { return null; }
+}
+
+function readSelectedProvider(): AgentProviderId {
+  return safeReadLocalStorage('ccw_selected_provider') === 'codex' ? 'codex' : DEFAULT_AGENT_PROVIDER;
 }

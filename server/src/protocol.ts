@@ -65,6 +65,7 @@ export type SessionStateSnapshot = {
   nodeId: string;
   nodeLabel?: string;
   provider: AgentProviderId;
+  providerSessionId?: string;
   claudeSessionId?: string;
   cwd: string;
   model?: string;

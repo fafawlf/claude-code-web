@@ -17,6 +17,7 @@ export type SessionStateSnapshot = {
   nodeId: string;
   nodeLabel?: string;
   provider: AgentProviderId;
+  providerSessionId?: string;
   claudeSessionId?: string;
   cwd: string;
   model?: string;
@@ -149,6 +150,28 @@ export const MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', hint: 'balanced' },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5', hint: 'fastest' },
 ] as const;
+
+export const CODEX_MODEL_OPTIONS = [
+  { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', hint: 'Codex-optimized' },
+  { id: 'gpt-5.2', label: 'GPT-5.2', hint: 'general agent' },
+  { id: 'gpt-5.4', label: 'GPT-5.4', hint: 'newer reasoning' },
+] as const;
+
+export function modelOptionsForProvider(provider: AgentProviderId | undefined) {
+  return provider === 'codex' ? CODEX_MODEL_OPTIONS : MODEL_OPTIONS;
+}
+
+export function providerLabel(provider: AgentProviderId | undefined): string {
+  switch (provider) {
+    case 'codex': return 'Codex';
+    case 'claude':
+    default: return 'Claude Code';
+  }
+}
+
+export function defaultModelLabel(provider: AgentProviderId | undefined): string {
+  return provider === 'codex' ? 'Codex default' : 'default';
+}
 
 // Shift+Tab cycles only through the three non-dangerous modes. bypass is
 // available from the command palette / slash command but NOT via

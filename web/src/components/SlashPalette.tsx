@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { PermissionMode } from '../types';
-import { MODEL_OPTIONS } from '../types';
+import type { AgentProviderId, PermissionMode } from '../types';
+import { modelOptionsForProvider } from '../types';
 
 export type SlashAction =
   | { kind: 'new' }
@@ -12,20 +12,21 @@ export type SlashAction =
 
 type Props = {
   query: string;
+  provider?: AgentProviderId;
   onPick: (a: SlashAction) => void;
   onClose: () => void;
 };
 
 type Cmd = { label: string; hint: string; action: SlashAction; match: string[] };
 
-export function SlashPalette({ query, onPick, onClose }: Props) {
+export function SlashPalette({ query, provider, onPick, onClose }: Props) {
   const [i, setI] = useState(0);
 
   const cmds: Cmd[] = [
     { label: '/clear', hint: 'new chat', action: { kind: 'new' }, match: ['clear', 'new', 'reset'] },
     { label: '/cwd', hint: 'change project folder', action: { kind: 'cwd' }, match: ['cwd', 'folder', 'dir', 'project'] },
     { label: '/history', hint: 'show prior sessions', action: { kind: 'history' }, match: ['history', 'resume', 'sessions'] },
-    ...MODEL_OPTIONS.map((m) => ({
+    ...modelOptionsForProvider(provider).map((m) => ({
       label: `/model ${m.label}`,
       hint: m.hint,
       action: { kind: 'model' as const, id: m.id },

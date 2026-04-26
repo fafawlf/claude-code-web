@@ -14,8 +14,12 @@ test('TopBar exposes a mobile projects drawer trigger without replacing project 
     state: null,
     cwd: '/root/random shit',
     auth: { source: 'api', plan: null, label: 'API', detail: 'ANTHROPIC_API_KEY' },
+    nodes: [{ id: 'local', label: 'This machine', kind: 'local', defaultCwd: '/root/random shit', providers: ['claude', 'codex'], connected: true }],
+    selectedNodeId: 'local',
+    selectedProvider: 'claude',
     onOpenSidebar: () => {},
     onOpenProject: () => {},
+    onSelectNodeProvider: () => {},
     onSelectModel: () => {},
     skin: 'warm',
     onSelectSkin: () => {},
@@ -26,6 +30,8 @@ test('TopBar exposes a mobile projects drawer trigger without replacing project 
   assert.match(html, /mobile-sidebar-button/);
   assert.match(html, /Open projects/);
   assert.match(html, /Open command|Change skin|API/);
+  assert.match(html, /This machine/);
+  assert.match(html, /Claude Code/);
   assert.match(html, /random shit/);
 });
 
