@@ -997,10 +997,11 @@
     position: fixed;
     left: max(10px, env(safe-area-inset-left));
     right: max(10px, env(safe-area-inset-right));
-    bottom: calc(max(10px, env(safe-area-inset-bottom)) + var(--keyboard-offset, 0px));
+    bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 45;
     width: auto;
-    transform: translateZ(0);
+    transform: translate3d(0, calc(-1 * var(--keyboard-offset, 0px)), 0);
+    will-change: transform;
     contain: layout paint style;
   }
 

@@ -828,23 +828,16 @@ function writeStoredActiveSession(sessionId: string | null, state: SessionStateS
 function installMobileViewportVars(): () => void {
   const root = document.documentElement;
   const vv = window.visualViewport;
-  let focused = false;
-  let lockedKeyboard = 0;
   let raf = 0;
+  let layoutHeight = Math.max(window.innerHeight, vv?.height ?? 0, root.clientHeight);
 
   const update = () => {
     const visualHeight = vv?.height ?? window.innerHeight;
-    const rawKeyboard = vv
-      ? Math.max(0, window.innerHeight - visualHeight - vv.offsetTop)
-      : 0;
-    let keyboard = rawKeyboard > 80 ? rawKeyboard : 0;
-    if (focused) {
-      if (keyboard > lockedKeyboard) lockedKeyboard = keyboard;
-      else if (keyboard > 0 && lockedKeyboard > 0) keyboard = lockedKeyboard;
-      else lockedKeyboard = 0;
-    } else {
-      lockedKeyboard = keyboard;
-    }
+    const visualTop = vv?.offsetTop ?? 0;
+    layoutHeight = Math.max(layoutHeight, window.innerHeight, visualHeight, root.clientHeight);
+    const visualBottom = visualTop + visualHeight;
+    const rawKeyboard = Math.max(0, layoutHeight - visualBottom);
+    const keyboard = rawKeyboard > 80 ? rawKeyboard : 0;
     root.style.setProperty('--vvh', `${Math.round(visualHeight)}px`);
     root.style.setProperty('--keyboard-offset', `${Math.round(keyboard)}px`);
   };
@@ -856,20 +849,16 @@ function installMobileViewportVars(): () => void {
       update();
     });
   };
-  const onFocusIn = (event: FocusEvent) => {
-    if (!isKeyboardInput(event.target)) return;
-    focused = true;
-    schedule();
-  };
-  const onFocusOut = () => {
-    focused = false;
-    lockedKeyboard = 0;
-    window.setTimeout(schedule, 80);
+  const onFocusIn = (event: FocusEvent) => { if (isKeyboardInput(event.target)) schedule(); };
+  const onFocusOut = () => window.setTimeout(schedule, 80);
+  const onOrientation = () => {
+    layoutHeight = 0;
+    window.setTimeout(schedule, 120);
   };
 
   update();
   window.addEventListener('resize', schedule, { passive: true });
-  window.addEventListener('orientationchange', schedule, { passive: true });
+  window.addEventListener('orientationchange', onOrientation, { passive: true });
   document.addEventListener('focusin', onFocusIn);
   document.addEventListener('focusout', onFocusOut);
   vv?.addEventListener('resize', schedule);
@@ -877,7 +866,7 @@ function installMobileViewportVars(): () => void {
   return () => {
     if (raf) cancelAnimationFrame(raf);
     window.removeEventListener('resize', schedule);
-    window.removeEventListener('orientationchange', schedule);
+    window.removeEventListener('orientationchange', onOrientation);
     document.removeEventListener('focusin', onFocusIn);
     document.removeEventListener('focusout', onFocusOut);
     vv?.removeEventListener('resize', schedule);

@@ -85,15 +85,17 @@ test('mobile layout pins composer to visual viewport without horizontal page ove
   assert.match(html, /interactive-widget=overlays-content/);
   assert.match(css, /--keyboard-offset/);
   assert.match(css, /\.composer-wrap\s*\{[^}]*position:\s*fixed/s);
+  assert.match(css, /\.composer-wrap\s*\{[^}]*translate3d\(0,\s*calc\(-1 \* var\(--keyboard-offset/s);
   assert.match(css, /\.message-list-content\s*\{[^}]*var\(--keyboard-offset/s);
   assert.match(css, /overflow-x:\s*hidden/);
   assert.match(css, /height:\s*100svh/);
 });
 
-test('mobile viewport helper locks keyboard offset while inputs are focused', () => {
+test('mobile viewport helper follows visual viewport bottom for keyboard offset', () => {
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
-  assert.match(source, /lockedKeyboard/);
+  assert.match(source, /visualBottom/);
+  assert.match(source, /layoutHeight - visualBottom/);
   assert.match(source, /document\.addEventListener\('focusin'/);
   assert.match(source, /isKeyboardInput/);
   assert.match(source, /requestAnimationFrame/);
