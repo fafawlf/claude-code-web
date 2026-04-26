@@ -85,6 +85,7 @@ export function App() {
 
   useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
   useEffect(() => { selectedProviderRef.current = selectedProvider; }, [selectedProvider]);
+  useEffect(() => installMobileViewportVars(), []);
 
   const commitState = useCallback((nextState: ChatState | ((prev: ChatState) => ChatState)) => {
     setState((prev) => {
@@ -822,6 +823,30 @@ function writeStoredActiveSession(sessionId: string | null, state: SessionStateS
   } catch {
     // localStorage can be unavailable in private contexts.
   }
+}
+
+function installMobileViewportVars(): () => void {
+  const root = document.documentElement;
+  const vv = window.visualViewport;
+  const update = () => {
+    const visualHeight = vv?.height ?? window.innerHeight;
+    const keyboard = vv
+      ? Math.max(0, window.innerHeight - visualHeight - vv.offsetTop)
+      : 0;
+    root.style.setProperty('--vvh', `${Math.round(visualHeight)}px`);
+    root.style.setProperty('--keyboard-offset', `${Math.round(keyboard)}px`);
+  };
+  update();
+  window.addEventListener('resize', update, { passive: true });
+  window.addEventListener('orientationchange', update, { passive: true });
+  vv?.addEventListener('resize', update);
+  vv?.addEventListener('scroll', update);
+  return () => {
+    window.removeEventListener('resize', update);
+    window.removeEventListener('orientationchange', update);
+    vv?.removeEventListener('resize', update);
+    vv?.removeEventListener('scroll', update);
+  };
 }
 
 function readSelectedProvider(): AgentProviderId {

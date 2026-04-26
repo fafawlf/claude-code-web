@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import React, { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { TopBar } from '../components/TopBar';
@@ -75,4 +76,16 @@ test('mobile menu popovers use unclipped responsive classes', () => {
   assert.match(skin, /topbar-menu/);
   assert.match(skin, /aria-haspopup="menu"/);
   assert.match(input, /composer-permission-button/);
+});
+
+test('mobile layout pins composer to visual viewport without horizontal page overflow', () => {
+  const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+
+  assert.match(html, /interactive-widget=overlays-content/);
+  assert.match(css, /--keyboard-offset/);
+  assert.match(css, /\.composer-wrap\s*\{[^}]*position:\s*fixed/s);
+  assert.match(css, /\.message-list-content\s*\{[^}]*var\(--keyboard-offset/s);
+  assert.match(css, /overflow-x:\s*hidden/);
+  assert.match(css, /height:\s*100svh/);
 });
