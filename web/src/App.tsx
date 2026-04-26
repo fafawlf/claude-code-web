@@ -834,12 +834,16 @@ function installMobileViewportVars(): () => void {
   let settled = false;
   let settledKeyboard = 0;
   let pendingKeyboard = 0;
+  let baseVisualTop = vv?.offsetTop ?? 0;
+  let touchStartY = 0;
   let layoutHeight = Math.max(window.innerHeight, vv?.height ?? 0, root.clientHeight);
 
   const update = () => {
     const visualHeight = vv?.height ?? window.innerHeight;
+    const visualTop = vv?.offsetTop ?? 0;
     if (!focused) {
       layoutHeight = Math.max(window.innerHeight, visualHeight, root.clientHeight);
+      baseVisualTop = visualTop;
     }
     const rawKeyboard = Math.max(0, layoutHeight - visualHeight);
     let keyboard = rawKeyboard > 80 ? rawKeyboard : 0;
@@ -855,15 +859,20 @@ function installMobileViewportVars(): () => void {
     }
     if (focused && !settled && keyboard > 0) {
       pendingKeyboard = keyboard;
+      baseVisualTop = visualTop;
       window.clearTimeout(settleTimer);
       settleTimer = window.setTimeout(() => {
         settled = true;
         settledKeyboard = pendingKeyboard;
+        baseVisualTop = vv?.offsetTop ?? 0;
         root.style.setProperty('--keyboard-offset', `${Math.round(settledKeyboard)}px`);
+        schedule();
       }, 180);
     }
+    const viewportPan = focused && settled ? Math.max(0, visualTop - baseVisualTop) : 0;
     root.style.setProperty('--vvh', `${Math.round(visualHeight)}px`);
     root.style.setProperty('--keyboard-offset', `${Math.round(keyboard)}px`);
+    root.style.setProperty('--viewport-pan', `${Math.round(viewportPan)}px`);
   };
 
   const schedule = () => {
@@ -878,6 +887,7 @@ function installMobileViewportVars(): () => void {
     focused = true;
     settled = false;
     settledKeyboard = 0;
+    baseVisualTop = vv?.offsetTop ?? 0;
     layoutHeight = Math.max(layoutHeight, window.innerHeight, vv?.height ?? 0, root.clientHeight);
     schedule();
   };
@@ -885,6 +895,8 @@ function installMobileViewportVars(): () => void {
     focused = false;
     settled = false;
     settledKeyboard = 0;
+    baseVisualTop = vv?.offsetTop ?? 0;
+    root.style.setProperty('--viewport-pan', '0px');
     window.clearTimeout(settleTimer);
     window.setTimeout(schedule, 80);
   };
@@ -892,8 +904,29 @@ function installMobileViewportVars(): () => void {
     layoutHeight = 0;
     settled = false;
     settledKeyboard = 0;
+    baseVisualTop = vv?.offsetTop ?? 0;
+    root.style.setProperty('--viewport-pan', '0px');
     window.clearTimeout(settleTimer);
     window.setTimeout(schedule, 120);
+  };
+  const onTouchStart = (event: TouchEvent) => {
+    touchStartY = event.touches[0]?.clientY ?? touchStartY;
+  };
+  const onTouchMove = (event: TouchEvent) => {
+    if (!focused) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const scroller = target?.closest('.message-scroller') as HTMLElement | null;
+    if (!scroller) {
+      event.preventDefault();
+      return;
+    }
+    const y = event.touches[0]?.clientY ?? touchStartY;
+    const deltaY = touchStartY - y;
+    const atTop = scroller.scrollTop <= 0;
+    const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+    if ((deltaY < 0 && atTop) || (deltaY > 0 && atBottom)) {
+      event.preventDefault();
+    }
   };
 
   update();
@@ -902,6 +935,9 @@ function installMobileViewportVars(): () => void {
   document.addEventListener('focusin', onFocusIn);
   document.addEventListener('focusout', onFocusOut);
   vv?.addEventListener('resize', schedule);
+  vv?.addEventListener('scroll', schedule);
+  document.addEventListener('touchstart', onTouchStart, { passive: true });
+  document.addEventListener('touchmove', onTouchMove, { passive: false });
   return () => {
     if (raf) cancelAnimationFrame(raf);
     window.clearTimeout(settleTimer);
@@ -910,6 +946,9 @@ function installMobileViewportVars(): () => void {
     document.removeEventListener('focusin', onFocusIn);
     document.removeEventListener('focusout', onFocusOut);
     vv?.removeEventListener('resize', schedule);
+    vv?.removeEventListener('scroll', schedule);
+    document.removeEventListener('touchstart', onTouchStart);
+    document.removeEventListener('touchmove', onTouchMove);
   };
 }
 

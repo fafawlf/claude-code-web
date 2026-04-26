@@ -85,20 +85,25 @@ test('mobile layout pins composer to visual viewport without horizontal page ove
   assert.match(html, /interactive-widget=overlays-content/);
   assert.match(css, /height:\s*var\(--vvh,\s*100dvh\)/);
   assert.match(css, /\.composer-wrap\s*\{[^}]*position:\s*fixed/s);
+  assert.match(css, /\.composer-wrap\s*\{[^}]*var\(--viewport-pan/s);
   assert.doesNotMatch(css, /\.composer-wrap\s*\{[^}]*translate3d\(0,\s*calc\(-1 \* var\(--keyboard-offset/s);
   assert.doesNotMatch(css, /\.message-list-content\s*\{[^}]*var\(--keyboard-offset/s);
   assert.match(css, /overflow-x:\s*hidden/);
   assert.doesNotMatch(css, /height:\s*100svh/);
 });
 
-test('mobile viewport helper ignores visual offset while computing keyboard height', () => {
+test('mobile viewport helper uses visual offset only to cancel page pan', () => {
   const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
 
   assert.match(source, /layoutHeight - visualHeight/);
   assert.match(source, /--keyboard-offset/);
+  assert.match(source, /--viewport-pan/);
+  assert.match(source, /baseVisualTop/);
+  assert.match(source, /offsetTop/);
+  assert.match(source, /document\.addEventListener\('touchmove'/);
+  assert.match(source, /passive:\s*false/);
   assert.doesNotMatch(source, /fixedProbe/);
   assert.doesNotMatch(source, /keyboardCompensation/);
-  assert.doesNotMatch(source, /offsetTop/);
   assert.doesNotMatch(source, /visualBottom/);
   assert.match(source, /document\.addEventListener\('focusin'/);
   assert.match(source, /isKeyboardInput/);

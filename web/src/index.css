@@ -33,6 +33,7 @@
     --skin-bg-image: none;
     --skin-overlay: transparent;
     --skin-overlay-opacity: 0;
+    --viewport-pan: 0px;
   }
 
   html[data-skin="cyberpunk"] {
@@ -1005,6 +1006,8 @@
     bottom: max(10px, env(safe-area-inset-bottom));
     z-index: 45;
     width: auto;
+    transform: translate3d(0, var(--viewport-pan, 0px), 0);
+    will-change: transform;
     contain: layout paint style;
   }
 
