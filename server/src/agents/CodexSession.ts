@@ -3,7 +3,7 @@ import type { Readable } from 'node:stream';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveCodexPath } from './resolveCodexPath.js';
-import { DEFAULT_NODE_ID, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
+import { DEFAULT_NODE_ID, type ActiveToolInfo, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
 import type { AgentSessionOptions } from './types.js';
 import type { ControlListener, EventListener, SessionEvent, StateListener } from '../session/ClaudeSession.js';
 
@@ -40,6 +40,7 @@ export class CodexSession {
   private stateListeners = new Set<StateListener>();
   private controlListeners = new Set<ControlListener>();
   private stderrTail = '';
+  private activeTurn?: ActiveToolInfo;
 
   constructor(opts: AgentSessionOptions) {
     this.id = opts.id;
@@ -151,7 +152,13 @@ export class CodexSession {
 
     this.running = true;
     this.stderrTail = '';
-    this.updateState({ runtimeStatus: 'running', activeTool: undefined });
+    this.activeTurn = {
+      toolUseId: `codex_turn_${this.nextEventId}`,
+      name: 'Codex',
+      startedAt: Date.now(),
+      inputSummary: summarizePrompt(prompt),
+    };
+    this.updateState({ runtimeStatus: 'running', activeTool: this.activeTurn });
 
     const args = this.buildArgs(prompt);
     const child = spawn(codexPath, args, {
@@ -247,7 +254,7 @@ export class CodexSession {
         }
         break;
       case 'turn.started':
-        this.setRuntimeStatus('running');
+        this.updateState({ runtimeStatus: 'running', activeTool: this.activeTurn });
         break;
       case 'item.completed':
         this.handleCompletedItem(event.item);
@@ -259,6 +266,10 @@ export class CodexSession {
       case 'error':
         if (event.message && !event.message.startsWith('Reconnecting...')) {
           this.pushEvent({ type: 'system', subtype: 'error', message: event.message });
+        } else if (event.message && this.activeTurn) {
+          this.updateState({
+            activeTool: { ...this.activeTurn, inputSummary: 'Reconnecting to Codex...' },
+          });
         }
         break;
     }
@@ -308,15 +319,11 @@ export class CodexSession {
     for (const listener of this.stateListeners) { try { listener(delta); } catch { /* noop */ } }
   }
 
-  private setRuntimeStatus(runtimeStatus: SessionRuntimeStatus): void {
-    if (this.state.runtimeStatus === runtimeStatus) return;
-    this.updateState({ runtimeStatus });
-  }
-
   private finishTurn(status: SessionRuntimeStatus): void {
     this.running = false;
     this.child = undefined;
-    this.setRuntimeStatus(status);
+    this.activeTurn = undefined;
+    this.updateState({ runtimeStatus: status, activeTool: undefined });
     const next = this.pendingPrompts.shift();
     if (next && !this.closed) this.startTurn(next);
   }
@@ -329,4 +336,10 @@ function codexToolName(type: string): string {
 
 function tail(value: string, max: number): string {
   return value.length > max ? value.slice(value.length - max) : value;
+}
+
+function summarizePrompt(prompt: string): string {
+  const normalized = prompt.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= 120) return normalized;
+  return `${normalized.slice(0, 117)}...`;
 }

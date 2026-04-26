@@ -29,7 +29,9 @@ test('CodexSession maps codex exec JSONL into chat-compatible events', async () 
   try {
     const s = new CodexSession({ id: 'codex-live-1', cwd: dir, nodeId: 'macbook' });
     const seen: any[] = [];
+    const stateDeltas: any[] = [];
     s.subscribe((ev) => seen.push(ev.event));
+    s.subscribeState((delta) => stateDeltas.push(delta));
     s.sendUser('hello');
 
     await waitFor(() => s.getState().runtimeStatus === 'idle' && seen.some((ev) => ev.type === 'result'));
@@ -39,6 +41,14 @@ test('CodexSession maps codex exec JSONL into chat-compatible events', async () 
     assert.equal(s.getState().providerSessionId, 'codex-thread-1');
     assert.equal(s.getState().tokensIn, 2);
     assert.equal(s.getState().tokensOut, 3);
+    assert.equal(s.getState().activeTool, undefined);
+    assert.deepEqual(stateDeltas[0].activeTool, {
+      toolUseId: 'codex_turn_2',
+      name: 'Codex',
+      startedAt: stateDeltas[0].activeTool.startedAt,
+      inputSummary: 'hello',
+    });
+    assert.equal(typeof stateDeltas[0].activeTool.startedAt, 'number');
     assert.deepEqual(seen.map((ev) => ev.type), ['user', 'assistant', 'result']);
     assert.equal(seen[1].message.content[0].text, 'Codex OK');
     await s.close();
