@@ -100,7 +100,8 @@ export type ClientSetModel = { type: 'set_model'; model: string };
 export type ClientSetMode = { type: 'set_permission_mode'; mode: PermissionMode };
 export type ClientRefreshHistory = { type: 'refresh_history' };
 export type ClientSessionClose = { type: 'session_close'; sessionId: string };
-export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientSetModel | ClientSetMode | ClientRefreshHistory | ClientSessionClose;
+export type ClientListSessions = { type: 'list_sessions' };
+export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientSetModel | ClientSetMode | ClientRefreshHistory | ClientSessionClose | ClientListSessions;
 
 // Server → client
 export type ServerReady = { type: 'ready'; state: SessionStateSnapshot };
