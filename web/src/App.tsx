@@ -130,6 +130,20 @@ export function App() {
     document.documentElement.dataset.skin = skin;
   }, [skin]);
 
+  // Poll the sessions list every 10s while connected. The server no longer
+  // broadcasts sessions_update on every state transition (it was pushing ~the
+  // entire snapshot per activeTool change, which buried mobile clients). Web
+  // trades that instant sidebar freshness for a 10s beat, which is fine for
+  // the sidebar use case and totally removes the push-backpressure class of
+  // bugs.
+  useEffect(() => {
+    if (!authed || !token) return;
+    const t = setInterval(() => {
+      wsRef.current?.send({ type: 'list_sessions' });
+    }, 10000);
+    return () => clearInterval(t);
+  }, [authed, token]);
+
   useEffect(() => {
     if (!token) { setAuthed(false); return; }
     fetch(appUrl(`/auth-check?t=${encodeURIComponent(token)}`))
@@ -263,6 +277,8 @@ export function App() {
         setPendingEdits(new Map());
         setNonEditPermReq(null);
         setPlanProposed(null);
+        // Server no longer pushes sessions_update — pull once per attach.
+        wsRef.current?.send({ type: 'list_sessions' });
       } else if (m.type === 'state_update') {
         commitState((s) => applyStateDelta(s, m.state));
       } else if (m.type === 'heartbeat') {

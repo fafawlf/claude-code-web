@@ -66,6 +66,14 @@ class PromptQueue implements AsyncIterable<SDKUserMessage> {
 }
 
 const RING_CAPACITY = 5000;
+// Ring is the replay buffer. It must be bounded by BYTES not by count —
+// `includePartialMessages: true` can produce thousands of partial events and a
+// single tool_result can embed a whole file; 5000 "events" was easily > 4 GB.
+const RING_MAX_BYTES = 32 * 1024 * 1024;
+// Per-string cap applied BEFORE the event is stored. Downstream (ws.ts) also
+// applies its own cap, but that one runs only on the egress path; this is the
+// storage-side cap so the process itself doesn't hold the bytes.
+const MAX_STORED_STRING = 32 * 1024;
 const EDIT_LIKE = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 export class ClaudeSession {
@@ -76,6 +84,8 @@ export class ClaudeSession {
   private abortCtl = new AbortController();
   private nextEventId = 1;
   private ring: SessionEvent[] = [];
+  private ringSizes: number[] = [];
+  private ringBytes = 0;
   private listeners = new Set<EventListener>();
   private stateListeners = new Set<StateListener>();
   private controlListeners = new Set<ControlListener>();
@@ -226,9 +236,45 @@ export class ClaudeSession {
     const activeToolDelta = this.activeToolDelta(event);
     const id = this.nextEventId++;
     this.state = { ...this.state, lastEventId: id, lastEventAt: Date.now(), ...activeToolDelta };
-    const se: SessionEvent = { id, event };
-    this.ring.push(se);
-    if (this.ring.length > RING_CAPACITY) this.ring.shift();
+
+    // Diagnostic: flag any incoming raw event whose content sums past 4 MB.
+    // `estimateEventBytes` walks primitives only (no stringify, no giant
+    // string allocation), so it's safe even if the tree is huge.
+    const rawBytes = estimateEventBytes(event);
+    if (rawBytes > 4 * 1024 * 1024) {
+      console.warn('[session] huge SDK event received', {
+        type: (event as { type?: string })?.type,
+        rawBytes,
+      });
+    }
+    // 1. Storage-side shrink: bound every string node, drop image base64.
+    //    Applied BEFORE the event enters the ring so the process memory is
+    //    bounded even if replay is never read.
+    const slim = shrinkEventForStorage(event);
+    const se: SessionEvent = { id, event: slim };
+
+    // 2. Partial stream events are ephemeral: they drive the live streaming
+    //    UI, but replaying 1000+ deltas on reconnect blows memory and adds
+    //    no value (the final `assistant` event carries the full message).
+    //    Forward to listeners, but do NOT persist in the ring.
+    const isPartial = (event.type as string) === 'stream_event';
+
+    if (!isPartial) {
+      const bytes = estimateEventBytes(slim);
+      this.ring.push(se);
+      this.ringSizes.push(bytes);
+      this.ringBytes += bytes;
+      // 3. Double-bounded ring: by count AND by estimated bytes.
+      while (
+        this.ring.length > 0 &&
+        (this.ring.length > RING_CAPACITY || this.ringBytes > RING_MAX_BYTES)
+      ) {
+        this.ring.shift();
+        const evicted = this.ringSizes.shift() ?? 0;
+        this.ringBytes -= evicted;
+      }
+    }
+
     for (const l of this.listeners) { try { l(se); } catch { /* */ } }
     if (event.type === 'result') this.setRuntimeStatus('idle');
     if (event.type === 'system' && (event as any).subtype === 'error') this.setRuntimeStatus('error');
@@ -312,15 +358,26 @@ export class ClaudeSession {
       try {
         for await (const event of this.query) {
           const anyEv = event as any;
-          const usage = anyEv?.message?.usage ?? anyEv?.usage;
-          if (usage && typeof usage === 'object') {
-            const delta: Partial<SessionStateSnapshot> = {};
-            if (typeof usage.input_tokens === 'number') delta.tokensIn = this.state.tokensIn + usage.input_tokens;
-            if (typeof usage.output_tokens === 'number') delta.tokensOut = this.state.tokensOut + usage.output_tokens;
-            if (Object.keys(delta).length) this.updateState(delta);
-          }
-          if (event.type === 'result' && typeof (event as any).total_cost_usd === 'number') {
-            this.updateState({ cost: (event as any).total_cost_usd });
+          // Skip usage from partial stream_event deltas. With
+          // `includePartialMessages: true` the SDK emits many partials per
+          // turn, each carrying the *cumulative* usage to that point — if
+          // we accept them we (a) re-accumulate and double-count, and
+          // (b) fire updateState → state_update + sessions_update
+          // broadcast per token. That's what buried the WS send buffer.
+          // The final `assistant` / `result` event carries the turn's
+          // authoritative usage; one update per turn is enough.
+          const isPartial = (event.type as string) === 'stream_event';
+          if (!isPartial) {
+            const usage = anyEv?.message?.usage ?? anyEv?.usage;
+            if (usage && typeof usage === 'object') {
+              const delta: Partial<SessionStateSnapshot> = {};
+              if (typeof usage.input_tokens === 'number') delta.tokensIn = this.state.tokensIn + usage.input_tokens;
+              if (typeof usage.output_tokens === 'number') delta.tokensOut = this.state.tokensOut + usage.output_tokens;
+              if (Object.keys(delta).length) this.updateState(delta);
+            }
+            if (event.type === 'result' && typeof (event as any).total_cost_usd === 'number') {
+              this.updateState({ cost: (event as any).total_cost_usd });
+            }
           }
           this.pushEvent(event);
           await this.pushDerivedEvents(event);
@@ -549,6 +606,95 @@ export class ClaudeSession {
     this.permissionBroker.drainDeny();
     this.planBroker.drainReject();
   }
+}
+
+// Cap every string on an SDK event so one rogue tool_result (big file read,
+// giant Bash output, base64 image) can never occupy the whole heap. Works on a
+// shallow clone of the event — the original SDK object stays untouched and is
+// still GC'd once the ingest callback returns.
+function shrinkEventForStorage(event: SDKMessage): SDKMessage {
+  if (!event || typeof event !== 'object') return event;
+  const anyEv = event as any;
+  const message = anyEv.message;
+  if (!message || typeof message !== 'object') return event;
+  const content = message.content;
+  if (typeof content === 'string') {
+    return { ...anyEv, message: { ...message, content: capStoredString(content) } };
+  }
+  if (!Array.isArray(content)) return event;
+  const slimmed = content.map((part: unknown) => trimStoredContentPart(part));
+  return { ...anyEv, message: { ...message, content: slimmed } };
+}
+
+function trimStoredContentPart(part: unknown): unknown {
+  if (!part || typeof part !== 'object') return part;
+  const p = part as { type?: string; text?: unknown; content?: unknown; input?: unknown };
+  switch (p.type) {
+    case 'text':
+      return typeof p.text === 'string' ? { ...p, text: capStoredString(p.text) } : p;
+    case 'tool_use':
+      if (p.input && typeof p.input === 'object') {
+        return { ...p, input: trimStoredRecord(p.input as Record<string, unknown>) };
+      }
+      return p;
+    case 'tool_result':
+      return { ...p, content: trimStoredToolResult(p.content) };
+    case 'image':
+      return { ...p, source: { type: 'base64', media_type: 'image/png', data: '[image omitted]' } };
+    default:
+      return p;
+  }
+}
+
+function trimStoredToolResult(content: unknown): unknown {
+  if (typeof content === 'string') return capStoredString(content);
+  if (Array.isArray(content)) return content.map((b) => trimStoredToolResultBlock(b));
+  if (content && typeof content === 'object') return trimStoredToolResultBlock(content);
+  return content;
+}
+
+function trimStoredToolResultBlock(block: unknown): unknown {
+  if (!block || typeof block !== 'object') return block;
+  const b = block as { type?: string; text?: unknown };
+  if (b.type === 'text' && typeof b.text === 'string') return { ...b, text: capStoredString(b.text) };
+  if (b.type === 'image') return { ...b, source: { type: 'base64', media_type: 'image/png', data: '[image omitted]' } };
+  return b;
+}
+
+function trimStoredRecord(rec: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(rec)) {
+    out[k] = typeof v === 'string' ? capStoredString(v) : v;
+  }
+  return out;
+}
+
+function capStoredString(s: string): string {
+  if (s.length <= MAX_STORED_STRING) return s;
+  return s.slice(0, MAX_STORED_STRING) + `\n… [trimmed ${s.length - MAX_STORED_STRING} chars]`;
+}
+
+// Approximate JSON byte size of an already-shrunk event. Counts string
+// character length — a JSON.stringify(event).length would give a tighter
+// number, but that's exactly the allocation we can't afford to pay at
+// ingestion time. Walking primitives is allocation-free.
+function estimateEventBytes(event: unknown): number {
+  let bytes = 0;
+  const walk = (v: unknown): void => {
+    if (v === null || v === undefined) return;
+    const t = typeof v;
+    if (t === 'string') { bytes += (v as string).length; return; }
+    if (t === 'number' || t === 'boolean') { bytes += 8; return; }
+    if (Array.isArray(v)) { for (const item of v) walk(item); return; }
+    if (t === 'object') {
+      for (const k of Object.keys(v as object)) {
+        bytes += k.length;
+        walk((v as Record<string, unknown>)[k]);
+      }
+    }
+  };
+  walk(event);
+  return bytes;
 }
 
 function summarizeToolInput(name: string, input: unknown): string | undefined {
