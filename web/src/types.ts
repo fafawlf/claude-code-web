@@ -4,6 +4,7 @@ export type AgentProviderId = 'claude' | 'codex';
 
 export const DEFAULT_NODE_ID = 'local';
 export const DEFAULT_AGENT_PROVIDER: AgentProviderId = 'claude';
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
 
 export type ActiveToolInfo = {
   toolUseId: string;
@@ -156,7 +157,7 @@ export type StoredSession = {
 
 // Models exposed in the UI. Labels are stable display names; ids map to SDK model strings.
 export const MODEL_OPTIONS = [
-  { id: 'claude-opus-4-8', label: 'Opus 4.8', hint: 'best for agentic coding' },
+  { id: DEFAULT_CLAUDE_MODEL, label: 'Opus 4.8', hint: 'best for agentic coding' },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', hint: 'balanced' },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5', hint: 'fastest' },
 ] as const;
@@ -172,6 +173,10 @@ export function modelOptionsForProvider(provider: AgentProviderId | undefined) {
   return provider === 'codex' ? CODEX_MODEL_OPTIONS : MODEL_OPTIONS;
 }
 
+export function defaultModelForProvider(provider: AgentProviderId | undefined): string | undefined {
+  return provider === 'codex' ? undefined : DEFAULT_CLAUDE_MODEL;
+}
+
 export function providerLabel(provider: AgentProviderId | undefined): string {
   switch (provider) {
     case 'codex': return 'Codex';
@@ -181,11 +186,11 @@ export function providerLabel(provider: AgentProviderId | undefined): string {
 }
 
 export function defaultModelLabel(provider: AgentProviderId | undefined): string {
-  return provider === 'codex' ? 'Codex default' : 'default';
+  return provider === 'codex' ? 'Codex default' : 'Opus 4.8';
 }
 
 export function modelLabel(provider: AgentProviderId | undefined, model?: string, fallbackModel?: string): string {
-  const effective = model ?? fallbackModel;
+  const effective = model ?? fallbackModel ?? defaultModelForProvider(provider);
   if (!effective) return defaultModelLabel(provider);
   return modelOptionsForProvider(provider).find((m) => effective.startsWith(m.id))?.label ?? effective;
 }

@@ -4,6 +4,7 @@ import { SessionManager } from '../session/SessionManager.js';
 import { resolveHelloSession } from '../ws.js';
 import { ClaudeProvider } from '../agents/ClaudeProvider.js';
 import { NodeRegistry } from '../nodes/NodeRegistry.js';
+import { DEFAULT_CLAUDE_MODEL } from '../protocol.js';
 
 function makeOpts() {
   return {
@@ -104,6 +105,18 @@ test('resolveHelloSession records requested node and provider on new sessions', 
   assert.equal(resolved.session.getState().nodeId, 'do');
   assert.equal(resolved.session.getState().provider, 'claude');
   assert.equal(resolved.session.getState().cwd, '/root/project');
+  await sm.closeAll();
+});
+
+test('resolveHelloSession defaults new Claude sessions to Opus 4.8', async () => {
+  const sm = new SessionManager();
+  const resolved = resolveHelloSession(sm, {
+    type: 'hello',
+    cwd: '/workspace/project',
+  }, '/fallback');
+
+  assert.equal(resolved.session.getState().provider, 'claude');
+  assert.equal(resolved.session.getState().model, DEFAULT_CLAUDE_MODEL);
   await sm.closeAll();
 });
 

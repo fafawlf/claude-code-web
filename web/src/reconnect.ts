@@ -1,5 +1,6 @@
 import type { ChatState } from './reducer';
 import type { ClientHello } from './types';
+import { defaultModelForProvider } from './types';
 
 export function buildReconnectHello(activeSessionId: string | null, state: ChatState, lastEventId: number): ClientHello {
   if (!activeSessionId) return { type: 'hello' };
@@ -12,7 +13,7 @@ export function buildReconnectHello(activeSessionId: string | null, state: ChatS
     lastEventId,
     cwd: snap?.cwd,
     resumeClaudeId: snap?.providerSessionId ?? snap?.claudeSessionId,
-    model: snap?.model,
+    model: snap?.model ?? defaultModelForProvider(snap?.provider),
     permissionMode: snap?.permissionMode,
     viewerMode: snap?.viewerMode,
   };

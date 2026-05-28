@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { defaultModelLabel, modelOptionsForProvider, type AgentProviderId } from '../types';
+import { defaultModelForProvider, modelLabel, modelOptionsForProvider, type AgentProviderId } from '../types';
 import { Icon } from './Icon';
 import { TopbarMenuPortal } from './TopbarMenuPortal';
 
@@ -13,7 +13,8 @@ export function ModelMenu({ current, provider, onSelect }: Props) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const options = modelOptionsForProvider(provider);
-  const label = options.find((m) => current?.startsWith(m.id))?.label ?? current ?? defaultModelLabel(provider);
+  const effective = current ?? defaultModelForProvider(provider);
+  const label = modelLabel(provider, current);
   return (
     <div className="topbar-menu relative">
       <button ref={buttonRef} onClick={() => setOpen(!open)} className="chip" aria-expanded={open} aria-haspopup="menu">
@@ -24,7 +25,7 @@ export function ModelMenu({ current, provider, onSelect }: Props) {
       {open && (
         <TopbarMenuPortal anchorRef={buttonRef} onClose={() => setOpen(false)}>
           {options.map((m) => {
-            const active = current?.startsWith(m.id);
+            const active = effective?.startsWith(m.id);
             return (
               <button
                 key={m.id}

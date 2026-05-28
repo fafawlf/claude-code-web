@@ -8,6 +8,11 @@ export type AgentProviderId = 'claude' | 'codex';
 
 export const DEFAULT_NODE_ID = 'local';
 export const DEFAULT_AGENT_PROVIDER: AgentProviderId = 'claude';
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
+
+export function defaultModelForProvider(provider: AgentProviderId): string | undefined {
+  return provider === 'claude' ? DEFAULT_CLAUDE_MODEL : undefined;
+}
 
 export type ActiveToolInfo = {
   toolUseId: string;

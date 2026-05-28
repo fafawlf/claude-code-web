@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { WebSocket, RawData } from 'ws';
 import type { SessionManager } from './session/SessionManager.js';
 import type { AgentSession } from './agents/types.js';
-import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type ClientHello, type ClientMessage, type ServerMessage, type PermissionMode } from './protocol.js';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, type ClientHello, type ClientMessage, type ServerMessage, type PermissionMode } from './protocol.js';
 import { timingSafeEqualStr } from './auth.js';
 import { NodeRegistry } from './nodes/NodeRegistry.js';
 
@@ -199,7 +199,7 @@ export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaul
     provider: requestedProvider,
     cwd,
     resume: msg.resumeClaudeId,
-    model: msg.model,
+    model: msg.model ?? defaultModelForProvider(requestedProvider),
     permissionMode: msg.permissionMode,
     viewerMode: msg.viewerMode,
   });

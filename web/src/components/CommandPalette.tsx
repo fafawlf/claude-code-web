@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentProviderId, PermissionMode, SessionStateSnapshot, StoredSession } from '../types';
-import { modelOptionsForProvider, modeLabel } from '../types';
+import { defaultModelForProvider, modelOptionsForProvider, modeLabel } from '../types';
 import type { SkinId } from '../skins';
 import { SKINS } from '../skins';
 import { Icon, type IconName } from './Icon';
@@ -55,8 +55,10 @@ export function CommandPalette({ open, onClose, state, sessions, currentSkin, cu
     out.push({ id: 'act:rename', group: 'Actions', label: 'Rename current session', icon: 'pencil', action: { kind: 'rename' } });
     out.push({ id: 'act:refresh', group: 'Actions', label: 'Refresh history', icon: 'clock', action: { kind: 'refresh' } });
 
-    for (const m of modelOptionsForProvider(state?.provider ?? currentProvider)) {
-      const active = state?.model?.startsWith(m.id);
+    const provider = state?.provider ?? currentProvider;
+    const effectiveModel = state?.model ?? defaultModelForProvider(provider);
+    for (const m of modelOptionsForProvider(provider)) {
+      const active = effectiveModel?.startsWith(m.id);
       out.push({
         id: `model:${m.id}`,
         group: 'Models',

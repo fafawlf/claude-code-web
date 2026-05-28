@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildReconnectHello } from '../reconnect';
 import { initialState, withReady } from '../reducer';
-import type { SessionStateSnapshot } from '../types';
+import { DEFAULT_CLAUDE_MODEL, type SessionStateSnapshot } from '../types';
 
 function snap(): SessionStateSnapshot {
   return {
@@ -46,6 +46,11 @@ test('buildReconnectHello resumes provider-neutral sessions with providerSession
     claudeSessionId: undefined,
   });
   assert.equal(buildReconnectHello('live-1', state, 10).resumeClaudeId, 'codex-thread-1');
+});
+
+test('buildReconnectHello defaults recovered Claude sessions to Opus 4.8', () => {
+  const state = withReady(initialState, { ...snap(), model: undefined });
+  assert.equal(buildReconnectHello('live-1', state, 10).model, DEFAULT_CLAUDE_MODEL);
 });
 
 test('buildReconnectHello creates a plain hello before any active session exists', () => {

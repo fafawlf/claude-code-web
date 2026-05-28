@@ -5,7 +5,7 @@ import { cachedChatState, cachedLastEventId, chatStateForReady, forgetChatState,
 import { buildReconnectHello } from './reconnect';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
 import type { AgentProviderId, ClaudeAuthInfo, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
-import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, modeLabel, MODE_ORDER } from './types';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, MODE_ORDER } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MessageList } from './components/MessageList';
 import { PermissionModal } from './components/PermissionModal';
@@ -340,7 +340,8 @@ export function App() {
     client.onOpen(() => {
       const activeId = activeSessionIdRef.current;
       if (!activeId) {
-        client.send({ type: 'hello', nodeId: selectedNodeIdRef.current, provider: selectedProviderRef.current });
+        const provider = selectedProviderRef.current;
+        client.send({ type: 'hello', nodeId: selectedNodeIdRef.current, provider, model: defaultModelForProvider(provider) });
         return;
       }
       client.send(buildReconnectHello(
@@ -399,7 +400,7 @@ export function App() {
       provider,
       cwd: opts?.cwd,
       resumeClaudeId: opts?.resumeClaudeId,
-      model: opts?.model,
+      model: opts?.model ?? defaultModelForProvider(provider),
       permissionMode: opts?.mode,
       viewerMode: opts?.viewerMode,
       lastEventId,

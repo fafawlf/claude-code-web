@@ -5,13 +5,16 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AgentMenu } from '../components/AgentMenu';
 import { ModelMenu } from '../components/ModelMenu';
 import { NodeProviderMenu } from '../components/NodeProviderMenu';
-import { modelOptionsForProvider, providerLabel } from '../types';
+import { DEFAULT_CLAUDE_MODEL, defaultModelForProvider, modelLabel, modelOptionsForProvider, providerLabel } from '../types';
 
 (globalThis as unknown as { React: typeof React }).React = React;
 
 test('provider helpers expose distinct Claude and Codex model menus', () => {
   assert.equal(providerLabel('codex'), 'Codex');
   assert.ok(modelOptionsForProvider('claude').some((m) => m.id.startsWith('claude-')));
+  assert.equal(modelOptionsForProvider('claude')[0].id, DEFAULT_CLAUDE_MODEL);
+  assert.equal(defaultModelForProvider('claude'), DEFAULT_CLAUDE_MODEL);
+  assert.equal(modelLabel('claude'), 'Opus 4.8');
   assert.ok(modelOptionsForProvider('codex').some((m) => m.id.includes('codex')));
   assert.equal(modelOptionsForProvider('codex')[0].id, 'gpt-5.5');
 });
@@ -44,7 +47,7 @@ test('ModelMenu switches labels by provider', () => {
     onSelect: () => {},
   }));
 
-  assert.match(claude, /default/);
+  assert.match(claude, /Opus 4.8/);
   assert.match(codex, /Codex default/);
 });
 
