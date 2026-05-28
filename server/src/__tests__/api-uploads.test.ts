@@ -129,6 +129,84 @@ test('GET /api/file opens absolute files inside a project with spaces', async ()
   }
 });
 
+test('GET /api/file opens absolute generated artifacts under server workspace even from another cwd', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccw-file-'));
+  const activeProject = join(root, 'chatgpt');
+  const otherProject = join(root, 'random shit');
+  mkdirSync(activeProject);
+  mkdirSync(otherProject);
+  const file = join(otherProject, 'hi.docx');
+  writeFileSync(file, 'docx bytes');
+  const app = Fastify({ logger: false });
+  const sm = new SessionManager();
+  registerApi(app, 'tok', root, sm);
+
+  try {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/file?t=tok&cwd=${encodeURIComponent(activeProject)}&path=${encodeURIComponent(file)}&download=1`,
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body, 'docx bytes');
+    assert.match(String(res.headers['content-disposition']), /^attachment; filename="hi\.docx"/);
+  } finally {
+    await app.close();
+    await sm.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/file still rejects relative escapes even if sibling file is an artifact', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccw-file-'));
+  const activeProject = join(root, 'chatgpt');
+  const otherProject = join(root, 'random shit');
+  mkdirSync(activeProject);
+  mkdirSync(otherProject);
+  writeFileSync(join(otherProject, 'hi.docx'), 'docx bytes');
+  const app = Fastify({ logger: false });
+  const sm = new SessionManager();
+  registerApi(app, 'tok', root, sm);
+
+  try {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/file?t=tok&cwd=${encodeURIComponent(activeProject)}&path=${encodeURIComponent('../random shit/hi.docx')}&download=1`,
+    });
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body, /outside the current project/);
+  } finally {
+    await app.close();
+    await sm.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/file rejects absolute files outside workspace roots', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccw-file-'));
+  const outside = mkdtempSync(join(tmpdir(), 'ccw-outside-'));
+  const activeProject = join(root, 'chatgpt');
+  mkdirSync(activeProject);
+  const file = join(outside, 'secret.txt');
+  writeFileSync(file, 'secret');
+  const app = Fastify({ logger: false });
+  const sm = new SessionManager();
+  registerApi(app, 'tok', root, sm);
+
+  try {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/file?t=tok&cwd=${encodeURIComponent(activeProject)}&path=${encodeURIComponent(file)}&download=1`,
+    });
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body, /outside the current project/);
+  } finally {
+    await app.close();
+    await sm.closeAll();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/file rejects relative paths outside the project', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccw-file-'));
   const app = Fastify({ logger: false });

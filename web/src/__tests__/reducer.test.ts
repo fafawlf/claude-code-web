@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyEvent, addUserOptimistic, applyStateDelta, initialState, withReady, type ChatState } from '../reducer';
+import { applyEvent, addUserOptimistic, applyStateDelta, initialState, settleReplayedHistory, withReady, type ChatState } from '../reducer';
 import type { SdkEvent, SessionStateSnapshot } from '../types';
 
 function baseState(): ChatState {
@@ -68,7 +68,7 @@ test('local model switch stdout notice is filtered from assistant messages', () 
     type: 'assistant',
     message: {
       content: [
-        { type: 'text', text: '<local-command-stdout>Set model to claude-opus-4-7</local-command-stdout>' },
+        { type: 'text', text: '<local-command-stdout>Set model to claude-opus-4-8</local-command-stdout>' },
       ],
     },
   } as unknown as SdkEvent;
@@ -81,14 +81,14 @@ test('local model switch stdout can be stripped from a mixed assistant message',
   let s = baseState();
   s = {
     ...s,
-    streamingText: '<local-command-stdout>Set model to claude-opus-4-7</local-command-stdout>\nDone.',
+    streamingText: '<local-command-stdout>Set model to claude-opus-4-8</local-command-stdout>\nDone.',
     busy: true,
   };
   const ev: SdkEvent = {
     type: 'assistant',
     message: {
       content: [
-        { type: 'text', text: '<local-command-stdout>Set model to claude-opus-4-7</local-command-stdout>\nDone.' },
+        { type: 'text', text: '<local-command-stdout>Set model to claude-opus-4-8</local-command-stdout>\nDone.' },
       ],
     },
   } as unknown as SdkEvent;
@@ -228,11 +228,11 @@ test('system error event appends an error item and clears busy', () => {
 test('applyStateDelta merges model/mode onto existing state (optimistic update)', () => {
   let s = baseState();
   assert.equal(s.state?.model, undefined);
-  s = applyStateDelta(s, { model: 'claude-opus-4-7' });
-  assert.equal(s.state?.model, 'claude-opus-4-7');
+  s = applyStateDelta(s, { model: 'claude-opus-4-8' });
+  assert.equal(s.state?.model, 'claude-opus-4-8');
   s = applyStateDelta(s, { permissionMode: 'plan' });
   assert.equal(s.state?.permissionMode, 'plan');
-  assert.equal(s.state?.model, 'claude-opus-4-7'); // prior delta preserved
+  assert.equal(s.state?.model, 'claude-opus-4-8'); // prior delta preserved
 });
 
 test('applyStateDelta is a no-op before ready (state === null)', () => {
@@ -258,4 +258,28 @@ test('lastEventId always advances to the max id seen', () => {
   assert.equal(s.lastEventId, 5);
   s = applyEvent(s, { type: 'result' } as unknown as SdkEvent, 9);
   assert.equal(s.lastEventId, 9);
+});
+
+test('settleReplayedHistory clears stale busy state for idle history replay', () => {
+  let s = baseState();
+  const ev: SdkEvent = {
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'Historical answer' }] },
+  } as unknown as SdkEvent;
+  s = applyEvent(s, ev, 1);
+  assert.equal(s.busy, true);
+
+  s = settleReplayedHistory(s);
+  assert.equal(s.busy, false);
+  assert.equal(s.streamingText, '');
+  assert.equal(s.items.length, 1);
+});
+
+test('settleReplayedHistory keeps busy state for actively running replay', () => {
+  let s = withReady(initialState, { ...baseState().state!, runtimeStatus: 'running' });
+  s = { ...s, busy: true, streamingText: 'partial' };
+
+  const settled = settleReplayedHistory(s);
+  assert.equal(settled.busy, true);
+  assert.equal(settled.streamingText, 'partial');
 });

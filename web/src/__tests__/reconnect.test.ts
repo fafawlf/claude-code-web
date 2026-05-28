@@ -11,7 +11,7 @@ function snap(): SessionStateSnapshot {
     provider: 'claude',
     claudeSessionId: 'claude-1',
     cwd: '/root/chatgpt',
-    model: 'claude-opus-4-7',
+    model: 'claude-opus-4-8',
     permissionMode: 'bypassPermissions',
     runtimeStatus: 'running',
     attachedCount: 1,
@@ -32,7 +32,7 @@ test('buildReconnectHello includes recovery fields for expired server-side live 
     lastEventId: 10,
     cwd: '/root/chatgpt',
     resumeClaudeId: 'claude-1',
-    model: 'claude-opus-4-7',
+    model: 'claude-opus-4-8',
     permissionMode: 'bypassPermissions',
     viewerMode: undefined,
   });

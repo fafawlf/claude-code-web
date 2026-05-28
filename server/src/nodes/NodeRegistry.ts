@@ -42,7 +42,7 @@ function defaultNodes(defaultCwd: string): NodeConfig[] {
   if (detectCodexExecutable().source !== 'missing') providers.push('codex');
   return [{
     id: DEFAULT_NODE_ID,
-    label: 'This machine',
+    label: process.env.CCW_NODE_LABEL?.trim() || 'This machine',
     kind: 'local',
     defaultCwd: defaultCwd || homedir(),
     providers,

@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { ClaudeSession } from '../session/ClaudeSession.js';
 
 function stubs() {
@@ -41,6 +44,19 @@ test('initial state: resume sets claudeSessionId before any event arrives', () =
   void s.close();
 });
 
+test('resumed sessions load transcript without spawning Claude until user writes', async () => {
+  const s = new ClaudeSession({
+    id: 'id-resume-lazy',
+    cwd: '/nonexistent-ccw-test',
+    resume: 'does-not-exist-either',
+    ...stubs(),
+  });
+
+  await s.historyReady;
+  assert.equal((s as any).query, undefined);
+  await s.close();
+});
+
 test('setPermissionMode before query is constructed updates state without throwing', async () => {
   // Using resume forces the history-load path where this.query starts undefined.
   // The SDK call to getSessionMessages will fail (no such session on disk),
@@ -54,8 +70,8 @@ test('setPermissionMode before query is constructed updates state without throwi
   // Immediately, before history finishes resolving:
   await s.setPermissionMode('plan');
   assert.equal(s.getState().permissionMode, 'plan');
-  await s.setModel('claude-opus-4-7');
-  assert.equal(s.getState().model, 'claude-opus-4-7');
+  await s.setModel('claude-opus-4-8');
+  assert.equal(s.getState().model, 'claude-opus-4-8');
   await s.close();
 });
 
@@ -143,5 +159,26 @@ test('active tool is exposed while a tool_use is awaiting its result', async () 
     },
   });
   assert.equal(s.getState().activeTool, undefined);
+  await s.close();
+});
+
+test('plan mode attachment is surfaced as readable assistant text', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ccw-plan-file-'));
+  const planPath = join(dir, 'plan.md');
+  await writeFile(planPath, '# Plan\n\nThis is the plan.');
+  const s = new ClaudeSession({ id: 'id-plan-file', cwd: '/tmp', ...stubs() });
+
+  await (s as any).pushTranscriptMessage({
+    type: 'attachment',
+    uuid: 'plan-attachment',
+    attachment: {
+      type: 'plan_mode',
+      planExists: true,
+      planFilePath: planPath,
+    },
+  });
+
+  const assistant = s.replay().map((e) => e.event as any).find((e) => e.type === 'assistant');
+  assert.equal(assistant.message.content[0].text, '# Plan\n\nThis is the plan.');
   await s.close();
 });

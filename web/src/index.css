@@ -832,6 +832,36 @@
   display: none;
 }
 
+.setup-overlay {
+  overflow: auto;
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+}
+
+.setup-card {
+  display: flex;
+  max-height: calc(100dvh - 24px);
+  min-height: 0;
+  flex-direction: column;
+}
+
+.setup-header,
+.setup-footer {
+  flex: 0 0 auto;
+}
+
+.setup-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.setup-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+
 @media (max-width: 767px) {
   html,
   body,

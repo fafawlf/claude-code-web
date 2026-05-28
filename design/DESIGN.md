@@ -189,7 +189,7 @@ Layout:
 - **Search row** (52px): 18px search icon, input in `base` `text.primary`, placeholder "Type to search…", right-aligned `xs text.muted` "⌘K".
 - **Result list** (scroll): groups (`xs` uppercase labels `text.muted` 8px vertical padding).
   - **Actions**: New chat, Clear session, Rename…, Open folder, Show history.
-  - **Models**: Opus 4.7, Sonnet 4.6, Haiku 4.5.
+  - **Models**: Opus 4.8, Sonnet 4.6, Haiku 4.5.
   - **Modes**: default, auto-accept edits, plan.
   - **Sessions**: last 20 matching by summary / customTitle.
 

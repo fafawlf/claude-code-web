@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, type ChatState } from '../reducer';
-import { cachedChatState, cachedLastEventId, rememberChatState, sessionCacheKey } from '../sessionCache';
+import { cachedChatState, cachedLastEventId, chatStateForReady, rememberChatState, sessionCacheKey } from '../sessionCache';
 
 function stateFor(sessionId: string, lastEventId: number): ChatState {
   return {
@@ -56,4 +56,52 @@ test('rememberChatState can key pre-ready state by active session id', () => {
   rememberChatState(cache, 'active-web-session', { ...initialState, lastEventId: 12 });
 
   assert.equal(cachedLastEventId(cache, 'active-web-session'), 12);
+});
+
+test('chatStateForReady carries visible history from read-only viewer into writable takeover', () => {
+  const viewer = stateFor('viewer-web-session', 75);
+  viewer.state = {
+    ...viewer.state!,
+    providerSessionId: 'claude-transcript-id',
+    claudeSessionId: 'claude-transcript-id',
+    viewerMode: true,
+  };
+  viewer.items = [{ kind: 'assistant_text', id: 'a1', text: 'Already visible plan' }];
+  viewer.busy = true;
+  viewer.streamingText = 'stale';
+
+  const writable = {
+    ...viewer.state!,
+    sessionId: 'writable-web-session',
+    viewerMode: false,
+    runtimeStatus: 'idle' as const,
+  };
+
+  const next = chatStateForReady(viewer, undefined, writable);
+  assert.equal(next.items.length, 1);
+  assert.equal((next.items[0] as any).text, 'Already visible plan');
+  assert.equal(next.busy, false);
+  assert.equal(next.streamingText, '');
+});
+
+test('chatStateForReady does not carry history across different providers or transcripts', () => {
+  const viewer = stateFor('viewer-web-session', 75);
+  viewer.state = {
+    ...viewer.state!,
+    providerSessionId: 'claude-transcript-id',
+    claudeSessionId: 'claude-transcript-id',
+    viewerMode: true,
+  };
+  viewer.items = [{ kind: 'assistant_text', id: 'a1', text: 'Wrong chat' }];
+
+  const other = {
+    ...viewer.state!,
+    sessionId: 'other-web-session',
+    providerSessionId: 'different-transcript-id',
+    claudeSessionId: 'different-transcript-id',
+    viewerMode: false,
+  };
+
+  const next = chatStateForReady(viewer, undefined, other);
+  assert.equal(next.items.length, 0);
 });

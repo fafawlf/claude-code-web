@@ -63,7 +63,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
       // Wait for the background history load (if any) to finish populating the
       // ring, then flush the whole prior transcript as batched frames. This
       // avoids subscribing early and dribbling 900 history events one by one.
-      await s.historyReady;
+      await waitForHistoryReady(s);
       if (socket.readyState !== socket.OPEN) { sm.detach(s.id); return; }
       const replay = s.replay(afterId);
       if (replay.length > 0) {
@@ -150,6 +150,17 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
   });
 }
 
+async function waitForHistoryReady(session: AgentSession): Promise<void> {
+  // History replay should usually resolve quickly, but the Claude SDK can
+  // occasionally stall while reading an old transcript. In that case, do not
+  // leave the browser in a blank read-only state: flush whatever is already in
+  // the in-memory ring and subscribe to future events.
+  await Promise.race([
+    session.historyReady,
+    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+  ]);
+}
+
 export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaultCwd: string, nodes = new NodeRegistry(defaultCwd)): { session: AgentSession; replayAfterId: number; recovered: boolean } {
   const requestedNodeId = msg.nodeId ?? DEFAULT_NODE_ID;
   const requestedProvider = msg.provider ?? DEFAULT_AGENT_PROVIDER;
@@ -171,17 +182,28 @@ export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaul
       return { session: existing, replayAfterId: msg.lastEventId ?? 0, recovered: false };
     }
   }
+  const cwd = msg.cwd ?? node.defaultCwd ?? defaultCwd;
+  const reusable = sm.findReusableResume({
+    nodeId: requestedNodeId,
+    provider: requestedProvider,
+    cwd,
+    providerSessionId: msg.resumeClaudeId,
+    viewerMode: msg.viewerMode,
+  });
+  if (reusable) {
+    return { session: reusable, replayAfterId: msg.lastEventId ?? 0, recovered: !!msg.sessionId };
+  }
   const session = sm.create({
     nodeId: requestedNodeId,
     nodeLabel: node.label,
     provider: requestedProvider,
-    cwd: msg.cwd ?? node.defaultCwd ?? defaultCwd,
+    cwd,
     resume: msg.resumeClaudeId,
     model: msg.model,
     permissionMode: msg.permissionMode,
     viewerMode: msg.viewerMode,
   });
-  return { session, replayAfterId: 0, recovered: !!msg.sessionId };
+  return { session, replayAfterId: msg.lastEventId ?? 0, recovered: !!msg.sessionId };
 }
 
 function send(socket: WebSocket, m: ServerMessage): boolean {

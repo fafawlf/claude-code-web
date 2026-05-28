@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { WsClient, type ConnectionState } from './ws';
-import { applyEvent, applyStateDelta, initialState, addSystem, addUserOptimistic, withReady, type ChatState } from './reducer';
-import { cachedChatState, cachedLastEventId, forgetChatState, rememberChatState } from './sessionCache';
+import { applyEvent, applyStateDelta, initialState, addSystem, addUserOptimistic, settleReplayedHistory, withReady, type ChatState } from './reducer';
+import { cachedChatState, cachedLastEventId, chatStateForReady, forgetChatState, rememberChatState } from './sessionCache';
 import { buildReconnectHello } from './reconnect';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
 import type { AgentProviderId, ClaudeAuthInfo, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
@@ -164,10 +164,11 @@ export function App() {
 
   const projectEntries = useMemo(() => buildProjectEntries({
     current: state.state?.cwd,
+    home: serverInfo?.home,
     fallback: defaultCwd,
     recents: recentProjects,
     pinned: pinnedProjects,
-  }), [defaultCwd, pinnedProjects, recentProjects, state.state?.cwd]);
+  }), [defaultCwd, pinnedProjects, recentProjects, serverInfo?.home, state.state?.cwd]);
 
   const currentCwd = state.state?.cwd ?? defaultCwd;
 
@@ -256,8 +257,8 @@ export function App() {
         activeSessionIdRef.current = m.state.sessionId;
         selectNodeSilently(m.state.nodeId);
         selectProviderSilently(m.state.provider);
-        const cached = cachedChatState(cacheRef.current, m.state) ?? { ...initialState };
-        commitState(() => withReady(cached, m.state));
+        const cached = cachedChatState(cacheRef.current, m.state);
+        commitState((current) => withReady(chatStateForReady(current, cached, m.state), m.state));
         setRecentProjects(rememberProject(m.state.cwd));
         setPendingEdits(new Map());
         setNonEditPermReq(null);
@@ -278,7 +279,7 @@ export function App() {
         // Batch replay from the server: fold the whole set into one setState to
         // avoid 900× renders on attach to a long session.
         const evs = m.events;
-        commitState((s) => evs.reduce((acc, { id, event }) => applyEvent(acc, event, id), s));
+        commitState((s) => settleReplayedHistory(evs.reduce((acc, { id, event }) => applyEvent(acc, event, id), s)));
       } else if (m.type === 'sessions_update') {
         const previous = liveStatusRef.current;
         const activeId = activeSessionIdRef.current;
@@ -345,15 +346,34 @@ export function App() {
   }, [sidebarOpen]);
 
   const newSession = useCallback((opts?: { nodeId?: string; provider?: AgentProviderId; cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string; viewerMode?: boolean }) => {
+    const nodeId = opts?.nodeId ?? selectedNodeIdRef.current;
+    const provider = opts?.provider ?? selectedProviderRef.current;
+    const current = stateRef.current;
+    const carryCurrent = canUseCurrentAsResumeSeed(current, opts, nodeId, provider);
+    const lastEventId = carryCurrent ? current.lastEventId : undefined;
+    const seededState = carryCurrent && current.state
+      ? {
+          ...current,
+          busy: false,
+          streamingText: '',
+          state: {
+            ...current.state,
+            nodeId,
+            provider,
+            cwd: opts?.cwd ?? current.state.cwd,
+            viewerMode: false,
+            runtimeStatus: 'idle' as const,
+            activeTool: undefined,
+          },
+        }
+      : { ...initialState };
     pendingRef.current = [];
     activeSessionIdRef.current = null;
-    commitState(initialState);
+    commitState(seededState);
     setPendingEdits(new Map());
     setNonEditPermReq(null);
     setPlanProposed(null);
     setSessionTitle(opts?.title);
-    const nodeId = opts?.nodeId ?? selectedNodeIdRef.current;
-    const provider = opts?.provider ?? selectedProviderRef.current;
     selectNodeSilently(nodeId);
     selectProviderSilently(provider);
     if (opts?.cwd) setRecentProjects(rememberProject(opts.cwd));
@@ -366,6 +386,7 @@ export function App() {
       model: opts?.model,
       permissionMode: opts?.mode,
       viewerMode: opts?.viewerMode,
+      lastEventId,
     });
   }, [commitState, selectNodeSilently, selectProviderSilently]);
 
@@ -483,7 +504,7 @@ export function App() {
       case 'resume': {
         const s = allKnownSessions.find((x) => x.sessionId === a.claudeSessionId);
         const title = s?.customTitle ?? s?.summary ?? s?.firstPrompt;
-        newSession({ cwd: sessionProject.get(a.claudeSessionId) ?? state.state?.cwd, resumeClaudeId: a.claudeSessionId, title });
+        newSession({ cwd: sessionProject.get(a.claudeSessionId) ?? state.state?.cwd, resumeClaudeId: a.claudeSessionId, title, viewerMode: true });
         break;
       }
     }
@@ -615,7 +636,7 @@ export function App() {
           activitySummary={activitySummary}
           activitySessions={activitySessions}
           onNewInProject={(cwd) => { setSidebarOpen(false); newSession({ cwd }); }}
-          onResume={(claudeId, title, cwd) => { setSidebarOpen(false); newSession({ cwd, resumeClaudeId: claudeId, title }); }}
+          onResume={(claudeId, title, cwd) => { setSidebarOpen(false); newSession({ cwd, resumeClaudeId: claudeId, title, viewerMode: true }); }}
           onView={(claudeId, title, cwd) => { setSidebarOpen(false); newSession({ cwd, resumeClaudeId: claudeId, title, viewerMode: true }); }}
           onOpenActivity={(sessionId, title) => { setSidebarOpen(false); attachLiveSession(sessionId, title); }}
           onEndActivity={closeLiveSession}
@@ -657,7 +678,13 @@ export function App() {
           onSelectSkin={setSkin}
           onRename={renameCurrent}
           onContinueWriting={state.state?.viewerMode && state.state?.claudeSessionId
-            ? () => newSession({ cwd: state.state?.cwd, resumeClaudeId: state.state!.claudeSessionId, title: sessionTitle })
+            ? () => newSession({
+                nodeId: state.state!.nodeId,
+                provider: state.state!.provider,
+                cwd: state.state!.cwd,
+                resumeClaudeId: state.state!.claudeSessionId,
+                title: sessionTitle,
+              })
             : undefined}
           onRefreshHistory={state.state?.viewerMode
             ? () => wsRef.current?.send({ type: 'refresh_history' })
@@ -754,7 +781,7 @@ function Centered({ children }: { children: React.ReactNode }) {
   return <div className="h-full flex items-center justify-center text-text-secondary">{children}</div>;
 }
 
-function buildProjectEntries(opts: { current?: string; fallback?: string; recents: ProjectEntry[]; pinned: string[] }): ProjectEntry[] {
+function buildProjectEntries(opts: { current?: string; home?: string; fallback?: string; recents: ProjectEntry[]; pinned: string[] }): ProjectEntry[] {
   const out = new Map<string, ProjectEntry>();
   const add = (path: string | undefined, lastUsed: number) => {
     if (!path) return;
@@ -766,8 +793,22 @@ function buildProjectEntries(opts: { current?: string; fallback?: string; recent
   add(opts.current, Number.MAX_SAFE_INTEGER);
   opts.pinned.forEach((path, i) => add(path, Number.MAX_SAFE_INTEGER - i - 1));
   for (const project of opts.recents) add(project.path, project.lastUsed);
+  add(opts.home, -1);
   add(opts.fallback, 0);
   return [...out.values()];
+}
+
+function canUseCurrentAsResumeSeed(
+  current: ChatState,
+  opts: { nodeId?: string; provider?: AgentProviderId; cwd?: string; resumeClaudeId?: string; viewerMode?: boolean } | undefined,
+  nodeId: string,
+  provider: AgentProviderId
+): boolean {
+  const snap = current.state;
+  if (!snap || !opts?.resumeClaudeId || opts.viewerMode === true || current.items.length === 0) return false;
+  const currentProviderSession = snap.providerSessionId ?? snap.claudeSessionId;
+  if (currentProviderSession !== opts.resumeClaudeId) return false;
+  return snap.nodeId === nodeId && snap.provider === provider && snap.cwd === (opts.cwd ?? snap.cwd);
 }
 
 function readSetupSeen(): boolean {

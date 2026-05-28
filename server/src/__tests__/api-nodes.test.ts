@@ -21,6 +21,21 @@ test('GET /api/nodes exposes local node without secrets', async () => {
   await app.close();
 });
 
+test('NodeRegistry can label the server runtime for remote deployments', async () => {
+  const prev = process.env.CCW_NODE_LABEL;
+  process.env.CCW_NODE_LABEL = 'DO remote';
+  try {
+    const registry = new NodeRegistry('/root/project');
+    const listed = registry.list();
+    assert.equal(listed[0].id, 'local');
+    assert.equal(listed[0].label, 'DO remote');
+    assert.equal(listed[0].kind, 'local');
+  } finally {
+    if (prev === undefined) delete process.env.CCW_NODE_LABEL;
+    else process.env.CCW_NODE_LABEL = prev;
+  }
+});
+
 test('GET /api/node/info reports node-scoped runtime info', async () => {
   const app = Fastify();
   const sm = new SessionManager();

@@ -4,11 +4,11 @@ import { cleanAssistantText, cleanStreamingAssistantText } from '../assistantTex
 
 test('cleanAssistantText removes local model switch stdout without dropping real text', () => {
   assert.equal(
-    cleanAssistantText('<local-command-stdout>Set model to claude-opus-4-7</local-command-stdout>\n\nReady.'),
+    cleanAssistantText('<local-command-stdout>Set model to claude-opus-4-8</local-command-stdout>\n\nReady.'),
     'Ready.'
   );
   assert.equal(
-    cleanAssistantText('Before\n<local-command-stdout>Set model to claude-opus-4-7</local-command-stdout>\nAfter'),
+    cleanAssistantText('Before\n<local-command-stdout>Set model to claude-opus-4-8</local-command-stdout>\nAfter'),
     'Before\nAfter'
   );
 });

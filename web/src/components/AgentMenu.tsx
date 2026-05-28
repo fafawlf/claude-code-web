@@ -69,7 +69,7 @@ export function AgentMenu({
                     <span className={`h-1.5 w-1.5 rounded-full ${node.connected ? 'bg-success' : 'bg-text-muted'}`} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-text-primary">{node.label}</div>
-                      <div className="truncate text-[10px] text-text-muted">{node.kind === 'local' ? 'this machine' : 'ssh node'} · {node.defaultCwd}</div>
+                      <div className="truncate text-[10px] text-text-muted">{node.kind === 'local' ? 'server runtime' : 'ssh node'} · {node.defaultCwd}</div>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-1">

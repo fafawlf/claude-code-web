@@ -33,7 +33,7 @@ test('resolveHelloSession recovers when a browser reconnects with an expired liv
     sessionId: 'expired-live-id',
     cwd: '/workspace/project',
     resumeClaudeId: 'claude-transcript-id',
-    model: 'claude-opus-4-7',
+    model: 'claude-opus-4-8',
     permissionMode: 'acceptEdits',
   }, '/fallback');
 
@@ -44,8 +44,44 @@ test('resolveHelloSession recovers when a browser reconnects with an expired liv
   assert.equal(resolved.session.getState().nodeId, 'local');
   assert.equal(resolved.session.getState().provider, 'claude');
   assert.equal(resolved.session.getState().claudeSessionId, 'claude-transcript-id');
-  assert.equal(resolved.session.getState().model, 'claude-opus-4-7');
+  assert.equal(resolved.session.getState().model, 'claude-opus-4-8');
   assert.equal(resolved.session.getState().permissionMode, 'acceptEdits');
+  await sm.closeAll();
+});
+
+test('resolveHelloSession reuses an already resumed history session', async () => {
+  const sm = new SessionManager();
+  const first = resolveHelloSession(sm, {
+    type: 'hello',
+    cwd: '/workspace/project',
+    resumeClaudeId: 'claude-transcript-id',
+    viewerMode: true,
+  }, '/fallback');
+  const second = resolveHelloSession(sm, {
+    type: 'hello',
+    cwd: '/workspace/project',
+    resumeClaudeId: 'claude-transcript-id',
+    viewerMode: true,
+  }, '/fallback');
+
+  assert.equal(second.session.id, first.session.id);
+  assert.equal(second.replayAfterId, 0);
+  assert.equal(sm.listSnapshots().length, 1);
+  await sm.closeAll();
+});
+
+test('resolveHelloSession preserves replay cursor when creating a takeover resume session', async () => {
+  const sm = new SessionManager();
+  const resolved = resolveHelloSession(sm, {
+    type: 'hello',
+    cwd: '/workspace/project',
+    resumeClaudeId: 'claude-transcript-id',
+    lastEventId: 75,
+  }, '/fallback');
+
+  assert.equal(resolved.session.getState().claudeSessionId, 'claude-transcript-id');
+  assert.equal(resolved.session.getState().viewerMode, false);
+  assert.equal(resolved.replayAfterId, 75);
   await sm.closeAll();
 });
 

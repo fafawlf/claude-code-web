@@ -148,6 +148,12 @@ export function withReady(s: ChatState, snap: SessionStateSnapshot): ChatState {
   return { ...s, state: snap };
 }
 
+export function settleReplayedHistory(s: ChatState): ChatState {
+  if (!s.state || s.state.runtimeStatus === 'running') return s;
+  if (!s.busy && !s.streamingText) return s;
+  return { ...s, busy: false, streamingText: '' };
+}
+
 export function addSystem(s: ChatState, text: string, level: 'info' | 'error' = 'info'): ChatState {
   return { ...s, items: [...s.items, { kind: 'system', id: rid(), text, level }] };
 }

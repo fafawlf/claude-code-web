@@ -20,6 +20,10 @@ const SKIP_DIRS = new Set([
 const MAX_UPLOAD_FILES = 12;
 const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
 const UPLOAD_BODY_LIMIT = 80 * 1024 * 1024;
+const DOWNLOADABLE_OUTSIDE_PROJECT_EXTENSIONS = new Set([
+  '.csv', '.doc', '.docx', '.gif', '.html', '.jpeg', '.jpg', '.json', '.log', '.md',
+  '.pdf', '.png', '.ppt', '.pptx', '.svg', '.txt', '.webp', '.xls', '.xlsx', '.zip',
+]);
 
 export function registerApi(
   app: FastifyInstance,
@@ -202,7 +206,7 @@ export function registerApi(
     const q = req.query as { cwd?: string; path?: string; download?: string } | undefined;
     if (!q?.path) return reply.code(400).send({ error: 'path required' });
     try {
-      const target = resolveProjectFile(q.cwd ?? defaultCwd, q.path);
+      const target = resolveProjectFile(q.cwd ?? defaultCwd, q.path, defaultCwd);
       const st = await stat(target);
       if (!st.isFile()) return reply.code(400).send({ error: 'path is not a file' });
       const filename = basename(target);
@@ -242,7 +246,7 @@ function resolveSafe(p: string): string {
   return resolve(p);
 }
 
-function resolveProjectFile(cwd: string, filePath: string): string {
+function resolveProjectFile(cwd: string, filePath: string, defaultCwd: string): string {
   const root = resolveSafe(cwd);
   const raw = filePath.trim().replace(/^@/, '');
   const target = raw.startsWith('~/')
@@ -251,10 +255,32 @@ function resolveProjectFile(cwd: string, filePath: string): string {
       ? resolve(raw)
       : resolve(root, raw);
   const rel = relative(root, target);
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+  if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) {
+    return target;
+  }
+
+  // Relative paths must stay in the current project. Absolute paths printed by
+  // Claude often point at another project under the same server home/workspace,
+  // so allow common generated artifacts there without turning /api/file into a
+  // general filesystem browser.
+  if (!isAbsolute(raw) && !raw.startsWith('~/')) {
+    throw new Error('File is outside the current project');
+  }
+  if (!DOWNLOADABLE_OUTSIDE_PROJECT_EXTENSIONS.has(extname(target).toLowerCase())) {
+    throw new Error('File is outside the current project');
+  }
+  const roots = [resolveSafe(defaultCwd), homedir()]
+    .map((p) => resolve(p))
+    .filter((p, i, arr) => arr.indexOf(p) === i);
+  if (!roots.some((allowedRoot) => isPathInside(allowedRoot, target))) {
     throw new Error('File is outside the current project');
   }
   return target;
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 function validateFolderName(name: string | undefined): { ok: true; value: string } | { ok: false; error: string } {

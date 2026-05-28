@@ -1,7 +1,9 @@
-import { query, getSessionMessages, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { readFile } from 'node:fs/promises';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveClaudePath } from './resolveClaudePath.js';
+import { loadClaudeTranscriptMessages } from './claudeTranscript.js';
 import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type AgentProviderId, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
 
 export type SessionEvent = { id: number; event: SDKMessage };
@@ -141,7 +143,9 @@ export class ClaudeSession {
       // Safe when the session may be actively written to by another process.
       void this.loadHistoryViewer(opts.resume, opts.cwd);
     } else if (opts.resume) {
-      // Replay prior transcript from disk into the ring, then start live pump.
+      // Replay prior transcript from disk into the ring. The live SDK query is
+      // started lazily by sendUser(), so opening/reconnecting history never
+      // spawns a background Claude process on its own.
       void this.loadHistoryThenStart(opts.resume, opts.cwd);
     } else {
       // Fresh chats are lazy: do not spawn a Claude Code subprocess until the
@@ -153,12 +157,10 @@ export class ClaudeSession {
 
   private async loadHistoryViewer(resumeId: string, cwd: string): Promise<void> {
     try {
-      const prior = await getSessionMessages(resumeId, { dir: cwd });
+      const prior = await loadClaudeTranscriptMessages(resumeId, cwd);
       for (const m of prior) {
         if (this.closed) return;
-        const ev = { ...m, parent_tool_use_id: m.parent_tool_use_id ?? null } as unknown as SDKMessage;
-        if ((m as any).uuid) this.seenUuids.add((m as any).uuid);
-        this.pushEvent(ev);
+        await this.pushTranscriptMessage(m);
       }
     } catch (err) {
       const msg = (err as Error).message ?? 'failed to load history';
@@ -182,14 +184,11 @@ export class ClaudeSession {
     if (!claudeId) return 0;
     let added = 0;
     try {
-      const prior = await getSessionMessages(claudeId, { dir: this.cwd });
+      const prior = await loadClaudeTranscriptMessages(claudeId, this.cwd);
       for (const m of prior) {
         const uuid = (m as any).uuid;
         if (uuid && this.seenUuids.has(uuid)) continue;
-        if (uuid) this.seenUuids.add(uuid);
-        const ev = { ...m, parent_tool_use_id: m.parent_tool_use_id ?? null } as unknown as SDKMessage;
-        this.pushEvent(ev);
-        added++;
+        added += await this.pushTranscriptMessage(m);
       }
     } catch {
       // Best effort — errors surface as they do on initial load only if fatal.
@@ -199,11 +198,9 @@ export class ClaudeSession {
 
   private async loadHistoryThenStart(resumeId: string, cwd: string): Promise<void> {
     try {
-      const prior = await getSessionMessages(resumeId, { dir: cwd });
+      const prior = await loadClaudeTranscriptMessages(resumeId, cwd);
       for (const m of prior) {
-        const ev = { ...m, parent_tool_use_id: m.parent_tool_use_id ?? null } as unknown as SDKMessage;
-        if ((m as any).uuid) this.seenUuids.add((m as any).uuid);
-        this.pushEvent(ev);
+        await this.pushTranscriptMessage(m);
         if (this.closed) return;
       }
     } catch (err) {
@@ -214,14 +211,11 @@ export class ClaudeSession {
         message: `Could not load prior transcript: ${msg}`,
       } as unknown as SDKMessage);
     }
-    // Signal history ready BEFORE starting pump so WS can flush the batch
-    // before any live event races in.
+    // Signal history ready so WS can flush the transcript batch. Do not start
+    // the live pump here: history open/reconnect should be passive, and
+    // sendUser() already starts query() with the known resume id when the user
+    // explicitly continues writing.
     this.historyReadyResolve();
-    if (this.closed) return;
-    // Rebuild options from current state — any setModel/setPermissionMode the
-    // user performed while history was loading will have updated this.state,
-    // and we want those reflected in the very first query() invocation.
-    this.startQuery(resumeId);
   }
 
   private pushEvent(event: SDKMessage): void {
@@ -238,6 +232,48 @@ export class ClaudeSession {
     for (const l of this.listeners) { try { l(se); } catch { /* */ } }
     if (event.type === 'result') this.setRuntimeStatus('idle');
     if (event.type === 'system' && (event as any).subtype === 'error') this.setRuntimeStatus('error');
+  }
+
+  private async pushTranscriptMessage(message: unknown): Promise<number> {
+    const anyMsg = message as any;
+    if (anyMsg?.uuid) this.seenUuids.add(anyMsg.uuid);
+    const ev = { ...anyMsg, parent_tool_use_id: anyMsg?.parent_tool_use_id ?? null } as unknown as SDKMessage;
+    this.pushEvent(ev);
+    const planEvent = await this.planFileEvent(ev);
+    if (!planEvent) return 1;
+    this.pushEvent(planEvent);
+    return 2;
+  }
+
+  private async pushDerivedEvents(event: SDKMessage): Promise<void> {
+    const planEvent = await this.planFileEvent(event);
+    if (planEvent) this.pushEvent(planEvent);
+  }
+
+  private async planFileEvent(event: SDKMessage): Promise<SDKMessage | undefined> {
+    const anyEv = event as any;
+    const attachment = anyEv?.attachment;
+    if (anyEv?.type !== 'attachment' || attachment?.type !== 'plan_mode') return undefined;
+    if (!attachment.planExists || typeof attachment.planFilePath !== 'string') return undefined;
+    try {
+      const raw = await readFile(attachment.planFilePath, 'utf8');
+      const text = raw.length > 120_000 ? raw.slice(0, 120_000) + '\n\n[Plan truncated]' : raw;
+      return {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        uuid: `plan-file-${anyEv.uuid ?? attachment.planFilePath}`,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text }],
+        },
+      } as unknown as SDKMessage;
+    } catch (err) {
+      return {
+        type: 'system',
+        subtype: 'error' as unknown as 'status',
+        message: `Plan was generated but could not be read: ${(err as Error).message}`,
+      } as unknown as SDKMessage;
+    }
   }
 
   private activeToolDelta(event: SDKMessage): Partial<SessionStateSnapshot> {
@@ -287,6 +323,7 @@ export class ClaudeSession {
             this.updateState({ cost: (event as any).total_cost_usd });
           }
           this.pushEvent(event);
+          await this.pushDerivedEvents(event);
         }
       } catch (err) {
         this.pushEvent({

@@ -54,6 +54,31 @@ export class SessionManager {
     return s ? this.snapshot(s) : undefined;
   }
 
+  findReusableResume(opts: {
+    nodeId: string;
+    provider: AgentProviderId;
+    cwd: string;
+    providerSessionId?: string;
+    viewerMode?: boolean;
+  }): AgentSession | undefined {
+    if (!opts.providerSessionId) return undefined;
+    let best: AgentSession | undefined;
+    for (const session of this.sessions.values()) {
+      if (session.isClosed()) continue;
+      const snap = session.getState();
+      const sameProviderSession =
+        snap.providerSessionId === opts.providerSessionId ||
+        snap.claudeSessionId === opts.providerSessionId;
+      if (!sameProviderSession) continue;
+      if (snap.nodeId !== opts.nodeId || snap.provider !== opts.provider || snap.cwd !== opts.cwd) continue;
+      if (!!snap.viewerMode !== !!opts.viewerMode) continue;
+      if (!best || snap.lastEventId > best.getState().lastEventId || snap.lastEventAt > best.getState().lastEventAt) {
+        best = session;
+      }
+    }
+    return best;
+  }
+
   listSnapshots(): SessionStateSnapshot[] {
     return [...this.sessions.values()].map((s) => this.snapshot(s));
   }

@@ -135,3 +135,20 @@ test('activity hides finished sessions once they are available in history', () =
   assert.deepEqual(rows.map((r) => r.sessionId), ['not-yet-indexed']);
   assert.equal(deriveActivitySummary(rows).label, '1 finished');
 });
+
+test('activity collapses duplicate live wrappers for the same provider session', () => {
+  const rows = deriveActivitySessions({
+    liveSessions: [
+      snap({ sessionId: 'older', claudeSessionId: 'same-claude', providerSessionId: 'same-claude', runtimeStatus: 'idle', lastEventId: 12, lastEventAt: now - 20_000 }),
+      snap({ sessionId: 'newer', claudeSessionId: 'same-claude', providerSessionId: 'same-claude', runtimeStatus: 'idle', lastEventId: 71, lastEventAt: now - 10_000 }),
+      snap({ sessionId: 'other', claudeSessionId: 'other-claude', providerSessionId: 'other-claude', runtimeStatus: 'idle', lastEventId: 2, lastEventAt: now - 5_000 }),
+    ],
+    activeSessionId: null,
+    cache: new Map(),
+    storedSessions: [],
+    now,
+  });
+
+  assert.deepEqual(rows.map((r) => r.sessionId), ['other', 'newer']);
+  assert.equal(deriveActivitySummary(rows).label, '2 finished');
+});

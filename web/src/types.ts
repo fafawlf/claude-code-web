@@ -155,7 +155,7 @@ export type StoredSession = {
 
 // Models exposed in the UI. Labels are stable display names; ids map to SDK model strings.
 export const MODEL_OPTIONS = [
-  { id: 'claude-opus-4-7', label: 'Opus 4.7', hint: 'deepest reasoning' },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', hint: 'best for agentic coding' },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', hint: 'balanced' },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5', hint: 'fastest' },
 ] as const;

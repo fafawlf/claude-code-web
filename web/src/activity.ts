@@ -46,8 +46,9 @@ const STATUS_PRIORITY: Record<ActivityStatus, number> = {
 export function deriveActivitySessions({ liveSessions, activeSessionId, cache, storedSessions, now = Date.now() }: DeriveArgs): ActivitySessionViewModel[] {
   const storedByClaudeId = new Map(storedSessions.map((s) => [s.sessionId, s]));
 
-  return liveSessions
+  return dedupeActivitySnapshots(liveSessions
     .filter((s) => shouldShowActivitySession(s, activeSessionId, cachedChatState(cache, s), s.claudeSessionId ? storedByClaudeId.get(s.claudeSessionId) : undefined))
+  )
     .map((s) => {
       const status = activityStatus(s.runtimeStatus);
       return {
@@ -67,6 +68,30 @@ export function deriveActivitySessions({ liveSessions, activeSessionId, cache, s
       if (byStatus !== 0) return byStatus;
       return b.lastEventAt - a.lastEventAt;
     });
+}
+
+function dedupeActivitySnapshots(sessions: SessionStateSnapshot[]): SessionStateSnapshot[] {
+  const byTask = new Map<string, SessionStateSnapshot>();
+  for (const session of sessions) {
+    const key = activityTaskKey(session);
+    const prev = byTask.get(key);
+    if (!prev || preferActivitySnapshot(session, prev)) byTask.set(key, session);
+  }
+  return [...byTask.values()];
+}
+
+function activityTaskKey(s: SessionStateSnapshot): string {
+  const providerSessionId = s.providerSessionId ?? s.claudeSessionId;
+  if (!providerSessionId) return `live:${s.sessionId}`;
+  return `${s.nodeId ?? 'local'}:${s.provider ?? 'claude'}:${s.cwd}:${providerSessionId}`;
+}
+
+function preferActivitySnapshot(next: SessionStateSnapshot, prev: SessionStateSnapshot): boolean {
+  const nextPriority = STATUS_PRIORITY[activityStatus(next.runtimeStatus)];
+  const prevPriority = STATUS_PRIORITY[activityStatus(prev.runtimeStatus)];
+  if (nextPriority !== prevPriority) return nextPriority < prevPriority;
+  if (next.lastEventId !== prev.lastEventId) return next.lastEventId > prev.lastEventId;
+  return next.lastEventAt > prev.lastEventAt;
 }
 
 export function deriveActivitySummary(sessions: ActivitySessionViewModel[]): ActivitySummary {
