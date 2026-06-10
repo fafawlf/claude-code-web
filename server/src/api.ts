@@ -1,15 +1,18 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import { createReadStream } from 'node:fs';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, isAbsolute, sep } from 'node:path';
 import { arch, homedir, platform } from 'node:os';
-import { timingSafeEqualStr } from './auth.js';
 import { detectClaudeAuthInfo, detectCodexAuthInfo } from './authInfo.js';
 import type { SessionManager } from './session/SessionManager.js';
 import { detectClaudeExecutable } from './session/resolveClaudePath.js';
 import { detectCodexExecutable } from './agents/resolveCodexPath.js';
-import { NodeRegistry } from './nodes/NodeRegistry.js';
+import { NodeRegistry, type NodeConfig, type PublicNode } from './nodes/NodeRegistry.js';
+import { tokenModeConfig, type CcwConfig } from './config.js';
+import { resolveUser, fsAnchor, assertInScope, isPathInside, resolveScoped, ScopeError, type CcwUser, type IdentityContext } from './users/identity.js';
+import type { UserRegistry } from './users/registry.js';
+import { findClaudeTranscriptFile } from './session/claudeTranscript.js';
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv',
@@ -25,83 +28,128 @@ const DOWNLOADABLE_OUTSIDE_PROJECT_EXTENSIONS = new Set([
   '.pdf', '.png', '.ppt', '.pptx', '.svg', '.txt', '.webp', '.xls', '.xlsx', '.zip',
 ]);
 
+export type IdentityOptions = {
+  config: CcwConfig;
+  registry?: UserRegistry;
+};
+
+type RequestWithUser = FastifyRequest & { ccwUser?: CcwUser };
+
+export function userOf(req: FastifyRequest): CcwUser {
+  const user = (req as RequestWithUser).ccwUser;
+  if (!user) throw new Error('request user not resolved');
+  return user;
+}
+
 export function registerApi(
   app: FastifyInstance,
   token: string,
   defaultCwd: string,
   sm: SessionManager,
   nodes: NodeRegistry = new NodeRegistry(defaultCwd),
-  runtime: { host?: string; port?: number } = {}
+  runtime: { host?: string; port?: number } = {},
+  identity: IdentityOptions = { config: tokenModeConfig() }
 ) {
+  const idCtx: IdentityContext = {
+    token,
+    defaultCwd,
+    config: identity.config,
+    registry: identity.registry,
+  };
+
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return;
-    const provided = (req.query as { t?: string } | undefined)?.t ?? '';
-    if (!provided || !timingSafeEqualStr(provided, token)) {
+    const user = resolveUser(req, idCtx);
+    if (!user) {
       reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    (req as RequestWithUser).ccwUser = user;
+  });
+
+  // Visible server internals differ by trust level: legacy token auth keeps
+  // the full single-user response; feishu users get a view scoped to their
+  // workspace with no bind address or absolute executable paths.
+  const infoFor = (user: CcwUser, node?: NodeConfig | PublicNode) => {
+    const full = user.via === 'token';
+    return {
+      cwd: full ? defaultCwd : user.workspaceRoot,
+      home: fsAnchor(user),
+      node: node ? scrubNode(node, user) : undefined,
+      auth: detectClaudeAuthInfo(),
+      codexAuth: detectCodexAuthInfo(),
+      claude: scrubExecutable(detectClaudeExecutable(), full),
+      codex: scrubExecutable(detectCodexExecutable(), full),
+      server: {
+        ...(full ? { host: runtime.host ?? '127.0.0.1', port: runtime.port } : {}),
+        platform: platform(),
+        arch: arch(),
+        node: process.version,
+      },
+    };
+  };
+
+  app.get('/api/me', async (req) => {
+    const user = userOf(req);
+    return {
+      authMode: identity.config.authMode,
+      user: {
+        name: user.name,
+        email: user.email,
+        slug: user.slug,
+        role: user.role,
+        avatarUrl: user.avatarUrl,
+        workspaceRoot: user.workspaceRoot,
+      },
+    };
+  });
+
+  app.get('/api/sessions', async (req, reply) => {
+    const user = userOf(req);
+    const q = req.query as { cwd?: string; limit?: string } | undefined;
+    try {
+      const sessions = await listSessions({
+        dir: resolveSafe(q?.cwd ?? user.workspaceRoot, user),
+        limit: q?.limit ? Number(q.limit) : 50,
+      });
+      return { sessions };
+    } catch (e) {
+      return sendScoped(reply, e);
     }
   });
 
-  app.get('/api/sessions', async (req) => {
-    const q = req.query as { cwd?: string; limit?: string } | undefined;
-    const sessions = await listSessions({
-      dir: q?.cwd ?? defaultCwd,
-      limit: q?.limit ? Number(q.limit) : 50,
-    });
-    return { sessions };
+  app.get('/api/info', async (req) => infoFor(userOf(req), nodes.get('local')));
+
+  app.get('/api/nodes', async (req) => {
+    const user = userOf(req);
+    return { nodes: nodes.list().map((n) => scrubNode(n, user)) };
   });
-
-  app.get('/api/info', async () => ({
-    cwd: defaultCwd,
-    home: homedir(),
-    node: nodes.get('local'),
-    auth: detectClaudeAuthInfo(),
-    codexAuth: detectCodexAuthInfo(),
-    claude: detectClaudeExecutable(),
-    codex: detectCodexExecutable(),
-    server: {
-      host: runtime.host ?? '127.0.0.1',
-      port: runtime.port,
-      platform: platform(),
-      arch: arch(),
-      node: process.version,
-    },
-  }));
-
-  app.get('/api/nodes', async () => ({ nodes: nodes.list() }));
 
   app.get('/api/node/info', async (req, reply) => {
     const q = req.query as { nodeId?: string } | undefined;
     const node = nodes.get(q?.nodeId);
     if (!node) return reply.code(404).send({ error: 'Node not found' });
     if (node.kind !== 'local') return reply.code(501).send({ error: 'SSH nodes are not wired yet' });
-    return {
-      node,
-      cwd: node.defaultCwd,
-      home: homedir(),
-      auth: detectClaudeAuthInfo(),
-      codexAuth: detectCodexAuthInfo(),
-      claude: detectClaudeExecutable(),
-      codex: detectCodexExecutable(),
-      server: {
-        host: runtime.host ?? '127.0.0.1',
-        port: runtime.port,
-        platform: platform(),
-        arch: arch(),
-        node: process.version,
-      },
-    };
+    return infoFor(userOf(req), node);
   });
 
-  app.get('/api/live-sessions', async () => ({ sessions: sm.listSnapshots() }));
+  app.get('/api/live-sessions', async (req) => {
+    const user = userOf(req);
+    const sessions = user.via === 'token' || user.isAdmin
+      ? sm.listSnapshots()
+      : sm.listSnapshotsForOwner(user.openId);
+    return { sessions };
+  });
 
   // Directory browser: returns immediate sub-entries of `path`. For each dir
   // we also probe for a `.git` so the picker can show a small repo marker.
   // Hidden dirs (leading dot) are skipped. No hard root — the caller is
   // expected to start from $HOME and navigate from there.
   app.get('/api/dirs', async (req, reply) => {
+    const user = userOf(req);
     const q = req.query as { path?: string } | undefined;
-    const target = resolveSafe(q?.path ?? homedir());
     try {
+      const target = resolveSafe(q?.path ?? fsAnchor(user), user);
       const entries = await readdir(target, { withFileTypes: true });
       const names = entries
         .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
@@ -118,7 +166,8 @@ export function registerApi(
         })
       );
 
-      const parent = target === '/' ? null : target.split(sep).slice(0, -1).join(sep) || '/';
+      const atScopeRoot = user.fsRoot !== '' && target === resolve(user.fsRoot);
+      const parent = target === '/' || atScopeRoot ? null : target.split(sep).slice(0, -1).join(sep) || '/';
       // Also detect whether the target itself is a git repo (useful for "use
       // this folder" hinting at the top of the picker).
       let targetHasGit = false;
@@ -127,28 +176,35 @@ export function registerApi(
       // Keep `dirs` for backward compatibility with older clients.
       return { path: target, parent, targetHasGit, entries: enriched, dirs: names };
     } catch (e) {
-      return reply.code(400).send({ error: (e as Error).message });
+      return sendScoped(reply, e);
     }
   });
 
   app.post('/api/dirs', async (req, reply) => {
+    const user = userOf(req);
     const body = req.body as { parentPath?: string; name?: string } | undefined;
-    const parent = resolveSafe(body?.parentPath ?? homedir());
     const name = validateFolderName(body?.name);
     if (!name.ok) return reply.code(400).send({ error: name.error });
 
-    const target = join(parent, name.value);
     try {
+      const parent = resolveSafe(body?.parentPath ?? fsAnchor(user), user);
+      const target = join(parent, name.value);
       await mkdir(target);
       return { path: target };
     } catch (e) {
-      return reply.code(400).send({ error: (e as Error).message });
+      return sendScoped(reply, e);
     }
   });
 
   app.post('/api/uploads', { bodyLimit: UPLOAD_BODY_LIMIT }, async (req, reply) => {
+    const user = userOf(req);
     const body = req.body as UploadRequest | undefined;
-    const root = resolveSafe(body?.cwd ?? defaultCwd);
+    let root: string;
+    try {
+      root = resolveSafe(body?.cwd ?? user.workspaceRoot, user);
+    } catch (e) {
+      return sendScoped(reply, e);
+    }
     const files = body?.files ?? [];
     if (!Array.isArray(files) || files.length === 0) {
       return reply.code(400).send({ error: 'files required' });
@@ -189,24 +245,26 @@ export function registerApi(
 
   // Fuzzy-ish file search under a cwd. Recursive with skip list; cap 100 results.
   app.get('/api/files', async (req, reply) => {
+    const user = userOf(req);
     const q = req.query as { cwd?: string; q?: string; limit?: string } | undefined;
-    const root = resolveSafe(q?.cwd ?? defaultCwd);
     const needle = (q?.q ?? '').toLowerCase();
     const limit = Math.min(Math.max(Number(q?.limit) || 100, 1), 500);
     try {
+      const root = resolveSafe(q?.cwd ?? user.workspaceRoot, user);
       const results: string[] = [];
       await walk(root, root, needle, results, limit, 0);
       return { cwd: root, results };
     } catch (e) {
-      return reply.code(400).send({ error: (e as Error).message });
+      return sendScoped(reply, e);
     }
   });
 
   app.get('/api/file', async (req, reply) => {
+    const user = userOf(req);
     const q = req.query as { cwd?: string; path?: string; download?: string } | undefined;
     if (!q?.path) return reply.code(400).send({ error: 'path required' });
     try {
-      const target = resolveProjectFile(q.cwd ?? defaultCwd, q.path, defaultCwd);
+      const target = resolveProjectFile(q.cwd ?? user.workspaceRoot, q.path, user, defaultCwd);
       const st = await stat(target);
       if (!st.isFile()) return reply.code(400).send({ error: 'path is not a file' });
       const filename = basename(target);
@@ -216,46 +274,76 @@ export function registerApi(
         .header('content-disposition', `${q.download === '1' ? 'attachment' : 'inline'}; filename="${headerSafeFilename(filename)}"`);
       return reply.send(createReadStream(target));
     } catch (e) {
-      return reply.code(400).send({ error: (e as Error).message });
+      return sendScoped(reply, e);
     }
   });
 
   app.post('/api/session/rename', async (req, reply) => {
+    const user = userOf(req);
     const body = req.body as { claudeSessionId?: string; title?: string; cwd?: string } | undefined;
     if (!body?.claudeSessionId || !body?.title) {
       return reply.code(400).send({ error: 'claudeSessionId and title required' });
     }
     try {
-      await renameSession(body.claudeSessionId, body.title, body.cwd ? { dir: body.cwd } : undefined);
+      const cwd = body.cwd ? resolveSafe(body.cwd, user) : undefined;
+      if (user.fsRoot) {
+        // Renames only apply to transcripts that live under this user's scope.
+        const file = await findClaudeTranscriptFile(
+          body.claudeSessionId,
+          cwd ?? user.workspaceRoot,
+          homedir(),
+          user.fsRoot
+        );
+        if (!file) return reply.code(403).send({ error: 'Session is not in your workspace' });
+      }
+      await renameSession(body.claudeSessionId, body.title, cwd ? { dir: cwd } : undefined);
       return { ok: true };
     } catch (e) {
-      return reply.code(400).send({ error: (e as Error).message });
+      return sendScoped(reply, e);
     }
   });
 
   app.post('/api/session/close', async (req, reply) => {
+    const user = userOf(req);
     const body = req.body as { sessionId?: string } | undefined;
     if (!body?.sessionId) return reply.code(400).send({ error: 'sessionId required' });
+    if (user.via === 'cookie' && !user.isAdmin && sm.ownerOf(body.sessionId) !== user.openId) {
+      return reply.code(403).send({ error: 'Not your session' });
+    }
     await sm.remove(body.sessionId);
     return { ok: true };
   });
 }
 
-function resolveSafe(p: string): string {
-  if (!isAbsolute(p)) return resolve(homedir(), p);
-  return resolve(p);
+function sendScoped(reply: { code: (n: number) => { send: (b: unknown) => unknown } }, e: unknown) {
+  const status = e instanceof ScopeError ? 403 : 400;
+  return reply.code(status).send({ error: (e as Error).message });
 }
 
-function resolveProjectFile(cwd: string, filePath: string, defaultCwd: string): string {
-  const root = resolveSafe(cwd);
+const resolveSafe = resolveScoped;
+
+function scrubNode<T extends NodeConfig | PublicNode>(node: T, user: CcwUser): T {
+  if (user.via === 'token') return node;
+  const { ssh: _ssh, ...rest } = node as NodeConfig;
+  return { ...rest, defaultCwd: user.workspaceRoot } as T;
+}
+
+function scrubExecutable<T extends { path?: string }>(info: T, full: boolean): T {
+  if (full) return info;
+  return { ...info, path: undefined };
+}
+
+function resolveProjectFile(cwd: string, filePath: string, user: CcwUser, defaultCwd: string): string {
+  const root = resolveSafe(cwd, user);
   const raw = filePath.trim().replace(/^@/, '');
   const target = raw.startsWith('~/')
-    ? resolve(homedir(), raw.slice(2))
+    ? resolve(fsAnchor(user), raw.slice(2))
     : isAbsolute(raw)
       ? resolve(raw)
       : resolve(root, raw);
   const rel = relative(root, target);
   if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) {
+    assertInScope(user, target);
     return target;
   }
 
@@ -269,18 +357,17 @@ function resolveProjectFile(cwd: string, filePath: string, defaultCwd: string): 
   if (!DOWNLOADABLE_OUTSIDE_PROJECT_EXTENSIONS.has(extname(target).toLowerCase())) {
     throw new Error('File is outside the current project');
   }
-  const roots = [resolveSafe(defaultCwd), homedir()]
+  if (user.fsRoot) {
+    assertInScope(user, target);
+    return target;
+  }
+  const roots = [resolveSafe(defaultCwd, user), homedir()]
     .map((p) => resolve(p))
     .filter((p, i, arr) => arr.indexOf(p) === i);
   if (!roots.some((allowedRoot) => isPathInside(allowedRoot, target))) {
     throw new Error('File is outside the current project');
   }
   return target;
-}
-
-function isPathInside(root: string, target: string): boolean {
-  const rel = relative(root, target);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 function validateFolderName(name: string | undefined): { ok: true; value: string } | { ok: false; error: string } {

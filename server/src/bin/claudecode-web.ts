@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { startServer } from '../index.js';
 import { loadOrCreateToken } from '../auth.js';
+import { loadConfigFromEnv } from '../config.js';
 
 function parseArgs(argv: string[]): { port: number; host: string; cwd: string; token?: string } {
   let port = 8080;
@@ -37,8 +38,25 @@ function parseArgs(argv: string[]): { port: number; host: string; cwd: string; t
 async function main() {
   const { port, host, cwd, token: argToken } = parseArgs(process.argv);
   const token = argToken ?? process.env.CLAUDECODE_WEB_TOKEN ?? loadOrCreateToken();
+  const config = loadConfigFromEnv();
 
-  await startServer({ host, port, token, defaultCwd: cwd });
+  await startServer({ host, port, token, defaultCwd: cwd, config });
+
+  if (config.authMode === 'feishu') {
+    process.stdout.write(
+      [
+        '',
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        `  claudecode-web (feishu mode) listening on ${host}:${port}`,
+        `  public origin: ${config.publicOrigin}`,
+        `  workspaces:    ${config.usersRoot}`,
+        '  Log in through the public origin with a Feishu account.',
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+        '',
+      ].join('\n')
+    );
+    return;
+  }
 
   const url = `http://${host}:${port}/?t=${token}`;
   const tunnelHint = `ssh -L ${port}:${host}:${port} <your-user>@<your-remote-host>`;

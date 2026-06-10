@@ -5,14 +5,14 @@ import { join } from 'node:path';
 
 export type ClaudeTranscriptMessage = SDKMessage | Record<string, unknown>;
 
-export async function loadClaudeTranscriptMessages(sessionId: string, cwd: string): Promise<ClaudeTranscriptMessage[]> {
-  const fast = await loadClaudeTranscriptFast(sessionId, cwd);
+export async function loadClaudeTranscriptMessages(sessionId: string, cwd: string, searchRoot?: string): Promise<ClaudeTranscriptMessage[]> {
+  const fast = await loadClaudeTranscriptFast(sessionId, cwd, homedir(), searchRoot);
   if (fast) return fast;
   return getSessionMessages(sessionId, { dir: cwd }) as unknown as ClaudeTranscriptMessage[];
 }
 
-export async function loadClaudeTranscriptFast(sessionId: string, cwd: string, home = homedir()): Promise<ClaudeTranscriptMessage[] | undefined> {
-  const file = await findClaudeTranscriptFile(sessionId, cwd, home);
+export async function loadClaudeTranscriptFast(sessionId: string, cwd: string, home = homedir(), searchRoot?: string): Promise<ClaudeTranscriptMessage[] | undefined> {
+  const file = await findClaudeTranscriptFile(sessionId, cwd, home, searchRoot);
   if (!file) return undefined;
   const raw = await readFile(file, 'utf8');
   const messages: ClaudeTranscriptMessage[] = [];
@@ -32,12 +32,17 @@ export async function loadClaudeTranscriptFast(sessionId: string, cwd: string, h
   return messages;
 }
 
-async function findClaudeTranscriptFile(sessionId: string, cwd: string, home: string): Promise<string | undefined> {
+export async function findClaudeTranscriptFile(sessionId: string, cwd: string, home: string, searchRoot?: string): Promise<string | undefined> {
   const projects = join(home, '.claude', 'projects');
   const direct = join(projects, encodeClaudeProjectPath(cwd), `${sessionId}.jsonl`);
+  // When a searchRoot is given (multi-user mode), only transcripts whose
+  // recorded cwd lives under that root may be opened — even by exact UUID.
+  const allowedPrefix = searchRoot ? encodeClaudeProjectPath(searchRoot) : undefined;
   try {
-    await access(direct);
-    return direct;
+    if (!allowedPrefix || isEncodedPathInside(encodeClaudeProjectPath(cwd), allowedPrefix)) {
+      await access(direct);
+      return direct;
+    }
   } catch {
     // Fall through to a one-level search. This keeps old sessions openable even
     // when the stored cwd differs slightly from the currently selected project.
@@ -47,6 +52,7 @@ async function findClaudeTranscriptFile(sessionId: string, cwd: string, home: st
     const dirs = await readdir(projects, { withFileTypes: true });
     for (const dir of dirs) {
       if (!dir.isDirectory()) continue;
+      if (allowedPrefix && !isEncodedPathInside(dir.name, allowedPrefix)) continue;
       const candidate = join(projects, dir.name, `${sessionId}.jsonl`);
       try {
         await access(candidate);
@@ -59,6 +65,10 @@ async function findClaudeTranscriptFile(sessionId: string, cwd: string, home: st
     return undefined;
   }
   return undefined;
+}
+
+function isEncodedPathInside(encoded: string, encodedRoot: string): boolean {
+  return encoded === encodedRoot || encoded.startsWith(`${encodedRoot}-`);
 }
 
 export function encodeClaudeProjectPath(cwd: string): string {

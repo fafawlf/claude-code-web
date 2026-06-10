@@ -31,7 +31,9 @@ export class WsClient {
     if (this.closed) return;
     this.emit(this.ws ? 'reconnecting' : 'connecting');
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}${appUrl(`/ws?t=${encodeURIComponent(this.token)}`)}`;
+    // Cookie mode has no token; the session cookie rides the handshake.
+    const path = this.token ? `/ws?t=${encodeURIComponent(this.token)}` : '/ws';
+    const url = `${proto}://${location.host}${appUrl(path)}`;
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.onmessage = (e) => {

@@ -97,6 +97,7 @@ export class ClaudeSession {
 
   private readonly viewerMode: boolean;
   private readonly cwd: string;
+  private readonly searchRoot?: string;
   private seenUuids = new Set<string>();
 
   constructor(opts: {
@@ -109,11 +110,13 @@ export class ClaudeSession {
     model?: string;
     permissionMode?: PermissionMode;
     viewerMode?: boolean;
+    searchRoot?: string;
     onPermission?: PermissionListener;
     onPlan?: PlanListener;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
+    this.searchRoot = opts.searchRoot;
     this.viewerMode = !!opts.viewerMode;
     this.state = {
       sessionId: opts.id,
@@ -167,7 +170,7 @@ export class ClaudeSession {
 
   private async loadHistoryViewer(resumeId: string, cwd: string): Promise<void> {
     try {
-      const prior = await loadClaudeTranscriptMessages(resumeId, cwd);
+      const prior = await loadClaudeTranscriptMessages(resumeId, cwd, this.searchRoot);
       for (const m of prior) {
         if (this.closed) return;
         await this.pushTranscriptMessage(m);
@@ -194,7 +197,7 @@ export class ClaudeSession {
     if (!claudeId) return 0;
     let added = 0;
     try {
-      const prior = await loadClaudeTranscriptMessages(claudeId, this.cwd);
+      const prior = await loadClaudeTranscriptMessages(claudeId, this.cwd, this.searchRoot);
       for (const m of prior) {
         const uuid = (m as any).uuid;
         if (uuid && this.seenUuids.has(uuid)) continue;
@@ -208,7 +211,7 @@ export class ClaudeSession {
 
   private async loadHistoryThenStart(resumeId: string, cwd: string): Promise<void> {
     try {
-      const prior = await loadClaudeTranscriptMessages(resumeId, cwd);
+      const prior = await loadClaudeTranscriptMessages(resumeId, cwd, this.searchRoot);
       for (const m of prior) {
         await this.pushTranscriptMessage(m);
         if (this.closed) return;

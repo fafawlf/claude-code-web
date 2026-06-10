@@ -2,25 +2,59 @@ import type { FastifyInstance } from 'fastify';
 import type { WebSocket, RawData } from 'ws';
 import type { SessionManager } from './session/SessionManager.js';
 import type { AgentSession } from './agents/types.js';
-import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, type ClientHello, type ClientMessage, type ServerMessage, type PermissionMode } from './protocol.js';
-import { timingSafeEqualStr } from './auth.js';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, type ClientHello, type ClientMessage, type ServerMessage, type PermissionMode, type SessionStateSnapshot } from './protocol.js';
 import { NodeRegistry } from './nodes/NodeRegistry.js';
+import { tokenModeConfig, type CcwConfig } from './config.js';
+import { resolveScoped, resolveUser, tokenAdmin, type CcwUser, type IdentityContext } from './users/identity.js';
+import type { UserRegistry } from './users/registry.js';
 
-export function registerWs(app: FastifyInstance, sm: SessionManager, token: string, defaultCwd: string, nodes = new NodeRegistry(defaultCwd)) {
+export type WsIdentityOptions = {
+  config: CcwConfig;
+  registry?: UserRegistry;
+};
+
+export function registerWs(
+  app: FastifyInstance,
+  sm: SessionManager,
+  token: string,
+  defaultCwd: string,
+  nodes = new NodeRegistry(defaultCwd),
+  identity: WsIdentityOptions = { config: tokenModeConfig() }
+) {
+  const idCtx: IdentityContext = {
+    token,
+    defaultCwd,
+    config: identity.config,
+    registry: identity.registry,
+  };
+
   app.get('/ws', { websocket: true }, (socket: WebSocket, req) => {
-    const provided = (req.query as { t?: string } | undefined)?.t ?? '';
-    if (!provided || !timingSafeEqualStr(provided, token)) {
+    const user = resolveUser(req, idCtx);
+    if (!user) {
       send(socket, { type: 'error', message: 'Unauthorized' });
       socket.close(1008, 'Unauthorized');
       return;
     }
+    // SameSite does not cover WebSocket handshakes, so cookie-authenticated
+    // sockets must prove they come from our own origin. Token auth (CLI,
+    // tunnels, native apps) carries the secret itself and skips this.
+    if (user.via === 'cookie') {
+      const origin = req.headers.origin;
+      if (!origin || !identity.config.publicOrigin || origin !== identity.config.publicOrigin) {
+        send(socket, { type: 'error', message: 'Origin not allowed' });
+        socket.close(1008, 'Origin not allowed');
+        return;
+      }
+    }
+    const visibleSessions = (): SessionStateSnapshot[] =>
+      user.via === 'token' || user.isAdmin ? sm.listSnapshots() : sm.listSnapshotsForOwner(user.openId);
 
     let session: AgentSession | undefined;
     let attachedId: string | undefined;
     let unsubEvents: (() => void) | undefined;
     let unsubState: (() => void) | undefined;
     let unsubControls: (() => void) | undefined;
-    const unsubManager = sm.subscribe((sessions) => send(socket, { type: 'sessions_update', sessions }));
+    const unsubManager = sm.subscribe(() => send(socket, { type: 'sessions_update', sessions: visibleSessions() }));
     const heartbeat = setInterval(() => {
       const now = Date.now();
       const snapshot = attachedId ? sm.getSnapshot(attachedId) : undefined;
@@ -30,7 +64,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
         session: snapshot,
         noActivityMs: snapshot ? Math.max(0, now - snapshot.lastEventAt) : undefined,
       });
-      send(socket, { type: 'sessions_update', sessions: sm.listSnapshots() });
+      send(socket, { type: 'sessions_update', sessions: visibleSessions() });
     }, 5000);
 
     const detach = () => {
@@ -103,7 +137,7 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
         detach();
 
         try {
-          const resolved = resolveHelloSession(sm, msg, defaultCwd, nodes);
+          const resolved = resolveHelloSession(sm, msg, defaultCwd, nodes, user);
           await attach(resolved.session, resolved.replayAfterId);
         } catch (e) {
           return send(socket, { type: 'error', message: (e as Error).message });
@@ -112,6 +146,9 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
       }
 
       if (msg.type === 'session_close') {
+        if (user.via === 'cookie' && !user.isAdmin && sm.ownerOf(msg.sessionId) !== user.openId) {
+          return send(socket, { type: 'error', message: 'Not your session' });
+        }
         if (msg.sessionId === attachedId) detach();
         await sm.remove(msg.sessionId).catch((e) => send(socket, { type: 'error', message: (e as Error).message }));
         return;
@@ -161,7 +198,13 @@ async function waitForHistoryReady(session: AgentSession): Promise<void> {
   ]);
 }
 
-export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaultCwd: string, nodes = new NodeRegistry(defaultCwd)): { session: AgentSession; replayAfterId: number; recovered: boolean } {
+export function resolveHelloSession(
+  sm: SessionManager,
+  msg: ClientHello,
+  defaultCwd: string,
+  nodes = new NodeRegistry(defaultCwd),
+  user: CcwUser = tokenAdmin(defaultCwd)
+): { session: AgentSession; replayAfterId: number; recovered: boolean } {
   const requestedNodeId = msg.nodeId ?? DEFAULT_NODE_ID;
   const requestedProvider = msg.provider ?? DEFAULT_AGENT_PROVIDER;
   const node = nodes.get(requestedNodeId);
@@ -172,9 +215,13 @@ export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaul
   if (node.kind !== 'local') {
     throw new Error(`SSH node ${node.label} is configured, but remote execution is not wired in this build yet`);
   }
+  const scoped = user.via === 'cookie';
   if (msg.sessionId) {
     const existing = sm.get(msg.sessionId);
-    if (existing) {
+    // A foreign session id behaves exactly like a missing one: fall through to
+    // the recover/create path inside the caller's own workspace.
+    const visible = existing && (!scoped || user.isAdmin || sm.ownerOf(existing.id) === user.openId);
+    if (existing && visible) {
       const state = existing.getState();
       if (state.nodeId !== requestedNodeId || state.provider !== requestedProvider) {
         throw new Error(`Session belongs to ${state.nodeId}/${state.provider}, not ${requestedNodeId}/${requestedProvider}`);
@@ -182,13 +229,15 @@ export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaul
       return { session: existing, replayAfterId: msg.lastEventId ?? 0, recovered: false };
     }
   }
-  const cwd = msg.cwd ?? node.defaultCwd ?? defaultCwd;
+  const rawCwd = msg.cwd ?? (scoped ? user.workspaceRoot : node.defaultCwd ?? defaultCwd);
+  const cwd = scoped ? resolveScoped(rawCwd, user) : rawCwd;
   const reusable = sm.findReusableResume({
     nodeId: requestedNodeId,
     provider: requestedProvider,
     cwd,
     providerSessionId: msg.resumeClaudeId,
     viewerMode: msg.viewerMode,
+    owner: scoped ? user.openId : undefined,
   });
   if (reusable) {
     return { session: reusable, replayAfterId: msg.lastEventId ?? 0, recovered: !!msg.sessionId };
@@ -202,6 +251,8 @@ export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaul
     model: msg.model ?? defaultModelForProvider(requestedProvider),
     permissionMode: msg.permissionMode,
     viewerMode: msg.viewerMode,
+    searchRoot: user.fsRoot || undefined,
+    owner: scoped ? user.openId : undefined,
   });
   return { session, replayAfterId: msg.lastEventId ?? 0, recovered: !!msg.sessionId };
 }

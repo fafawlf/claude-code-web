@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
-import { appUrl } from '../appUrl';
+import { apiFetch } from '../api';
 
 type Props = {
   token: string;
@@ -16,8 +16,8 @@ export function MentionPopup({ token, cwd, query, onPick, onClose }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    const url = appUrl(`/api/files?t=${encodeURIComponent(token)}&cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(query)}&limit=30`);
-    fetch(url)
+    const url = `/api/files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(query)}&limit=30`;
+    apiFetch(url)
       .then((r) => r.json())
       .then((j) => { if (!cancelled) { setResults(j.results ?? []); setI(0); } })
       .catch(() => { if (!cancelled) setResults([]); });

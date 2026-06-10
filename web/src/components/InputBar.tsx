@@ -7,7 +7,7 @@ import { Icon } from './Icon';
 import { navigatePromptHistory, recordPrompt, shouldHandlePromptHistoryKey } from '../promptHistory';
 import { buildAttachmentPrompt, formatFileSize, type UploadedFileRef } from '../uploads';
 import { clearPromptDraft, readPromptDraft, writePromptDraft } from '../promptDraft';
-import { appUrl } from '../appUrl';
+import { apiFetch } from '../api';
 
 type Props = {
   token: string;
@@ -231,7 +231,7 @@ function InputBarImpl(p: Props) {
         mime: file.type,
         dataBase64: await fileToBase64(file),
       })));
-      const r = await fetch(appUrl(`/api/uploads?t=${encodeURIComponent(p.token)}`), {
+      const r = await apiFetch('/api/uploads', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ cwd: p.cwd, files: encoded }),

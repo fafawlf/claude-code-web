@@ -37,6 +37,8 @@ export type AgentSessionOptions = {
   model?: string;
   permissionMode?: PermissionMode;
   viewerMode?: boolean;
+  /** Confine transcript lookups for resume to projects under this root. */
+  searchRoot?: string;
   onPermission?: PermissionListener;
   onPlan?: PlanListener;
 };

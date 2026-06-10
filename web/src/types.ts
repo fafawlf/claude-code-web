@@ -91,6 +91,60 @@ export type ServerInfo = {
   server?: ServerRuntimeInfo;
 };
 
+export type AuthMode = 'token' | 'feishu';
+
+export type MeInfo = {
+  authMode: AuthMode;
+  user: {
+    name: string;
+    email: string;
+    slug: string;
+    role: 'admin' | 'user';
+    avatarUrl?: string;
+    workspaceRoot: string;
+  };
+};
+
+export type UsageWindow = {
+  utilization?: number;
+  resetsAt?: string;
+};
+
+export type UsageResponse = {
+  shared: {
+    available: boolean;
+    reason?: string;
+    plan?: string;
+    fiveHour?: UsageWindow;
+    sevenDay?: UsageWindow;
+    sevenDayOpus?: UsageWindow;
+  };
+  perUser: Array<{
+    slug: string;
+    name: string;
+    tokensIn: number;
+    tokensOut: number;
+    cacheRead: number;
+    cacheCreate: number;
+    sessions: number;
+  }>;
+};
+
+export type AdminUsersResponse = {
+  users: Array<{
+    openId: string;
+    email: string;
+    name: string;
+    slug: string;
+    role: 'admin' | 'user';
+    createdAt: number;
+    lastLoginAt: number;
+    disabled: boolean;
+  }>;
+  allowlist: string[];
+  adminEmails?: string[];
+};
+
 // Client → server
 export type ClientHello = { type: 'hello'; nodeId?: string; provider?: AgentProviderId; sessionId?: string; resumeClaudeId?: string; cwd?: string; model?: string; permissionMode?: PermissionMode; lastEventId?: number; viewerMode?: boolean };
 export type ClientUserMessage = { type: 'user'; text: string };

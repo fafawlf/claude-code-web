@@ -8,15 +8,29 @@ import type { AgentProviderId, PermissionMode, SessionStateSnapshot } from '../p
 const MAX_CONCURRENT = 8;
 type ManagerListener = (sessions: SessionStateSnapshot[]) => void;
 
+export type SessionLimits = {
+  global?: number;
+  perOwner?: number;
+};
+
 export class SessionManager {
   private sessions = new Map<string, AgentSession>();
   private subscribers = new Map<string, number>(); // sessionId → attached-WS count
   private unsubs = new Map<string, Array<() => void>>();
   private listeners = new Set<ManagerListener>();
   private providers = new Map<AgentProviderId, AgentProvider>();
+  // sessionId → owner key. Server-side only; never exposed in wire snapshots.
+  private owners = new Map<string, string>();
+  private readonly maxConcurrent: number;
+  private readonly maxPerOwner?: number;
 
-  constructor(providers: AgentProvider[] = [new ClaudeProvider(), new CodexProvider()]) {
+  constructor(
+    providers: AgentProvider[] = [new ClaudeProvider(), new CodexProvider()],
+    limits: SessionLimits = {}
+  ) {
     for (const provider of providers) this.providers.set(provider.id, provider);
+    this.maxConcurrent = limits.global ?? MAX_CONCURRENT;
+    this.maxPerOwner = limits.perOwner;
   }
 
   create(opts: {
@@ -28,24 +42,36 @@ export class SessionManager {
     model?: string;
     permissionMode?: PermissionMode;
     viewerMode?: boolean;
+    searchRoot?: string;
+    owner?: string;
     onPermission?: PermissionListener;
     onPlan?: PlanListener;
   }): AgentSession {
     // If at or over the cap, only reap sessions that are closed or clearly idle.
     // Running/waiting background tasks are first-class now and must survive tab
     // switches until the user explicitly closes them.
-    if (this.activeCount() >= MAX_CONCURRENT) this.reapAbandoned();
-    if (this.activeCount() >= MAX_CONCURRENT) {
-      throw new Error(`Concurrent session limit (${MAX_CONCURRENT}) reached. Close a background session first.`);
+    if (this.activeCount() >= this.maxConcurrent) this.reapAbandoned(opts.owner);
+    if (this.activeCount() >= this.maxConcurrent) {
+      throw new Error(`Concurrent session limit (${this.maxConcurrent}) reached. Close a background session first.`);
     }
+    if (opts.owner && this.maxPerOwner !== undefined && this.activeCountFor(opts.owner) >= this.maxPerOwner) {
+      this.reapAbandoned(opts.owner);
+      if (this.activeCountFor(opts.owner) >= this.maxPerOwner) {
+        throw new Error(`You already have ${this.maxPerOwner} sessions running. Close one first.`);
+      }
+    }
+    const { owner, ...sessionOpts } = opts;
     const id = randomUUID();
     const provider = this.providerFor(opts.provider ?? 'claude');
-    const session = provider.createSession({ id, ...opts });
+    const session = provider.createSession({ id, ...sessionOpts });
     this.sessions.set(id, session);
+    if (owner) this.owners.set(id, owner);
     this.track(id, session);
     this.notify();
     return session;
   }
+
+  ownerOf(id: string): string | undefined { return this.owners.get(id); }
 
   get(id: string): AgentSession | undefined { return this.sessions.get(id); }
 
@@ -60,11 +86,13 @@ export class SessionManager {
     cwd: string;
     providerSessionId?: string;
     viewerMode?: boolean;
+    owner?: string;
   }): AgentSession | undefined {
     if (!opts.providerSessionId) return undefined;
     let best: AgentSession | undefined;
     for (const session of this.sessions.values()) {
       if (session.isClosed()) continue;
+      if (opts.owner !== undefined && this.owners.get(session.id) !== opts.owner) continue;
       const snap = session.getState();
       const sameProviderSession =
         snap.providerSessionId === opts.providerSessionId ||
@@ -83,11 +111,20 @@ export class SessionManager {
     return [...this.sessions.values()].map((s) => this.snapshot(s));
   }
 
+  /** Snapshots visible to one owner. Owner-less sessions (legacy token mode)
+   *  are only visible to owner-less viewers and admins via listSnapshots(). */
+  listSnapshotsForOwner(owner: string): SessionStateSnapshot[] {
+    return [...this.sessions.values()]
+      .filter((s) => this.owners.get(s.id) === owner)
+      .map((s) => this.snapshot(s));
+  }
+
   async remove(id: string): Promise<void> {
     const s = this.sessions.get(id);
     if (!s) return;
     this.sessions.delete(id);
     this.subscribers.delete(id);
+    this.owners.delete(id);
     this.unsubs.get(id)?.forEach((u) => { try { u(); } catch { /* */ } });
     this.unsubs.delete(id);
     try { await s.close(); } catch { /* */ }
@@ -118,30 +155,46 @@ export class SessionManager {
     return n;
   }
 
-  /** Close closed/idle abandoned sessions when capacity is exhausted. */
-  private reapAbandoned(): void {
+  private activeCountFor(owner: string): number {
+    let n = 0;
+    for (const s of this.sessions.values()) {
+      if (!s.isClosed() && this.owners.get(s.id) === owner) n++;
+    }
+    return n;
+  }
+
+  /** Close closed/idle abandoned sessions when capacity is exhausted.
+   *  When an owner is given, their abandoned sessions are reaped first so one
+   *  user hitting their cap never evicts someone else's idle work. */
+  private reapAbandoned(owner?: string): void {
     for (const [id, session] of this.sessions) {
-      if (session.isClosed()) {
-        this.sessions.delete(id);
-        this.subscribers.delete(id);
-        this.unsubs.get(id)?.forEach((u) => { try { u(); } catch { /* */ } });
-        this.unsubs.delete(id);
+      if (session.isClosed()) this.drop(id);
+    }
+    if (this.activeCount() < this.maxConcurrent && (owner === undefined || this.maxPerOwner === undefined || this.activeCountFor(owner) < this.maxPerOwner)) return;
+    const passes: Array<(id: string) => boolean> = owner !== undefined
+      ? [(id) => this.owners.get(id) === owner, () => true]
+      : [() => true];
+    for (const pass of passes) {
+      for (const [id, session] of this.sessions) {
+        if (!pass(id)) continue;
+        const snap = session.getState();
+        const abandoned = (this.subscribers.get(id) ?? 0) === 0;
+        const disposable = snap.viewerMode || snap.runtimeStatus === 'idle' || snap.runtimeStatus === 'error';
+        if (abandoned && disposable) {
+          void session.close();
+          this.drop(id);
+          if (this.activeCount() < this.maxConcurrent) return;
+        }
       }
     }
-    if (this.activeCount() < MAX_CONCURRENT) return;
-    for (const [id, session] of this.sessions) {
-      const snap = session.getState();
-      const abandoned = (this.subscribers.get(id) ?? 0) === 0;
-      const disposable = snap.viewerMode || snap.runtimeStatus === 'idle' || snap.runtimeStatus === 'error';
-      if (abandoned && disposable) {
-        void session.close();
-        this.sessions.delete(id);
-        this.subscribers.delete(id);
-        this.unsubs.get(id)?.forEach((u) => { try { u(); } catch { /* */ } });
-        this.unsubs.delete(id);
-        if (this.activeCount() < MAX_CONCURRENT) break;
-      }
-    }
+  }
+
+  private drop(id: string): void {
+    this.sessions.delete(id);
+    this.subscribers.delete(id);
+    this.owners.delete(id);
+    this.unsubs.get(id)?.forEach((u) => { try { u(); } catch { /* */ } });
+    this.unsubs.delete(id);
   }
 
   private track(id: string, session: AgentSession): void {
@@ -170,6 +223,7 @@ export class SessionManager {
     await Promise.all([...this.sessions.values()].map((s) => s.close()));
     this.sessions.clear();
     this.subscribers.clear();
+    this.owners.clear();
     this.unsubs.forEach((us) => us.forEach((u) => { try { u(); } catch { /* */ } }));
     this.unsubs.clear();
     this.notify();

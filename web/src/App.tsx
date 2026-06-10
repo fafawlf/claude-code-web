@@ -4,7 +4,7 @@ import { applyEvent, applyStateDelta, initialState, addSystem, addUserOptimistic
 import { cachedChatState, cachedLastEventId, chatStateForReady, forgetChatState, rememberChatState } from './sessionCache';
 import { buildReconnectHello } from './reconnect';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
-import type { AgentProviderId, ClaudeAuthInfo, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
+import type { AgentProviderId, AuthMode, ClaudeAuthInfo, MeInfo, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
 import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, MODE_ORDER } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MessageList } from './components/MessageList';
@@ -23,6 +23,7 @@ import type { SlashAction } from './components/SlashPalette';
 import { normalizeProjectPath, readPinnedProjects, readRecentProjects, rememberProject, togglePinnedProject, type ProjectEntry } from './projectHistory';
 import { readSkin, skinById, writeSkin, type SkinId } from './skins';
 import { appUrl } from './appUrl';
+import { apiFetch, setApiToken } from './api';
 
 const EDIT_LIKE = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const SETUP_SEEN_KEY = 'ccw_setup_seen_v1';
@@ -42,12 +43,15 @@ function getToken(): string | null {
 
 export function App() {
   const token = getToken();
+  setApiToken(token);
   const toast = useToast();
   const restoredActiveRef = useRef<StoredActiveSession | null>(readStoredActiveSession());
   const initialChatState = restoredActiveRef.current
     ? withReady({ ...initialState }, restoredActiveRef.current.state)
     : initialState;
   const [authed, setAuthed] = useState<boolean | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>('token');
+  const [me, setMe] = useState<MeInfo | null>(null);
   const [state, setState] = useState<ChatState>(initialChatState);
   const stateRef = useRef<ChatState>(initialChatState);
   const cacheRef = useRef<Map<string, ChatState>>(new Map());
@@ -137,26 +141,44 @@ export function App() {
   // the sidebar use case and totally removes the push-backpressure class of
   // bugs.
   useEffect(() => {
-    if (!authed || !token) return;
+    if (!authed) return;
     const t = setInterval(() => {
       wsRef.current?.send({ type: 'list_sessions' });
     }, 10000);
     return () => clearInterval(t);
-  }, [authed, token]);
+  }, [authed]);
 
   useEffect(() => {
-    if (!token) { setAuthed(false); return; }
-    fetch(appUrl(`/auth-check?t=${encodeURIComponent(token)}`))
-      .then((r) => r.json())
-      .then((j) => setAuthed(!!j.ok))
+    // Works for both auth modes: with a token it validates the token, without
+    // one it validates the feishu session cookie. A feishu server answering
+    // 401 means "go log in" — bounce through the OAuth flow.
+    apiFetch('/auth-check')
+      .then(async (r) => {
+        const j = (await r.json().catch(() => ({}))) as { ok?: boolean; authMode?: AuthMode };
+        if (j.authMode) setAuthMode(j.authMode);
+        if (j.ok) { setAuthed(true); return; }
+        if (j.authMode === 'feishu') {
+          window.location.href = appUrl('/login');
+          return;
+        }
+        setAuthed(false);
+      })
       .catch(() => setAuthed(false));
   }, [token]);
 
+  useEffect(() => {
+    if (!authed) return;
+    apiFetch('/api/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setMe(j as MeInfo | null))
+      .catch(() => {});
+  }, [authed]);
+
   const refreshProjectSessions = useCallback((cwd: string, primary = false) => {
-    if (!token || !cwd) return;
+    if (!cwd) return;
     const normalized = normalizeProjectPath(cwd);
-    const url = appUrl(`/api/sessions?t=${encodeURIComponent(token)}&cwd=${encodeURIComponent(normalized)}`);
-    fetch(url)
+    const url = `/api/sessions?cwd=${encodeURIComponent(normalized)}`;
+    apiFetch(url)
       .then((r) => r.json())
       .then((j) => {
         const list = j.sessions ?? [];
@@ -164,7 +186,7 @@ export function App() {
         if (primary) setSessions(list);
       })
       .catch(() => {});
-  }, [token]);
+  }, []);
 
   const refreshSessions = useCallback((cwd?: string) => {
     const target = cwd ?? stateRef.current.state?.cwd ?? defaultCwd;
@@ -216,8 +238,8 @@ export function App() {
   }, [projectSessions]);
 
   useEffect(() => {
-    if (!authed || !token) return;
-    fetch(appUrl(`/api/info?t=${encodeURIComponent(token)}`))
+    if (!authed) return;
+    apiFetch('/api/info')
       .then((r) => r.json())
       .then((j) => {
         const info = j as ServerInfo;
@@ -230,11 +252,11 @@ export function App() {
         }
         if (info.home) (window as unknown as { __ccw_home__?: string }).__ccw_home__ = info.home;
       });
-  }, [authed, selectNodeSilently, token]);
+  }, [authed, selectNodeSilently]);
 
   useEffect(() => {
-    if (!authed || !token) return;
-    fetch(appUrl(`/api/nodes?t=${encodeURIComponent(token)}`))
+    if (!authed) return;
+    apiFetch('/api/nodes')
       .then((r) => r.json())
       .then((j) => {
         const list = (j.nodes ?? []) as NodeInfo[];
@@ -246,24 +268,24 @@ export function App() {
       })
       .catch(() => {})
       .finally(() => setNodesLoaded(true));
-  }, [authed, selectNodeSilently, selectProviderSilently, token]);
+  }, [authed, selectNodeSilently, selectProviderSilently]);
 
   useEffect(() => {
-    if (!authed || !token) return;
+    if (!authed) return;
     refreshSessions(state.state?.cwd);
-  }, [state.state?.cwd, authed, token, refreshSessions]);
+  }, [state.state?.cwd, authed, refreshSessions]);
 
   useEffect(() => {
-    if (!authed || !token || projectEntries.length === 0) return;
+    if (!authed || projectEntries.length === 0) return;
     for (const project of projectEntries.slice(0, 12)) {
       if (projectSessions[project.path] === undefined) {
         refreshProjectSessions(project.path, project.path === currentCwd);
       }
     }
-  }, [authed, currentCwd, projectEntries, projectSessions, refreshProjectSessions, token]);
+  }, [authed, currentCwd, projectEntries, projectSessions, refreshProjectSessions]);
 
   useEffect(() => {
-    if (!authed || !token || !nodesLoaded || nodes.length === 0) return;
+    if (!authed || !nodesLoaded || nodes.length === 0) return;
     const onMessage = (m: ServerMessage) => {
       if (m.type === 'ready') {
         pendingRef.current = [];
@@ -333,7 +355,7 @@ export function App() {
         toast.push(m.message, { level: 'error' });
       }
     };
-    const client = new WsClient(token, onMessage);
+    const client = new WsClient(token ?? '', onMessage);
     wsRef.current = client;
     client.onConnectionChange((s) => setConnection(s));
     client.connect();
@@ -351,7 +373,7 @@ export function App() {
       ));
     });
     return () => { client.close(); };
-  }, [authed, token, nodes.length, nodesLoaded, toast, enqueueEvent, commitState, refreshSessions, selectNodeSilently, selectProviderSilently]);
+  }, [authed, nodes.length, nodesLoaded, toast, enqueueEvent, commitState, refreshSessions, selectNodeSilently, selectProviderSilently]);
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -549,10 +571,10 @@ export function App() {
   }, [state.state?.permissionMode, state.state?.cwd, cycleMode, newSession]));
 
   const renameCurrent = useCallback(async (title: string) => {
-    if (!state.state?.claudeSessionId || !token) return;
+    if (!state.state?.claudeSessionId) return;
     setSessionTitle(title);
     try {
-      await fetch(appUrl(`/api/session/rename?t=${encodeURIComponent(token)}`), {
+      await apiFetch('/api/session/rename', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ claudeSessionId: state.state.claudeSessionId, title, cwd: state.state.cwd }),
@@ -560,13 +582,12 @@ export function App() {
       refreshSessions(state.state.cwd);
       toast.push('Session renamed', { level: 'success' });
     } catch { toast.push('Rename failed', { level: 'error' }); }
-  }, [state.state?.claudeSessionId, state.state?.cwd, token, toast, refreshSessions]);
+  }, [state.state?.claudeSessionId, state.state?.cwd, toast, refreshSessions]);
 
   const renameInList = useCallback(async (claudeSessionId: string, newTitle: string, cwd?: string) => {
-    if (!token) return;
     const targetCwd = cwd ?? state.state?.cwd;
     try {
-      await fetch(appUrl(`/api/session/rename?t=${encodeURIComponent(token)}`), {
+      await apiFetch('/api/session/rename', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ claudeSessionId, title: newTitle, cwd: targetCwd }),
@@ -574,7 +595,7 @@ export function App() {
       refreshSessions(targetCwd);
       toast.push('Session renamed', { level: 'success' });
     } catch { toast.push('Rename failed', { level: 'error' }); }
-  }, [state.state?.cwd, token, toast, refreshSessions]);
+  }, [state.state?.cwd, toast, refreshSessions]);
 
   const pendingByToolUseId = useMemo(() => {
     const m = new Map<string, string>();
@@ -628,10 +649,21 @@ export function App() {
   if (authed === null) return <Centered>checking auth…</Centered>;
   if (authed === false) return (
     <Centered>
-      <div className="text-center space-y-2">
-        <div className="text-danger">Missing or invalid token.</div>
-        <div className="text-text-muted text-sm">Open the URL the server printed on launch (includes <code className="font-mono text-xs">?t=…</code>).</div>
-      </div>
+      {authMode === 'feishu' ? (
+        <div className="text-center space-y-3">
+          <div className="text-text-primary text-lg">Claude Code Web</div>
+          <div className="text-text-muted text-sm">Sign in with your Feishu account to continue.</div>
+          <button
+            onClick={() => { window.location.href = appUrl('/login'); }}
+            className="px-4 py-2 rounded-md bg-accent hover:bg-accent-hi text-text-inverse font-medium transition-colors duration-hover"
+          >Log in with Feishu</button>
+        </div>
+      ) : (
+        <div className="text-center space-y-2">
+          <div className="text-danger">Missing or invalid token.</div>
+          <div className="text-text-muted text-sm">Open the URL the server printed on launch (includes <code className="font-mono text-xs">?t=…</code>).</div>
+        </div>
+      )}
     </Centered>
   );
 
@@ -667,7 +699,7 @@ export function App() {
       </div>
       {projectLauncherOpen && (
         <ProjectLauncher
-          token={token!}
+          token={token ?? ''}
           current={currentCwd || defaultCwd || '/root'}
           recents={recentProjects}
           pinned={pinnedProjects}
@@ -681,6 +713,8 @@ export function App() {
         <TopBar
           state={state.state}
           cwd={currentCwd}
+          home={serverInfo?.home}
+          me={me}
           auth={authInfo}
           codexAuth={serverInfo?.codexAuth}
           codexDefaultModel={serverInfo?.codex?.defaultModel}
@@ -713,7 +747,7 @@ export function App() {
           <EmptyState skin={skin} cwd={currentCwd} onOpenProject={() => setProjectLauncherOpen(true)} />
         ) : (
           <MessageList
-            token={token!}
+            token={token ?? ''}
             cwd={currentCwd}
             skin={skin}
             items={state.items}
@@ -744,7 +778,7 @@ export function App() {
           />
         </div>
         <InputBar
-          token={token!}
+          token={token ?? ''}
           cwd={currentCwd}
           mode={state.state?.permissionMode ?? 'default'}
           provider={state.state?.provider ?? selectedProvider}

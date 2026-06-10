@@ -1,4 +1,4 @@
-import { appUrl } from './appUrl';
+import { apiUrl } from './api';
 
 export type ArtifactMatch = {
   raw: string;
@@ -48,14 +48,14 @@ export function isArtifactPath(value: string): boolean {
   return matches.length === 1 && matches[0].raw === trimmed;
 }
 
-export function artifactUrl(opts: { token: string; cwd: string; path: string; download?: boolean }): string {
+export function artifactUrl(opts: { token?: string; cwd: string; path: string; download?: boolean }): string {
   const params = new URLSearchParams({
-    t: opts.token,
     cwd: opts.cwd,
     path: opts.path.replace(/^@/, ''),
   });
   if (opts.download) params.set('download', '1');
-  return appUrl(`/api/file?${params.toString()}`);
+  // apiUrl appends the access token when one is in use (cookie mode has none).
+  return apiUrl(`/api/file?${params.toString()}`);
 }
 
 export function compactArtifactPath(path: string): string {

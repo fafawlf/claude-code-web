@@ -7,8 +7,13 @@ import { existsSync } from 'node:fs';
 import { SessionManager } from './session/SessionManager.js';
 import { registerWs } from './ws.js';
 import { registerApi } from './api.js';
-import { timingSafeEqualStr } from './auth.js';
 import { NodeRegistry } from './nodes/NodeRegistry.js';
+import { tokenModeConfig, type CcwConfig } from './config.js';
+import { UserRegistry } from './users/registry.js';
+import { FeishuClient } from './auth/feishu.js';
+import { registerAuthRoutes } from './auth/routes.js';
+import { registerUsageRoutes } from './usage/routes.js';
+import { resolveUser, type IdentityContext } from './users/identity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -17,14 +22,34 @@ export type StartOptions = {
   port: number;
   token: string;
   defaultCwd: string;
+  config?: CcwConfig;
 };
 
 export async function startServer(opts: StartOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: 'info' } });
-  const sm = new SessionManager();
+  const config = opts.config ?? tokenModeConfig();
+  const feishuMode = config.authMode === 'feishu';
+
+  let registry: UserRegistry | undefined;
+  if (feishuMode) {
+    registry = new UserRegistry(config.usersFile, config.adminEmails);
+    registry.load();
+  }
+  const identity = { config, registry };
+  const idCtx: IdentityContext = { token: opts.token, defaultCwd: opts.defaultCwd, config, registry };
+
+  // A shared Max subscription serves the whole team in feishu mode, so allow
+  // more parallel sessions overall but keep any one person from hogging them.
+  const sm = feishuMode
+    ? new SessionManager(undefined, { global: 24, perOwner: 3 })
+    : new SessionManager();
   const nodes = new NodeRegistry(opts.defaultCwd);
 
   await app.register(fastifyWebsocket);
+
+  if (feishuMode) {
+    registerAuthRoutes(app, { config, registry: registry!, feishu: new FeishuClient(config.feishu!) });
+  }
 
   // Find the web bundle: ../../../web/dist from server/dist/src, or ../../web/dist when running built CLI.
   const webDistCandidates = [
@@ -51,17 +76,16 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
 
   app.get('/healthz', async () => ({ ok: true }));
 
-  // Token-gate a small endpoint used by the SPA to confirm the token is valid.
+  // Used by the SPA to confirm its credential (token or cookie) is valid.
   app.get('/auth-check', async (req, reply) => {
-    const provided = (req.query as { t?: string } | undefined)?.t ?? '';
-    if (!provided || !timingSafeEqualStr(provided, opts.token)) {
-      return reply.code(401).send({ ok: false });
-    }
-    return { ok: true };
+    const user = resolveUser(req, idCtx);
+    if (!user) return reply.code(401).send({ ok: false, authMode: config.authMode });
+    return { ok: true, authMode: config.authMode };
   });
 
-  registerApi(app, opts.token, opts.defaultCwd, sm, nodes, { host: opts.host, port: opts.port });
-  registerWs(app, sm, opts.token, opts.defaultCwd, nodes);
+  registerApi(app, opts.token, opts.defaultCwd, sm, nodes, { host: opts.host, port: opts.port }, identity);
+  registerUsageRoutes(app, identity);
+  registerWs(app, sm, opts.token, opts.defaultCwd, nodes, identity);
 
   const host = opts.host ?? '127.0.0.1';
   await app.listen({ host, port: opts.port });

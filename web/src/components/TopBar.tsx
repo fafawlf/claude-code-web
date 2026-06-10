@@ -1,12 +1,16 @@
 import { useState } from 'react';
-import type { AgentProviderId, ClaudeAuthInfo, CodexAuthInfo, NodeInfo, SessionStateSnapshot } from '../types';
+import type { AgentProviderId, ClaudeAuthInfo, CodexAuthInfo, MeInfo, NodeInfo, SessionStateSnapshot } from '../types';
 import type { SkinId } from '../skins';
 import { AgentMenu } from './AgentMenu';
 import { Icon } from './Icon';
+import { UserChip } from './UserChip';
+import { UsageWidget } from './UsageWidget';
 
 type Props = {
   state: SessionStateSnapshot | null;
   cwd: string;
+  home?: string;
+  me?: MeInfo | null;
   auth?: ClaudeAuthInfo | null;
   codexAuth?: CodexAuthInfo | null;
   codexDefaultModel?: string;
@@ -31,7 +35,7 @@ export function TopBar(p: Props) {
   const [draft, setDraft] = useState(p.sessionTitle ?? '');
   const s = p.state;
 
-  const cwdShort = p.cwd ? shortPath(p.cwd) : '…';
+  const cwdShort = p.cwd ? shortPath(p.cwd, p.home) : '…';
   const currentProvider = s?.provider ?? p.selectedProvider;
   const currentNodeId = s?.nodeId ?? p.selectedNodeId;
 
@@ -75,6 +79,8 @@ export function TopBar(p: Props) {
         />
 
         <div className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
+          {p.me?.authMode === 'feishu' && <UsageWidget />}
+          {p.me?.authMode === 'feishu' && <UserChip me={p.me} />}
           {s?.viewerMode && (
             <>
               <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-warning/10 text-warning border border-warning/30">
@@ -130,10 +136,10 @@ export function TopBar(p: Props) {
   );
 }
 
-function shortPath(p: string): string {
+function shortPath(p: string, home?: string): string {
   let s = p;
-  const home = '/root'; // display-only heuristic
-  if (s.startsWith(home)) s = '~' + s.slice(home.length);
+  const homePrefix = home || '/root'; // display-only heuristic when the server has not told us
+  if (s.startsWith(homePrefix)) s = '~' + s.slice(homePrefix.length);
   const parts = s.split('/').filter(Boolean);
   if (parts.length <= 3) return s;
   return (s.startsWith('~') ? '~/' : '/') + '…/' + parts.slice(-2).join('/');

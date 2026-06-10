@@ -61,7 +61,7 @@ test('MarkdownMessage turns artifact paths into open and download links', () => 
     cwd: '/root/chatgpt',
   }));
 
-  assert.match(html, /\/api\/file\?t=tok&amp;cwd=%2Froot%2Fchatgpt&amp;path=\.claudecode-web%2Fuploads%2F2026-04-24%2Foutput%2FFlowGPT-SAR-Revised-v3\.xlsx/);
+  assert.match(html, /\/api\/file\?cwd=%2Froot%2Fchatgpt&amp;path=\.claudecode-web%2Fuploads%2F2026-04-24%2Foutput%2FFlowGPT-SAR-Revised-v3\.xlsx/);
   assert.match(html, /download=1/);
   assert.match(html, /Download/);
 });
@@ -73,7 +73,7 @@ test('MarkdownMessage turns absolute artifact paths with spaces into links', () 
     cwd: '/root/random shit',
   }));
 
-  assert.match(html, /\/api\/file\?t=tok&amp;cwd=%2Froot%2Frandom\+shit&amp;path=%2Froot%2Frandom\+shit%2Fhi\.docx/);
+  assert.match(html, /\/api\/file\?cwd=%2Froot%2Frandom\+shit&amp;path=%2Froot%2Frandom\+shit%2Fhi\.docx/);
   assert.match(html, /download=1/);
   assert.match(html, /hi\.docx/);
 });

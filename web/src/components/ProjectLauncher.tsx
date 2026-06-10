@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { normalizeProjectPath, projectName, type ProjectEntry } from '../projectHistory';
 import { Icon } from './Icon';
-import { appUrl } from '../appUrl';
+import { apiFetch } from '../api';
 
 type DirsResponse = { path: string; parent: string | null; dirs: string[] };
 
@@ -48,7 +48,7 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
     let cancelled = false;
     setLoading(true);
     setErr(null);
-    fetch(appUrl(`/api/dirs?t=${encodeURIComponent(token)}&path=${encodeURIComponent(browsePath)}`))
+    apiFetch(`/api/dirs?path=${encodeURIComponent(browsePath)}`)
       .then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); })
       .then((j: DirsResponse) => {
         if (!cancelled) {
@@ -88,7 +88,7 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
     setCreatingFolder(true);
     setErr(null);
     try {
-      const r = await fetch(appUrl(`/api/dirs?t=${encodeURIComponent(token)}`), {
+      const r = await apiFetch('/api/dirs', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ parentPath: data?.path ?? browsePath, name }),

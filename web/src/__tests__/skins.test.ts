@@ -163,5 +163,5 @@ test('MessageList skin bubbles keep markdown artifact links', () => {
 
   assert.match(html, /skin-message-wechat/);
   assert.match(html, /Download/);
-  assert.match(html, /\/api\/file\?t=tok/);
+  assert.match(html, /\/api\/file\?cwd=/);
 });
