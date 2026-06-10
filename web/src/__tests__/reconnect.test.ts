@@ -48,7 +48,7 @@ test('buildReconnectHello resumes provider-neutral sessions with providerSession
   assert.equal(buildReconnectHello('live-1', state, 10).resumeClaudeId, 'codex-thread-1');
 });
 
-test('buildReconnectHello defaults recovered Claude sessions to Opus 4.8', () => {
+test('buildReconnectHello defaults recovered Claude sessions to Fable 5', () => {
   const state = withReady(initialState, { ...snap(), model: undefined });
   assert.equal(buildReconnectHello('live-1', state, 10).model, DEFAULT_CLAUDE_MODEL);
 });
