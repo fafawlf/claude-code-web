@@ -40,8 +40,17 @@ export class UserRegistry {
 
   constructor(
     private readonly file: string,
-    private readonly adminEmails: string[] = []
+    private readonly adminEmails: string[] = [],
+    /** Email domains whose Feishu accounts are auto-approved (e.g. flowgpt.com).
+     *  Lets the whole company in without collecting individual addresses. */
+    private readonly allowedDomains: string[] = []
   ) {}
+
+  private domainAllowed(email: string | undefined): boolean {
+    if (!email || this.allowedDomains.length === 0) return false;
+    const domain = email.toLowerCase().split('@')[1];
+    return !!domain && this.allowedDomains.includes(domain);
+  }
 
   load(): void {
     try {
@@ -94,15 +103,18 @@ export class UserRegistry {
    */
   isAllowed(info: { email?: string; openId: string }): boolean {
     this.ensureLoaded();
+    const existing = this.getByOpenId(info.openId);
+    // A disabled account is revoked — no domain/allowlist rule re-approves it.
+    if (existing?.disabled) return false;
     if (this.isAdminEmail(info.email)) return true;
+    if (this.domainAllowed(info.email)) return true;
     const email = info.email?.toLowerCase();
     for (const entry of this.data.allowlist) {
       const e = entry.toLowerCase();
       if (email && e === email) return true;
       if (entry === info.openId) return true;
     }
-    const existing = this.getByOpenId(info.openId);
-    if (existing && !existing.disabled) return true;
+    if (existing) return true;
     if (this.data.users.length === 0 && this.adminEmails.length === 0) return true;
     return false;
   }

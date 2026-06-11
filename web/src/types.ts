@@ -143,6 +143,7 @@ export type AdminUsersResponse = {
   }>;
   allowlist: string[];
   adminEmails?: string[];
+  allowedDomains?: string[];
 };
 
 // Client → server

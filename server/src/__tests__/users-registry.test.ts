@@ -46,6 +46,26 @@ test('admin emails are always allowed and become admins; others need the allowli
   }
 });
 
+test('allowed email domains auto-approve the whole company without an allowlist', () => {
+  const { file, cleanup } = tempFile();
+  try {
+    const reg = new UserRegistry(file, ['boss@x.com'], ['flowgpt.com']);
+    // Anyone on the domain is allowed, no allowlist entry needed.
+    assert.equal(reg.isAllowed({ email: 'newhire@flowgpt.com', openId: 'ou_n' }), true);
+    assert.equal(reg.isAllowed({ email: 'NEWHIRE@FlowGPT.com', openId: 'ou_n2' }), true);
+    // Other domains still need the allowlist / admin path.
+    assert.equal(reg.isAllowed({ email: 'guest@gmail.com', openId: 'ou_g' }), false);
+    // Domain members default to the user role.
+    const u = reg.upsertOnLogin({ openId: 'ou_n', email: 'newhire@flowgpt.com', name: 'New Hire' });
+    assert.equal(u.role, 'user');
+    // Disabling is a hard revoke: domain auto-approval cannot bring them back.
+    reg.setDisabled('ou_n', true);
+    assert.equal(reg.isAllowed({ email: 'newhire@flowgpt.com', openId: 'ou_n' }), false);
+  } finally {
+    cleanup();
+  }
+});
+
 test('allowlist can hold feishu open_ids for accounts without visible emails', () => {
   const { file, cleanup } = tempFile();
   try {

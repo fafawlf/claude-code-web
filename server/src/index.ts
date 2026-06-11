@@ -32,7 +32,7 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
 
   let registry: UserRegistry | undefined;
   if (feishuMode) {
-    registry = new UserRegistry(config.usersFile, config.adminEmails);
+    registry = new UserRegistry(config.usersFile, config.adminEmails, config.allowedEmailDomains);
     registry.load();
   }
   const identity = { config, registry };
