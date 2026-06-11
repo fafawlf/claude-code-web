@@ -73,6 +73,8 @@ CCW_PUBLIC_ORIGIN=$PUBLIC_ORIGIN
 CCW_DATA_DIR=$DATA_DIR
 CCW_ADMIN_EMAILS=${CCW_ADMIN_EMAILS:-}
 CCW_ALLOWED_EMAIL_DOMAINS=${CCW_ALLOWED_EMAIL_DOMAINS:-}
+# Internal Feishu app: trust any account that completes OAuth (company-bounded).
+CCW_TRUST_ALL_FEISHU=${CCW_TRUST_ALL_FEISHU:-true}
 CLAUDECODE_WEB_TOKEN=$(cat /root/.claudecode-web/token 2>/dev/null || openssl rand -hex 32)
 EOF
   echo "    wrote $ENV_FILE"

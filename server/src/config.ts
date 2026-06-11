@@ -17,6 +17,10 @@ export type CcwConfig = {
   adminEmails: string[];
   /** Email domains whose Feishu accounts are auto-approved (e.g. flowgpt.com). */
   allowedEmailDomains: string[];
+  /** Trust any account that completes Feishu OAuth. Safe for INTERNAL apps,
+   *  where only company members can authorize the app at all. Lets everyone in
+   *  without relying on the email field (which Feishu may not return). */
+  trustAllFeishu: boolean;
   feishu?: FeishuAppConfig;
   /** Root that holds users.json, template/ and users/. */
   dataDir: string;
@@ -35,6 +39,7 @@ export function tokenModeConfig(): CcwConfig {
     cookieSecure: true,
     adminEmails: [],
     allowedEmailDomains: [],
+    trustAllFeishu: false,
     dataDir: '',
     usersRoot: '',
     usersFile: '',
@@ -76,6 +81,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): CcwConf
       .split(',')
       .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
       .filter(Boolean),
+    trustAllFeishu: env.CCW_TRUST_ALL_FEISHU === '1' || (env.CCW_TRUST_ALL_FEISHU ?? '').toLowerCase() === 'true',
     feishu: { appId, appSecret },
     dataDir,
     usersRoot: join(dataDir, 'users'),

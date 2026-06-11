@@ -66,6 +66,22 @@ test('allowed email domains auto-approve the whole company without an allowlist'
   }
 });
 
+test('trust-all mode admits any Feishu account, even with no email field', () => {
+  const { file, cleanup } = tempFile();
+  try {
+    const reg = new UserRegistry(file, ['boss@x.com'], [], true);
+    // Feishu did not return an email — internal-app OAuth success is enough.
+    assert.equal(reg.isAllowed({ openId: 'ou_noemail' }), true);
+    assert.equal(reg.isAllowed({ email: undefined, openId: 'ou_b86133' }), true);
+    // disable still revokes hard.
+    reg.upsertOnLogin({ openId: 'ou_noemail', name: 'No Email' });
+    reg.setDisabled('ou_noemail', true);
+    assert.equal(reg.isAllowed({ openId: 'ou_noemail' }), false);
+  } finally {
+    cleanup();
+  }
+});
+
 test('allowlist can hold feishu open_ids for accounts without visible emails', () => {
   const { file, cleanup } = tempFile();
   try {

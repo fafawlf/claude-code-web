@@ -39,6 +39,7 @@ export function registerUsageRoutes(app: FastifyInstance, opts: UsageRoutesOptio
       allowlist: registry.allowlist(),
       adminEmails: config.adminEmails,
       allowedDomains: config.allowedEmailDomains,
+      trustAllFeishu: config.trustAllFeishu,
     };
   });
 

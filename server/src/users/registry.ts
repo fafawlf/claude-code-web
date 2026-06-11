@@ -43,7 +43,9 @@ export class UserRegistry {
     private readonly adminEmails: string[] = [],
     /** Email domains whose Feishu accounts are auto-approved (e.g. flowgpt.com).
      *  Lets the whole company in without collecting individual addresses. */
-    private readonly allowedDomains: string[] = []
+    private readonly allowedDomains: string[] = [],
+    /** Trust any successful Feishu OAuth (internal app = company-bounded). */
+    private readonly trustAllFeishu = false
   ) {}
 
   private domainAllowed(email: string | undefined): boolean {
@@ -107,6 +109,8 @@ export class UserRegistry {
     // A disabled account is revoked — no domain/allowlist rule re-approves it.
     if (existing?.disabled) return false;
     if (this.isAdminEmail(info.email)) return true;
+    // Internal-app trust: anyone who completed OAuth is a company member.
+    if (this.trustAllFeishu) return true;
     if (this.domainAllowed(info.email)) return true;
     const email = info.email?.toLowerCase();
     for (const entry of this.data.allowlist) {

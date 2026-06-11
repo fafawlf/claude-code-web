@@ -144,6 +144,7 @@ export type AdminUsersResponse = {
   allowlist: string[];
   adminEmails?: string[];
   allowedDomains?: string[];
+  trustAllFeishu?: boolean;
 };
 
 // Client → server
