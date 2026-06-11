@@ -2,6 +2,7 @@ import type { PermissionBroker } from '../permissions/PermissionBroker.js';
 import type { PlanBroker } from '../permissions/PlanBroker.js';
 import type { ClaudeSession, EventListener, StateListener, ControlListener, SessionEvent, PermissionListener, PlanListener } from '../session/ClaudeSession.js';
 import type { AgentProviderId, PendingControl, PermissionMode, SessionStateSnapshot } from '../protocol.js';
+import type { GitIdentity } from '../git/identity.js';
 
 export type AgentSession = Pick<
   ClaudeSession,
@@ -39,6 +40,8 @@ export type AgentSessionOptions = {
   viewerMode?: boolean;
   /** Confine transcript lookups for resume to projects under this root. */
   searchRoot?: string;
+  /** Attribute git commits to this identity instead of the shared server owner. */
+  gitIdentity?: GitIdentity;
   onPermission?: PermissionListener;
   onPlan?: PlanListener;
 };

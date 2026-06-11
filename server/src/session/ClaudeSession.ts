@@ -4,6 +4,7 @@ import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveClaudePath } from './resolveClaudePath.js';
 import { loadClaudeTranscriptMessages } from './claudeTranscript.js';
+import { envWithGitIdentity, type GitIdentity } from '../git/identity.js';
 import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type AgentProviderId, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
 
 export type SessionEvent = { id: number; event: SDKMessage };
@@ -98,6 +99,7 @@ export class ClaudeSession {
   private readonly viewerMode: boolean;
   private readonly cwd: string;
   private readonly searchRoot?: string;
+  private readonly gitIdentity?: GitIdentity;
   private seenUuids = new Set<string>();
 
   constructor(opts: {
@@ -111,12 +113,14 @@ export class ClaudeSession {
     permissionMode?: PermissionMode;
     viewerMode?: boolean;
     searchRoot?: string;
+    gitIdentity?: GitIdentity;
     onPermission?: PermissionListener;
     onPlan?: PlanListener;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
     this.searchRoot = opts.searchRoot;
+    this.gitIdentity = opts.gitIdentity;
     this.viewerMode = !!opts.viewerMode;
     this.state = {
       sessionId: opts.id,
@@ -458,6 +462,9 @@ export class ClaudeSession {
       // between those modes.
       permissionMode: this.state.permissionMode === 'plan' ? 'plan' : 'default',
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
+      // Attribute commits to the session owner. Without this, the SDK inherits
+      // the server's process.env and every teammate commits as the box owner.
+      ...(this.gitIdentity ? { env: envWithGitIdentity(process.env, this.gitIdentity) } : {}),
       canUseTool: this.canUseToolImpl,
     };
   }

@@ -4,6 +4,7 @@ import { CodexProvider } from '../agents/CodexProvider.js';
 import type { AgentProvider, AgentSession } from '../agents/types.js';
 import type { PermissionListener, PlanListener } from './ClaudeSession.js';
 import type { AgentProviderId, PermissionMode, SessionStateSnapshot } from '../protocol.js';
+import type { GitIdentity } from '../git/identity.js';
 
 const MAX_CONCURRENT = 8;
 type ManagerListener = (sessions: SessionStateSnapshot[]) => void;
@@ -43,6 +44,7 @@ export class SessionManager {
     permissionMode?: PermissionMode;
     viewerMode?: boolean;
     searchRoot?: string;
+    gitIdentity?: GitIdentity;
     owner?: string;
     onPermission?: PermissionListener;
     onPlan?: PlanListener;

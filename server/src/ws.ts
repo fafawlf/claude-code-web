@@ -252,9 +252,20 @@ export function resolveHelloSession(
     permissionMode: msg.permissionMode,
     viewerMode: msg.viewerMode,
     searchRoot: user.fsRoot || undefined,
+    gitIdentity: gitIdentityFor(user),
     owner: scoped ? user.openId : undefined,
   });
   return { session, replayAfterId: msg.lastEventId ?? 0, recovered: !!msg.sessionId };
+}
+
+// Cookie-authed teammates commit under their own name; token auth (the box
+// owner via CLI) keeps the server's existing git config untouched.
+function gitIdentityFor(user: CcwUser): { name: string; email: string } | undefined {
+  if (user.via !== 'cookie') return undefined;
+  return {
+    name: user.name || user.slug,
+    email: user.email || `${user.slug}@ccw.fa-fa.ai`,
+  };
 }
 
 function send(socket: WebSocket, m: ServerMessage): boolean {

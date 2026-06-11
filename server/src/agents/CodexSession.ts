@@ -8,6 +8,7 @@ import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveCodexPath } from './resolveCodexPath.js';
 import { DEFAULT_NODE_ID, type ActiveToolInfo, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
 import type { AgentSessionOptions } from './types.js';
+import { envWithGitIdentity, type GitIdentity } from '../git/identity.js';
 import type { ControlListener, EventListener, SessionEvent, StateListener } from '../session/ClaudeSession.js';
 
 const RING_CAPACITY = 5000;
@@ -68,9 +69,11 @@ export class CodexSession {
   private seenToolCalls = new Set<string>();
   private seenToolResults = new Set<string>();
   private resultPushedForTurn = false;
+  private readonly gitIdentity?: GitIdentity;
 
   constructor(opts: AgentSessionOptions) {
     this.id = opts.id;
+    this.gitIdentity = opts.gitIdentity;
     this.state = {
       sessionId: opts.id,
       nodeId: opts.nodeId ?? DEFAULT_NODE_ID,
@@ -194,7 +197,7 @@ export class CodexSession {
     const args = this.buildArgs(prompt);
     const child = spawn(codexPath, args, {
       cwd: this.state.cwd,
-      env: process.env,
+      env: envWithGitIdentity(process.env, this.gitIdentity),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.child = child;
