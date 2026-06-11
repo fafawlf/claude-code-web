@@ -68,12 +68,13 @@ export function AdminUsersModal({ onClose }: Props) {
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-lg border border-border bg-bg-surface shadow-pop animate-modal-in p-4 space-y-4 text-[13px]">
-        <div className="flex items-center justify-between">
+      <div className="relative w-full max-w-lg max-h-[85vh] flex flex-col rounded-lg border border-border bg-bg-surface shadow-pop animate-modal-in text-[13px]">
+        <div className="flex items-center justify-between p-4 border-b border-border-subtle shrink-0">
           <div className="text-text-primary font-medium">Team access</div>
           <button onClick={onClose} className="chip">Close</button>
         </div>
 
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
         <div>
           <div className="text-text-secondary mb-1.5">Allowlist — Feishu email or open_id</div>
           <form
@@ -136,6 +137,7 @@ export function AdminUsersModal({ onClose }: Props) {
         </div>
 
         {err && <div className="text-danger text-[12px]">{err}</div>}
+        </div>
       </div>
     </div>
   );
