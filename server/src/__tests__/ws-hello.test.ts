@@ -108,7 +108,7 @@ test('resolveHelloSession records requested node and provider on new sessions', 
   await sm.closeAll();
 });
 
-test('resolveHelloSession defaults new Claude sessions to Fable 5', async () => {
+test('resolveHelloSession defaults new Claude sessions to Opus 4.8', async () => {
   const sm = new SessionManager();
   const resolved = resolveHelloSession(sm, {
     type: 'hello',

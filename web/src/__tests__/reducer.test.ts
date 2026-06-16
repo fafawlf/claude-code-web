@@ -118,6 +118,61 @@ test('user event with string content (not array) also creates user ChatItem', ()
   assert.equal((s.items[0] as any).text, 'hi there');
 });
 
+test('expanded agent command templates display only the human arguments', () => {
+  let s = baseState();
+  const expanded = [
+    '> Objective: analyze a product surface.',
+    '> Implementation: use this Claude Code Skill through scripts/.',
+    '> This is a Claude Code Skill instruction for the agent.',
+    '',
+    'ARGUMENTS: analyze memory feedback and find the user pain points',
+  ].join('\n');
+  const ev: SdkEvent = { type: 'user', message: { content: [{ type: 'text', text: expanded }] } } as unknown as SdkEvent;
+  s = applyEvent(s, ev, 1);
+  assert.equal(s.items.length, 1);
+  assert.equal((s.items[0] as any).text, 'analyze memory feedback and find the user pain points');
+});
+
+test('expanded agent command templates with empty arguments are hidden', () => {
+  let s = baseState();
+  const expanded = [
+    '> Objective: analyze a product surface.',
+    '> Implementation: use this Claude Code Skill through scripts/.',
+    '> This is a Claude Code Skill instruction for the agent.',
+    '',
+    'ARGUMENTS:',
+  ].join('\n');
+  const ev: SdkEvent = { type: 'user', message: { content: [{ type: 'text', text: expanded }] } } as unknown as SdkEvent;
+  s = applyEvent(s, ev, 1);
+  assert.equal(s.items.length, 0);
+});
+
+test('normal user text containing ARGUMENTS is preserved', () => {
+  let s = baseState();
+  const text = 'Please parse this CLI example:\nARGUMENTS: --force --dry-run';
+  const ev: SdkEvent = { type: 'user', message: { content: [{ type: 'text', text }] } } as unknown as SdkEvent;
+  s = applyEvent(s, ev, 1);
+  assert.equal(s.items.length, 1);
+  assert.equal((s.items[0] as any).text, text);
+});
+
+test('expanded command echoes can absorb the optimistic human prompt', () => {
+  let s = baseState();
+  s = addUserOptimistic(s, 'analyze memory feedback');
+  const expanded = [
+    '> Objective: analyze a product surface.',
+    '> Implementation: use this Claude Code Skill through scripts/.',
+    '> This is a Claude Code Skill instruction for the agent.',
+    '',
+    'ARGUMENTS: analyze memory feedback',
+  ].join('\n');
+  const ev: SdkEvent = { type: 'user', message: { content: [{ type: 'text', text: expanded }] } } as unknown as SdkEvent;
+  s = applyEvent(s, ev, 1);
+  assert.equal(s.items.length, 1);
+  assert.equal((s.items[0] as any).text, 'analyze memory feedback');
+  assert.equal((s.items[0] as any).optimistic, false);
+});
+
 test('addUserOptimistic then matching echo absorbs the optimistic item (no duplicate)', () => {
   let s = baseState();
   s = addUserOptimistic(s, 'hello');

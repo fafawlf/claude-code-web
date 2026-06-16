@@ -16,9 +16,12 @@ const TOOL_ICON: Record<string, IconName> = {
   Task: 'sparkles',
 };
 
+const COMPACT_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'LS']);
+
 function primaryArg(name: string, input: Record<string, unknown>): string {
   if (name === 'Bash' && typeof input.command === 'string') return input.command as string;
-  if ((name === 'Read' || name === 'Edit' || name === 'Write') && typeof input.file_path === 'string') return input.file_path as string;
+  if ((name === 'Read' || name === 'Edit' || name === 'Write' || name === 'LS') && typeof input.file_path === 'string') return input.file_path as string;
+  if (name === 'LS' && typeof input.path === 'string') return input.path as string;
   if (name === 'Grep' && typeof input.pattern === 'string') return String(input.pattern);
   if (name === 'Glob' && typeof input.pattern === 'string') return String(input.pattern);
   const first = Object.entries(input)[0];
@@ -31,16 +34,17 @@ export function ToolUse({ item, defaultOpen = false }: Props) {
   const isError = item.result?.isError;
   const icon = TOOL_ICON[item.name] ?? 'code';
   const primary = primaryArg(item.name, item.input);
+  const compact = !open && !isError && COMPACT_TOOL_NAMES.has(item.name);
 
   return (
-    <div className={`rounded-md border bg-bg-raised overflow-hidden transition-[border-color,transform] duration-hover ease-out ${isError ? 'border-danger/45' : open ? 'bg-bg-surface border-border' : 'border-border-subtle hover:border-border hover:-translate-y-px'}`}>
+    <div className={`tool-use-card ${compact ? 'tool-use-compact rounded-sm bg-bg-raised/45' : 'rounded-md bg-bg-raised'} border overflow-hidden transition-[border-color,transform] duration-hover ease-out ${isError ? 'border-danger/45' : open ? 'bg-bg-surface border-border' : 'border-border-subtle hover:border-border hover:-translate-y-px'}`}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left"
+        className={`w-full flex items-center text-left ${compact ? 'gap-2 px-2.5 py-1.5 min-h-[34px]' : 'gap-2.5 px-3.5 py-2.5'}`}
       >
-        <Icon name={icon} size={14} className="text-accent opacity-80" />
-        <span className="text-[11px] uppercase tracking-wider font-semibold text-accent/90">{item.name}</span>
-        <span className="font-mono text-xs text-text-secondary truncate flex-1">{primary}</span>
+        <Icon name={icon} size={compact ? 12 : 14} className="text-accent opacity-80 shrink-0" />
+        <span className={`${compact ? 'text-[10px]' : 'text-[11px]'} uppercase tracking-wider font-semibold text-accent/90 shrink-0`}>{item.name}</span>
+        <span className={`font-mono ${compact ? 'text-[11px]' : 'text-xs'} text-text-secondary truncate flex-1`}>{primary}</span>
         {hasResult && (
           <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${isError ? 'text-danger bg-danger/10' : 'text-success bg-success/10'}`}>
             {isError ? 'failed' : 'done'}

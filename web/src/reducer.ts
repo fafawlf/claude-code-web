@@ -36,17 +36,49 @@ function extractUserText(content: unknown): string | null {
 }
 
 /**
+ * Claude Code can replay expanded command/skill templates as `user` messages.
+ * Those templates are instructions to the agent, not what the human typed.
+ * Keep the actual ARGUMENTS payload when present; otherwise hide the template.
+ */
+export function cleanUserTextForDisplay(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const argumentsMatch = trimmed.match(/(?:^|\n)ARGUMENTS:\s*([\s\S]*)$/);
+  if (argumentsMatch) {
+    const prefix = trimmed.slice(0, argumentsMatch.index ?? 0);
+    if (looksLikeAgentCommandTemplate(prefix)) {
+      const args = argumentsMatch[1].trim();
+      return args || null;
+    }
+  }
+
+  if (looksLikeAgentCommandTemplate(trimmed) && trimmed.split(/\r?\n/).length >= 4) return null;
+  return text;
+}
+
+function looksLikeAgentCommandTemplate(text: string): boolean {
+  if (!text.trim()) return false;
+  const quotedInstructionLines = text
+    .split(/\r?\n/)
+    .filter((line) => line.trim().startsWith('>')).length;
+  const hasSkillMarker = /Claude Code Skill|MCP server|scripts\/|实现方式|目标：|请使用|Use this skill/i.test(text);
+  return hasSkillMarker && (quotedInstructionLines >= 2 || /Claude Code Skill|MCP server|Use this skill/i.test(text));
+}
+
+/**
  * When an echoed user event arrives, see if there's a recent optimistic item
  * with the same text — if so, "confirm" it instead of appending a duplicate.
  * Searches the tail of items for resilience (last 5 are usually enough).
  */
-function absorbOptimistic(items: ChatItem[], text: string): ChatItem[] | null {
+function absorbOptimistic(items: ChatItem[], echoText: string, displayText: string | null = echoText): ChatItem[] | null {
   const scan = Math.min(5, items.length);
   for (let i = items.length - 1; i >= items.length - scan && i >= 0; i--) {
     const it = items[i];
-    if (it.kind === 'user' && it.optimistic && it.text === text) {
+    if (it.kind === 'user' && it.optimistic && it.text === echoText) {
       const copy = items.slice();
-      copy[i] = { ...it, optimistic: false };
+      if (displayText === null) copy.splice(i, 1);
+      else copy[i] = { ...it, text: displayText, optimistic: false };
       return copy;
     }
   }
@@ -92,11 +124,14 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
     //    either absorb the matching optimistic item or append a new one.
     const text = extractUserText(content);
     if (text) {
-      const absorbed = absorbOptimistic(items, text);
+      const displayText = cleanUserTextForDisplay(text);
+      const absorbed = displayText
+        ? (absorbOptimistic(items, displayText) ?? absorbOptimistic(items, text, displayText))
+        : absorbOptimistic(items, text, null);
       if (absorbed) {
         return { ...s, items: absorbed, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
       }
-      items.push({ kind: 'user', id: rid(), text });
+      if (displayText) items.push({ kind: 'user', id: rid(), text: displayText });
     }
     // 2) Then walk for tool_result parts and bind them back to their tool_use.
     if (Array.isArray(content)) {
