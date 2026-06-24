@@ -54,6 +54,7 @@ function InputBarImpl(p: Props) {
   const [historyDraft, setHistoryDraft] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [sendHint, setSendHint] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const previewUrlsRef = useRef<Set<string>>(new Set());
@@ -105,6 +106,12 @@ function InputBarImpl(p: Props) {
   }, [text]);
 
   useEffect(() => {
+    if (!sendHint) return;
+    const t = window.setTimeout(() => setSendHint(null), 2200);
+    return () => window.clearTimeout(t);
+  }, [sendHint]);
+
+  useEffect(() => {
     if (text.length > 0 || focused) return;
     const t = setInterval(() => setPlaceholderIdx((i) => (i + 1) % PLACEHOLDERS.length), 5000);
     return () => clearInterval(t);
@@ -114,8 +121,10 @@ function InputBarImpl(p: Props) {
     const t = text.trim();
     const readyFiles = attachments.flatMap((a) => (a.status === 'ready' && a.uploaded ? [a.uploaded] : []));
     const uploading = attachments.some((a) => a.status === 'uploading');
-    if ((!t && readyFiles.length === 0) || !p.ready || uploading) return;
-    if (t.startsWith('/') && readyFiles.length === 0) return;
+    if (!t && readyFiles.length === 0) return;
+    if (uploading) { setSendHint('Files are still uploading.'); return; }
+    if (!p.ready) { setSendHint(p.readOnly ? 'Press Continue writing to take over this chat.' : 'Still connecting. Try again in a moment.'); return; }
+    if (t.startsWith('/') && readyFiles.length === 0) { setSendHint('Pick a slash command, or remove / to send as text.'); return; }
     const prompt = buildAttachmentPrompt(t, readyFiles);
     setHistory((prev) => recordPrompt(prev, prompt));
     setHistoryCursor(null);
@@ -346,7 +355,7 @@ function InputBarImpl(p: Props) {
             <span className="composer-shortcut inline-flex items-center gap-1.5"><span className="kbd">/</span></span>
             <span className="composer-shortcut inline-flex items-center gap-1.5"><span className="kbd">⇧⇥</span> mode</span>
           </div>
-          <SendButton busy={p.busy} active={hasText} uploading={uploading} onSend={submit} onStop={p.onStop} ready={p.ready} />
+          <SendButton busy={p.busy} active={hasText} uploading={uploading} readOnly={!!p.readOnly} onSend={submit} onStop={p.onStop} ready={p.ready} />
         </div>
 
         {slashQuery !== null && (
@@ -355,6 +364,7 @@ function InputBarImpl(p: Props) {
         {mentionQuery !== null && slashQuery === null && (
           <MentionPopup token={p.token} cwd={p.cwd} query={mentionQuery} onPick={insertMention} onClose={() => setMentionQuery(null)} />
         )}
+        {sendHint && <div className="mt-2 text-[11px] leading-4 text-warning" role="status">{sendHint}</div>}
       </div>
     </div>
   );
@@ -487,7 +497,7 @@ function AttachmentChip({ attachment, onRemove }: { attachment: Attachment; onRe
   );
 }
 
-function SendButton({ busy, active, uploading, ready, onSend, onStop }: { busy: boolean; active: boolean; uploading: boolean; ready: boolean; onSend: () => void; onStop: () => void }) {
+function SendButton({ busy, active, uploading, ready, readOnly, onSend, onStop }: { busy: boolean; active: boolean; uploading: boolean; ready: boolean; readOnly: boolean; onSend: () => void; onStop: () => void }) {
   if (busy) {
     return (
       <button
@@ -499,16 +509,24 @@ function SendButton({ busy, active, uploading, ready, onSend, onStop }: { busy: 
       </button>
     );
   }
-  const cls = active
+  const canSend = active && ready && !uploading;
+  const label = uploading
+    ? 'Uploading attachments'
+    : !ready
+      ? readOnly ? 'Read-only: press Continue writing' : 'Still connecting'
+      : active ? 'Send' : 'Type a message';
+  const cls = canSend
     ? 'bg-accent text-text-inverse shadow-[0_0_0_1px_var(--accent-hi),0_6px_16px_-4px_rgba(217,119,87,.4)] hover:bg-accent-hi'
-    : 'bg-bg-hover text-text-muted cursor-not-allowed';
+    : active
+      ? 'bg-bg-hover text-text-secondary border border-warning/20 cursor-not-allowed'
+      : 'bg-bg-hover text-text-muted cursor-not-allowed';
   return (
     <button
       onClick={onSend}
-      disabled={!active || !ready || uploading}
+      disabled={!active}
       className={`composer-send-button w-9 h-9 rounded-full grid place-items-center transition-all duration-hover active:scale-[.97] ${cls}`}
-      aria-label={uploading ? 'Uploading attachments' : 'Send'}
-      title={uploading ? 'Uploading attachments' : 'Send'}
+      aria-label={label}
+      title={label}
     >
       <Icon name="send" size={16} />
     </button>

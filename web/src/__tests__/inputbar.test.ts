@@ -46,3 +46,24 @@ test('InputBar keeps bypass permissions visible in the bottom mode controls', ()
   assert.match(html, />Bypass</);
   assert.match(html, /aria-pressed="false"/);
 });
+
+
+test('InputBar does not show a fake active send state while connecting', () => {
+  const html = renderToStaticMarkup(createElement(InputBar, {
+    token: 't',
+    cwd: '/tmp',
+    mode: 'default',
+    busy: false,
+    ready: false,
+    initialText: 'hello',
+    onSend: () => {},
+    onStop: () => {},
+    onSlashAction: () => {},
+    onCycleMode: () => {},
+    onSetMode: () => {},
+  }));
+
+  assert.match(html, /aria-label="Still connecting"/);
+  assert.match(html, /border-warning\/20/);
+  assert.doesNotMatch(html, /bg-accent text-text-inverse/);
+});
