@@ -14,9 +14,11 @@ test('provider helpers expose distinct Claude and Codex model menus', () => {
   assert.ok(modelOptionsForProvider('claude').some((m) => m.id.startsWith('claude-')));
   assert.equal(modelOptionsForProvider('claude')[0].id, 'claude-opus-4-8');
   assert.ok(modelOptionsForProvider('claude').some((m) => m.id === DEFAULT_CLAUDE_MODEL));
+  assert.ok(modelOptionsForProvider('claude').some((m) => m.id === 'claude-fable-5'));
   assert.equal(defaultModelForProvider('claude'), DEFAULT_CLAUDE_MODEL);
   assert.equal(modelLabel('claude'), 'Opus 4.8');
   assert.equal(modelLabel('claude', 'claude-opus-4-8'), 'Opus 4.8');
+  assert.equal(modelLabel('claude', 'claude-fable-5'), 'Fable 5');
   assert.ok(modelOptionsForProvider('codex').some((m) => m.id.includes('codex')));
   assert.equal(modelOptionsForProvider('codex')[0].id, 'gpt-5.5');
 });
