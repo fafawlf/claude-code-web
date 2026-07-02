@@ -67,6 +67,7 @@ test('AgentMenu collapses node, model, auth, and skin into one topbar chip', () 
     skin: 'warm',
     onSelectNodeProvider: () => {},
     onSelectModel: () => {},
+    onSelectClaudeAuthMode: () => {},
     onSelectSkin: () => {},
   }));
 

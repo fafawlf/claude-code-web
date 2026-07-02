@@ -33,9 +33,15 @@ test('buildReconnectHello includes recovery fields for expired server-side live 
     cwd: '/root/chatgpt',
     resumeClaudeId: 'claude-1',
     model: 'claude-opus-4-8',
+    claudeAuthMode: undefined,
     permissionMode: 'bypassPermissions',
     viewerMode: undefined,
   });
+});
+
+test('buildReconnectHello preserves Claude auth mode', () => {
+  const state = withReady(initialState, { ...snap(), claudeAuthMode: 'api' });
+  assert.equal(buildReconnectHello('live-1', state, 10).claudeAuthMode, 'api');
 });
 
 test('buildReconnectHello resumes provider-neutral sessions with providerSessionId first', () => {

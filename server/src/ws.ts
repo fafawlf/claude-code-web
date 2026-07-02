@@ -7,6 +7,7 @@ import { NodeRegistry } from './nodes/NodeRegistry.js';
 import { tokenModeConfig, type CcwConfig } from './config.js';
 import { resolveScoped, resolveUser, tokenAdmin, type CcwUser, type IdentityContext } from './users/identity.js';
 import type { UserRegistry } from './users/registry.js';
+import { defaultClaudeAuthMode, hasClaudeApiKey } from './authInfo.js';
 
 export type WsIdentityOptions = {
   config: CcwConfig;
@@ -173,6 +174,10 @@ export function registerWs(
           try { await session.setModel(msg.model); }
           catch (e) { send(socket, { type: 'error', message: `setModel failed: ${(e as Error).message}` }); }
           break;
+        case 'set_claude_auth_mode':
+          try { await session.setClaudeAuthMode(msg.mode); }
+          catch (e) { send(socket, { type: 'error', message: `setClaudeAuthMode failed: ${(e as Error).message}` }); }
+          break;
         case 'set_permission_mode':
           try { await session.setPermissionMode(msg.mode as PermissionMode); }
           catch (e) { send(socket, { type: 'error', message: `setPermissionMode failed: ${(e as Error).message}` }); }
@@ -236,6 +241,7 @@ export function resolveHelloSession(
     provider: requestedProvider,
     cwd,
     providerSessionId: msg.resumeClaudeId,
+    claudeAuthMode: requestedProvider === 'claude' ? (msg.claudeAuthMode ?? defaultClaudeAuthMode()) : undefined,
     viewerMode: msg.viewerMode,
     owner: scoped ? user.openId : undefined,
   });
@@ -249,6 +255,7 @@ export function resolveHelloSession(
     cwd,
     resume: msg.resumeClaudeId,
     model: msg.model ?? defaultModelForProvider(requestedProvider),
+    claudeAuthMode: requestedProvider === 'claude' ? resolveClaudeAuthMode(msg.claudeAuthMode) : undefined,
     permissionMode: msg.permissionMode,
     viewerMode: msg.viewerMode,
     searchRoot: user.fsRoot || undefined,
@@ -256,6 +263,14 @@ export function resolveHelloSession(
     owner: scoped ? user.openId : undefined,
   });
   return { session, replayAfterId: msg.lastEventId ?? 0, recovered: !!msg.sessionId };
+}
+
+function resolveClaudeAuthMode(requested?: ClientHello['claudeAuthMode']): ClientHello['claudeAuthMode'] {
+  const mode = requested ?? defaultClaudeAuthMode();
+  if (mode === 'api' && !hasClaudeApiKey()) {
+    throw new Error('Claude API fallback is not configured on this server.');
+  }
+  return mode;
 }
 
 // Cookie-authed teammates commit under their own name; token auth (the box

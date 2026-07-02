@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectClaudeAuthInfo, detectCodexAuthInfo } from '../authInfo.js';
+import { defaultClaudeAuthMode, detectClaudeAuthInfo, detectCodexAuthInfo, envWithClaudeAuth } from '../authInfo.js';
 
 function tempHome(): string {
   return mkdtempSync(join(tmpdir(), 'ccw-auth-'));
@@ -31,6 +31,41 @@ test('detectClaudeAuthInfo reports API key auth first', () => {
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('detectClaudeAuthInfo exposes dedicated API fallback without making it primary auth', () => {
+  const home = tempHome();
+  try {
+    writeCredentials(home, { account: { subscriptionPlan: 'claude-max' } });
+    const info = detectClaudeAuthInfo({ env: { CCW_ANTHROPIC_API_KEY: 'sk-fallback' }, home });
+
+    assert.equal(info.source, 'account');
+    assert.equal(info.label, 'Claude Max');
+    assert.equal(info.apiFallbackAvailable, true);
+    assert.equal(defaultClaudeAuthMode({ env: { CCW_ANTHROPIC_API_KEY: 'sk-fallback' }, home }), 'account');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('envWithClaudeAuth strips API keys for account mode and injects them for API mode', () => {
+  const base = {
+    PATH: '/usr/bin',
+    ANTHROPIC_API_KEY: 'sk-active',
+    ANTHROPIC_AUTH_TOKEN: 'oauth-token',
+    CCW_ANTHROPIC_API_KEY: 'sk-fallback',
+  };
+
+  const account = envWithClaudeAuth(base, 'account');
+  assert.equal(account.PATH, '/usr/bin');
+  assert.equal(account.ANTHROPIC_API_KEY, undefined);
+  assert.equal(account.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(account.CCW_ANTHROPIC_API_KEY, undefined);
+
+  const api = envWithClaudeAuth(base, 'api');
+  assert.equal(api.ANTHROPIC_API_KEY, 'sk-fallback');
+  assert.equal(api.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(api.CCW_ANTHROPIC_API_KEY, undefined);
 });
 
 test('detectClaudeAuthInfo reports API token auth', () => {

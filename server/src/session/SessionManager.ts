@@ -3,7 +3,7 @@ import { ClaudeProvider } from '../agents/ClaudeProvider.js';
 import { CodexProvider } from '../agents/CodexProvider.js';
 import type { AgentProvider, AgentSession } from '../agents/types.js';
 import type { PermissionListener, PlanListener } from './ClaudeSession.js';
-import type { AgentProviderId, PermissionMode, SessionStateSnapshot } from '../protocol.js';
+import type { AgentProviderId, ClaudeAuthMode, PermissionMode, SessionStateSnapshot } from '../protocol.js';
 import type { GitIdentity } from '../git/identity.js';
 
 const MAX_CONCURRENT = 8;
@@ -41,6 +41,7 @@ export class SessionManager {
     cwd: string;
     resume?: string;
     model?: string;
+    claudeAuthMode?: ClaudeAuthMode;
     permissionMode?: PermissionMode;
     viewerMode?: boolean;
     searchRoot?: string;
@@ -87,6 +88,7 @@ export class SessionManager {
     provider: AgentProviderId;
     cwd: string;
     providerSessionId?: string;
+    claudeAuthMode?: ClaudeAuthMode;
     viewerMode?: boolean;
     owner?: string;
   }): AgentSession | undefined {
@@ -101,6 +103,7 @@ export class SessionManager {
         snap.claudeSessionId === opts.providerSessionId;
       if (!sameProviderSession) continue;
       if (snap.nodeId !== opts.nodeId || snap.provider !== opts.provider || snap.cwd !== opts.cwd) continue;
+      if (snap.provider === 'claude' && opts.claudeAuthMode !== undefined && snap.claudeAuthMode !== opts.claudeAuthMode) continue;
       if (!!snap.viewerMode !== !!opts.viewerMode) continue;
       if (!best || snap.lastEventId > best.getState().lastEventId || snap.lastEventAt > best.getState().lastEventAt) {
         best = session;

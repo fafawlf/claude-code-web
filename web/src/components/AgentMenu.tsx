@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import type { AgentProviderId, ClaudeAuthInfo, CodexAuthInfo, NodeInfo } from '../types';
+import type { AgentProviderId, ClaudeAuthInfo, ClaudeAuthMode, CodexAuthInfo, NodeInfo } from '../types';
 import { modelLabel, modelOptionsForProvider, providerLabel } from '../types';
 import type { SkinId } from '../skins';
 import { SKINS, skinById } from '../skins';
@@ -13,12 +13,14 @@ type Props = {
   currentNodeId?: string;
   currentProvider?: AgentProviderId;
   currentModel?: string;
+  currentClaudeAuthMode?: ClaudeAuthMode;
   codexDefaultModel?: string;
   auth?: ClaudeAuthInfo | null;
   codexAuth?: CodexAuthInfo | null;
   skin: SkinId;
   onSelectNodeProvider: (nodeId: string, provider: AgentProviderId) => void;
   onSelectModel: (modelId: string) => void;
+  onSelectClaudeAuthMode: (mode: ClaudeAuthMode) => void;
   onSelectSkin: (skin: SkinId) => void;
 };
 
@@ -27,12 +29,14 @@ export function AgentMenu({
   currentNodeId,
   currentProvider,
   currentModel,
+  currentClaudeAuthMode,
   codexDefaultModel,
   auth,
   codexAuth,
   skin,
   onSelectNodeProvider,
   onSelectModel,
+  onSelectClaudeAuthMode,
   onSelectSkin,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -42,6 +46,7 @@ export function AgentMenu({
   const fallbackModel = provider === 'codex' ? codexDefaultModel : undefined;
   const label = `${providerLabel(provider)} · ${modelLabel(provider, currentModel, fallbackModel)}`;
   const activeAuth = provider === 'codex' ? codexAuth : auth;
+  const claudeAuthMode = currentClaudeAuthMode ?? (auth?.source === 'api' ? 'api' : 'account');
 
   return (
     <div className="topbar-menu relative">
@@ -112,6 +117,26 @@ export function AgentMenu({
               })}
             </Section>
 
+            {provider === 'claude' && (
+              <Section title="Billing">
+                <div className="grid grid-cols-2 gap-1 px-2">
+                  <BillingButton
+                    active={claudeAuthMode !== 'api'}
+                    label={auth?.label ?? 'Claude account'}
+                    hint="uses Max/Pro quota"
+                    onClick={() => { onSelectClaudeAuthMode('account'); setOpen(false); }}
+                  />
+                  <BillingButton
+                    active={claudeAuthMode === 'api'}
+                    label="Claude API"
+                    hint={auth?.apiFallbackAvailable ? 'billed separately' : 'not configured'}
+                    disabled={!auth?.apiFallbackAvailable}
+                    onClick={() => { onSelectClaudeAuthMode('api'); setOpen(false); }}
+                  />
+                </div>
+              </Section>
+            )}
+
             <Section title="Skin">
               <div className="grid grid-cols-2 gap-1 px-2">
                 {SKINS.map((item) => {
@@ -159,6 +184,20 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <div className="px-3 pb-1 text-[10px] uppercase tracking-[.06em] font-semibold text-text-muted">{title}</div>
       {children}
     </section>
+  );
+}
+
+function BillingButton({ active, label, hint, disabled, onClick }: { active: boolean; label: string; hint: string; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`rounded-sm px-2.5 py-2 text-left transition-colors duration-hover disabled:opacity-45 disabled:cursor-not-allowed ${active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'}`}
+      role="menuitem"
+    >
+      <span className="block text-xs font-medium truncate">{label}</span>
+      <span className="block text-[10px] text-text-muted truncate">{hint}</span>
+    </button>
   );
 }
 

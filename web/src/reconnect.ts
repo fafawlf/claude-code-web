@@ -14,6 +14,7 @@ export function buildReconnectHello(activeSessionId: string | null, state: ChatS
     cwd: snap?.cwd,
     resumeClaudeId: snap?.providerSessionId ?? snap?.claudeSessionId,
     model: snap?.model ?? defaultModelForProvider(snap?.provider),
+    claudeAuthMode: snap?.claudeAuthMode,
     permissionMode: snap?.permissionMode,
     viewerMode: snap?.viewerMode,
   };

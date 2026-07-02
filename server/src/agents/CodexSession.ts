@@ -118,6 +118,10 @@ export class CodexSession {
     this.updateState({ model });
   }
 
+  async setClaudeAuthMode(): Promise<void> {
+    // Codex auth is managed separately; this wire command is Claude-only.
+  }
+
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     this.updateState({ permissionMode: mode });
   }

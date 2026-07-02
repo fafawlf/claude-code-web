@@ -8,6 +8,7 @@ export type ClaudeAuthInfo = {
   plan?: 'max' | 'pro' | 'unknown';
   label: string;
   detail?: string;
+  apiFallbackAvailable?: boolean;
 };
 
 export type CodexAuthInfo = {
@@ -22,12 +23,15 @@ type DetectOptions = {
   home?: string;
 };
 
+export type ClaudeAuthMode = 'account' | 'api';
+
 export function detectClaudeAuthInfo(opts: DetectOptions = {}): ClaudeAuthInfo {
   const env = opts.env ?? process.env;
   const home = opts.home ?? homedir();
+  const apiFallbackAvailable = hasClaudeApiKey(env);
 
-  if (env.ANTHROPIC_API_KEY) return { source: 'api', label: 'API key', detail: 'ANTHROPIC_API_KEY' };
-  if (env.ANTHROPIC_AUTH_TOKEN) return { source: 'api', label: 'API token', detail: 'ANTHROPIC_AUTH_TOKEN' };
+  if (env.ANTHROPIC_API_KEY) return { source: 'api', label: 'API key', detail: 'ANTHROPIC_API_KEY', apiFallbackAvailable };
+  if (env.ANTHROPIC_AUTH_TOKEN) return { source: 'api', label: 'API token', detail: 'ANTHROPIC_AUTH_TOKEN', apiFallbackAvailable };
 
   const credentialFiles = [
     join(home, '.claude', '.credentials.json'),
@@ -37,12 +41,48 @@ export function detectClaudeAuthInfo(opts: DetectOptions = {}): ClaudeAuthInfo {
   for (const file of credentialFiles) {
     if (!existsSync(file)) continue;
     const plan = inferPlanFromCredentials(file);
-    if (plan === 'max') return { source: 'account', plan, label: 'Claude Max', detail: 'claude login' };
-    if (plan === 'pro') return { source: 'account', plan, label: 'Claude Pro', detail: 'claude login' };
-    return { source: 'account', plan: 'unknown', label: 'Claude account', detail: 'claude login' };
+    if (plan === 'max') return { source: 'account', plan, label: 'Claude Max', detail: 'claude login', apiFallbackAvailable };
+    if (plan === 'pro') return { source: 'account', plan, label: 'Claude Pro', detail: 'claude login', apiFallbackAvailable };
+    return { source: 'account', plan: 'unknown', label: 'Claude account', detail: 'claude login', apiFallbackAvailable };
   }
 
-  return { source: 'none', label: 'No Claude auth', detail: 'API key or claude login not detected' };
+  return { source: 'none', label: 'No Claude auth', detail: 'API key or claude login not detected', apiFallbackAvailable };
+}
+
+export function hasClaudeApiKey(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !!claudeApiKeyFromEnv(env);
+}
+
+export function defaultClaudeAuthMode(opts: DetectOptions = {}): ClaudeAuthMode {
+  const env = opts.env ?? process.env;
+  if (hasClaudeAccountCredentials(opts.home)) return 'account';
+  return hasClaudeApiKey(env) ? 'api' : 'account';
+}
+
+export function envWithClaudeAuth(base: NodeJS.ProcessEnv | Record<string, string>, mode: ClaudeAuthMode): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) if (typeof v === 'string') out[k] = v;
+  const apiKey = claudeApiKeyFromEnv(out);
+  delete out.CCW_ANTHROPIC_API_KEY;
+  delete out.CCW_CLAUDE_API_KEY;
+  delete out.ANTHROPIC_AUTH_TOKEN;
+  if (mode === 'api') {
+    if (apiKey) out.ANTHROPIC_API_KEY = apiKey;
+  } else {
+    delete out.ANTHROPIC_API_KEY;
+  }
+  return out;
+}
+
+function claudeApiKeyFromEnv(env: NodeJS.ProcessEnv | Record<string, string>): string | undefined {
+  return env.CCW_ANTHROPIC_API_KEY || env.CCW_CLAUDE_API_KEY || env.ANTHROPIC_API_KEY;
+}
+
+function hasClaudeAccountCredentials(home = homedir()): boolean {
+  return [
+    join(home, '.claude', '.credentials.json'),
+    join(home, '.claude', 'credentials.json'),
+  ].some((file) => existsSync(file));
 }
 
 export function detectCodexAuthInfo(opts: DetectOptions = {}): CodexAuthInfo {

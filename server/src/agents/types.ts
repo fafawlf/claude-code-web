@@ -1,7 +1,7 @@
 import type { PermissionBroker } from '../permissions/PermissionBroker.js';
 import type { PlanBroker } from '../permissions/PlanBroker.js';
 import type { ClaudeSession, EventListener, StateListener, ControlListener, SessionEvent, PermissionListener, PlanListener } from '../session/ClaudeSession.js';
-import type { AgentProviderId, PendingControl, PermissionMode, SessionStateSnapshot } from '../protocol.js';
+import type { AgentProviderId, ClaudeAuthMode, PendingControl, PermissionMode, SessionStateSnapshot } from '../protocol.js';
 import type { GitIdentity } from '../git/identity.js';
 
 export type AgentSession = Pick<
@@ -12,6 +12,7 @@ export type AgentSession = Pick<
   | 'planBroker'
   | 'sendUser'
   | 'setModel'
+  | 'setClaudeAuthMode'
   | 'setPermissionMode'
   | 'interrupt'
   | 'refreshHistory'
@@ -36,6 +37,7 @@ export type AgentSessionOptions = {
   cwd: string;
   resume?: string;
   model?: string;
+  claudeAuthMode?: ClaudeAuthMode;
   permissionMode?: PermissionMode;
   viewerMode?: boolean;
   /** Confine transcript lookups for resume to projects under this root. */

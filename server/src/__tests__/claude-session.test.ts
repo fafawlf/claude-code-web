@@ -9,6 +9,11 @@ function stubs() {
   return { onPermission: () => false, onPlan: () => false };
 }
 
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
 test('initial state: permissionMode defaults to default when not provided', () => {
   const s = new ClaudeSession({ id: 'id-1', cwd: '/tmp', ...stubs() });
   assert.equal(s.getState().permissionMode, 'default');
@@ -18,6 +23,39 @@ test('initial state: permissionMode defaults to default when not provided', () =
   assert.equal(s.getState().provider, 'claude');
   assert.equal((s as any).query, undefined);
   void s.close();
+});
+
+test('initial state records explicit Claude auth mode', () => {
+  const s = new ClaudeSession({ id: 'id-auth-mode', cwd: '/tmp', claudeAuthMode: 'api', ...stubs() });
+  assert.equal(s.getState().claudeAuthMode, 'api');
+  void s.close();
+});
+
+test('Claude API mode injects fallback key while account mode strips API env', async () => {
+  const oldFallback = process.env.CCW_ANTHROPIC_API_KEY;
+  const oldApi = process.env.ANTHROPIC_API_KEY;
+  const oldToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  try {
+    process.env.CCW_ANTHROPIC_API_KEY = 'sk-fallback';
+    process.env.ANTHROPIC_API_KEY = 'sk-active';
+    process.env.ANTHROPIC_AUTH_TOKEN = 'oauth-token';
+
+    const api = new ClaudeSession({ id: 'id-auth-api', cwd: '/tmp', claudeAuthMode: 'api', ...stubs() });
+    const apiOptions = (api as any).buildOptions();
+    assert.equal(apiOptions.env.ANTHROPIC_API_KEY, 'sk-fallback');
+    assert.equal(apiOptions.env.CCW_ANTHROPIC_API_KEY, undefined);
+    await api.close();
+
+    const account = new ClaudeSession({ id: 'id-auth-account', cwd: '/tmp', claudeAuthMode: 'account', ...stubs() });
+    const accountOptions = (account as any).buildOptions();
+    assert.equal(accountOptions.env.ANTHROPIC_API_KEY, undefined);
+    assert.equal(accountOptions.env.ANTHROPIC_AUTH_TOKEN, undefined);
+    await account.close();
+  } finally {
+    restoreEnv('CCW_ANTHROPIC_API_KEY', oldFallback);
+    restoreEnv('ANTHROPIC_API_KEY', oldApi);
+    restoreEnv('ANTHROPIC_AUTH_TOKEN', oldToken);
+  }
 });
 
 test('fresh sessions do not spawn Claude Code until the first user message', () => {

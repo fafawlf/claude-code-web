@@ -14,6 +14,23 @@ function makeOpts() {
   };
 }
 
+function withEnv(values: Record<string, string | undefined>, fn: () => void) {
+  const old = new Map<string, string | undefined>();
+  for (const key of Object.keys(values)) {
+    old.set(key, process.env[key]);
+    if (values[key] === undefined) delete process.env[key];
+    else process.env[key] = values[key];
+  }
+  try {
+    fn();
+  } finally {
+    for (const [key, value] of old) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 test('resolveHelloSession attaches an existing live session with replay id', async () => {
   const sm = new SessionManager();
   const existing = sm.create(makeOpts());
@@ -117,6 +134,44 @@ test('resolveHelloSession defaults new Claude sessions to Opus 4.8', async () =>
 
   assert.equal(resolved.session.getState().provider, 'claude');
   assert.equal(resolved.session.getState().model, DEFAULT_CLAUDE_MODEL);
+  await sm.closeAll();
+});
+
+test('resolveHelloSession records explicit Claude API auth mode when configured', async () => {
+  const sm = new SessionManager();
+  withEnv({
+    CCW_ANTHROPIC_API_KEY: 'sk-fallback',
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_AUTH_TOKEN: undefined,
+  }, () => {
+    const resolved = resolveHelloSession(sm, {
+      type: 'hello',
+      cwd: '/workspace/project',
+      claudeAuthMode: 'api',
+    }, '/fallback');
+
+    assert.equal(resolved.session.getState().claudeAuthMode, 'api');
+  });
+  await sm.closeAll();
+});
+
+test('resolveHelloSession rejects Claude API auth mode when fallback key is missing', async () => {
+  const sm = new SessionManager();
+  withEnv({
+    CCW_ANTHROPIC_API_KEY: undefined,
+    CCW_CLAUDE_API_KEY: undefined,
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_AUTH_TOKEN: undefined,
+  }, () => {
+    assert.throws(
+      () => resolveHelloSession(sm, {
+        type: 'hello',
+        cwd: '/workspace/project',
+        claudeAuthMode: 'api',
+      }, '/fallback'),
+      /API fallback is not configured/i
+    );
+  });
   await sm.closeAll();
 });
 

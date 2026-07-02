@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AgentProviderId, ClaudeAuthInfo, CodexAuthInfo, MeInfo, NodeInfo, SessionStateSnapshot } from '../types';
+import type { AgentProviderId, ClaudeAuthInfo, ClaudeAuthMode, CodexAuthInfo, MeInfo, NodeInfo, SessionStateSnapshot } from '../types';
 import type { SkinId } from '../skins';
 import { AgentMenu } from './AgentMenu';
 import { Icon } from './Icon';
@@ -21,6 +21,8 @@ type Props = {
   onOpenProject: () => void;
   onSelectNodeProvider: (nodeId: string, provider: AgentProviderId) => void;
   onSelectModel: (model: string) => void;
+  onSelectClaudeAuthMode: (mode: ClaudeAuthMode) => void;
+  onContinueWithApi: () => void;
   skin: SkinId;
   onSelectSkin: (skin: SkinId) => void;
   onRename: (title: string) => void;
@@ -75,11 +77,19 @@ export function TopBar(p: Props) {
           skin={p.skin}
           onSelectNodeProvider={p.onSelectNodeProvider}
           onSelectModel={p.onSelectModel}
+          currentClaudeAuthMode={s?.claudeAuthMode}
+          onSelectClaudeAuthMode={p.onSelectClaudeAuthMode}
           onSelectSkin={p.onSelectSkin}
         />
 
         <div className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
-          {p.me?.authMode === 'feishu' && <UsageWidget />}
+          {p.me?.authMode === 'feishu' && (
+            <UsageWidget
+              apiFallbackAvailable={!!p.auth?.apiFallbackAvailable}
+              claudeAuthMode={s?.claudeAuthMode}
+              onContinueWithApi={p.onContinueWithApi}
+            />
+          )}
           {p.me?.authMode === 'feishu' && <UserChip me={p.me} />}
           {s?.viewerMode && (
             <>

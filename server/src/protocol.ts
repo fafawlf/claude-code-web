@@ -5,6 +5,7 @@
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
 export type SessionRuntimeStatus = 'idle' | 'running' | 'waiting_permission' | 'waiting_plan' | 'error' | 'closed';
 export type AgentProviderId = 'claude' | 'codex';
+export type ClaudeAuthMode = 'account' | 'api';
 
 export const DEFAULT_NODE_ID = 'local';
 export const DEFAULT_AGENT_PROVIDER: AgentProviderId = 'claude';
@@ -29,6 +30,7 @@ export type ClientHello = {
   resumeClaudeId?: string;
   cwd?: string;
   model?: string;
+  claudeAuthMode?: ClaudeAuthMode;
   permissionMode?: PermissionMode;
   lastEventId?: number;
   /** When true, load transcript but do NOT spawn a live Claude Code process.
@@ -50,6 +52,7 @@ export type ClientPlanResponse = {
 };
 export type ClientInterrupt = { type: 'interrupt' };
 export type ClientSetModel = { type: 'set_model'; model: string };
+export type ClientSetClaudeAuthMode = { type: 'set_claude_auth_mode'; mode: ClaudeAuthMode };
 export type ClientSetMode = { type: 'set_permission_mode'; mode: PermissionMode };
 export type ClientRefreshHistory = { type: 'refresh_history' };
 export type ClientSessionClose = { type: 'session_close'; sessionId: string };
@@ -67,6 +70,7 @@ export type ClientMessage =
   | ClientPlanResponse
   | ClientInterrupt
   | ClientSetModel
+  | ClientSetClaudeAuthMode
   | ClientSetMode
   | ClientRefreshHistory
   | ClientSessionClose
@@ -81,6 +85,7 @@ export type SessionStateSnapshot = {
   claudeSessionId?: string;
   cwd: string;
   model?: string;
+  claudeAuthMode?: ClaudeAuthMode;
   permissionMode: PermissionMode;
   runtimeStatus: SessionRuntimeStatus;
   attachedCount: number;

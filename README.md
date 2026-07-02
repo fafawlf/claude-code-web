@@ -147,6 +147,21 @@ export CCW_NODES_JSON='{
 
 Do not commit real node configs, hostnames, tokens, or keys.
 
+## Claude API Fallback
+
+By default, Claude Code Web uses the Claude Code account configured on the
+server, for example `claude login` with Pro/Max quota. If you also want an
+explicit API fallback when subscription usage is tight, set a dedicated server
+environment variable:
+
+```bash
+export CCW_ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+The app will keep using the Claude account by default. Users must explicitly
+choose `Claude API` from the agent menu or press `Continue with API` from the
+usage popover; only then is the key injected into that Claude session.
+
 ## Security Model
 
 Claude Code Web is built for a single user over localhost or an SSH tunnel.

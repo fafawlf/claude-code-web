@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { UsageResponse } from '../types';
+import type { ClaudeAuthMode, UsageResponse } from '../types';
 import { apiFetch } from '../api';
 import { TopbarMenuPortal } from './TopbarMenuPortal';
 
@@ -7,7 +7,15 @@ const POLL_MS = 60_000;
 
 /** Shared-subscription usage meter. Everyone sees the same Max account, so
  *  everyone gets to see how much of it is left. */
-export function UsageWidget() {
+export function UsageWidget({
+  apiFallbackAvailable = false,
+  claudeAuthMode,
+  onContinueWithApi,
+}: {
+  apiFallbackAvailable?: boolean;
+  claudeAuthMode?: ClaudeAuthMode;
+  onContinueWithApi?: () => void;
+}) {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -29,6 +37,8 @@ export function UsageWidget() {
   const five = shared?.fiveHour?.utilization;
   const week = shared?.sevenDay?.utilization;
   const headline = shared?.available && week !== undefined ? `${Math.round(week)}%` : '—';
+  const high = Math.max(five ?? 0, week ?? 0, shared?.sevenDayOpus?.utilization ?? 0) >= 70;
+  const exhausted = Math.max(five ?? 0, week ?? 0, shared?.sevenDayOpus?.utilization ?? 0) >= 90;
 
   return (
     <div className="topbar-menu relative">
@@ -75,6 +85,29 @@ export function UsageWidget() {
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+            {(high || claudeAuthMode === 'api') && (
+              <div className="rounded-md border border-border-subtle bg-bg-base/45 p-2.5">
+                <div className="text-[11px] text-text-secondary">
+                  {claudeAuthMode === 'api'
+                    ? 'This chat is using Claude API billing.'
+                    : exhausted
+                      ? 'Quota is high. You can continue with API billing.'
+                      : 'API fallback is available when quota gets tight.'}
+                </div>
+                <button
+                  type="button"
+                  disabled={!apiFallbackAvailable || claudeAuthMode === 'api'}
+                  onClick={() => { onContinueWithApi?.(); setOpen(false); }}
+                  className="mt-2 w-full rounded-sm px-2.5 py-1.5 text-xs font-medium bg-bg-hover text-text-primary hover:bg-bg-surface disabled:opacity-45 disabled:cursor-not-allowed transition-colors duration-hover"
+                >
+                  {claudeAuthMode === 'api'
+                    ? 'Using Claude API'
+                    : apiFallbackAvailable
+                      ? 'Continue with API'
+                      : 'API key not configured'}
+                </button>
               </div>
             )}
           </div>

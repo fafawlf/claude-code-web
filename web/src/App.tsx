@@ -4,7 +4,7 @@ import { applyEvent, applyStateDelta, initialState, addSystem, addUserOptimistic
 import { cachedChatState, cachedLastEventId, chatStateForReady, forgetChatState, rememberChatState } from './sessionCache';
 import { buildReconnectHello } from './reconnect';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
-import type { AgentProviderId, AuthMode, ClaudeAuthInfo, MeInfo, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
+import type { AgentProviderId, AuthMode, ClaudeAuthInfo, ClaudeAuthMode, MeInfo, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
 import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, MODE_ORDER } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MessageList } from './components/MessageList';
@@ -384,10 +384,13 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [sidebarOpen]);
 
-  const newSession = useCallback((opts?: { nodeId?: string; provider?: AgentProviderId; cwd?: string; resumeClaudeId?: string; model?: string; mode?: PermissionMode; title?: string; viewerMode?: boolean }) => {
+  const newSession = useCallback((opts?: { nodeId?: string; provider?: AgentProviderId; cwd?: string; resumeClaudeId?: string; model?: string; claudeAuthMode?: ClaudeAuthMode; mode?: PermissionMode; title?: string; viewerMode?: boolean }) => {
     const nodeId = opts?.nodeId ?? selectedNodeIdRef.current;
     const provider = opts?.provider ?? selectedProviderRef.current;
     const current = stateRef.current;
+    const claudeAuthMode = provider === 'claude'
+      ? (opts?.claudeAuthMode ?? (current.state?.provider === 'claude' ? current.state.claudeAuthMode : undefined))
+      : undefined;
     const carryCurrent = canUseCurrentAsResumeSeed(current, opts, nodeId, provider);
     const lastEventId = carryCurrent ? current.lastEventId : undefined;
     const seededState = carryCurrent && current.state
@@ -423,6 +426,7 @@ export function App() {
       cwd: opts?.cwd,
       resumeClaudeId: opts?.resumeClaudeId,
       model: opts?.model ?? defaultModelForProvider(provider),
+      claudeAuthMode,
       permissionMode: opts?.mode,
       viewerMode: opts?.viewerMode,
       lastEventId,
@@ -512,6 +516,34 @@ export function App() {
     wsRef.current?.send({ type: 'set_model', model });
     toast.push(`Model: ${model}`, { level: 'success' });
   }, [toast, commitState]);
+  const setClaudeAuthMode = useCallback((mode: ClaudeAuthMode) => {
+    commitState((s) => applyStateDelta(s, { claudeAuthMode: mode }));
+    wsRef.current?.send({ type: 'set_claude_auth_mode', mode });
+    toast.push(mode === 'api' ? 'Claude API billing selected' : 'Claude account selected', { level: 'success' });
+  }, [toast, commitState]);
+  const continueWithApi = useCallback(() => {
+    const snap = stateRef.current.state;
+    if (!snap || snap.provider !== 'claude') {
+      setClaudeAuthMode('api');
+      return;
+    }
+    if (snap.claudeSessionId) {
+      newSession({
+        nodeId: snap.nodeId,
+        provider: 'claude',
+        cwd: snap.cwd,
+        resumeClaudeId: snap.claudeSessionId,
+        model: snap.model,
+        claudeAuthMode: 'api',
+        mode: snap.permissionMode,
+        title: sessionTitle,
+        viewerMode: false,
+      });
+      toast.push('Continuing this chat with Claude API billing', { level: 'success' });
+      return;
+    }
+    setClaudeAuthMode('api');
+  }, [newSession, sessionTitle, setClaudeAuthMode, toast]);
   const selectNodeProvider = useCallback((nodeId: string, provider: AgentProviderId) => {
     const node = nodes.find((n) => n.id === nodeId);
     selectNodeSilently(nodeId);
@@ -725,6 +757,8 @@ export function App() {
           onOpenProject={() => { setSidebarOpen(false); setProjectLauncherOpen((v) => !v); }}
           onSelectNodeProvider={selectNodeProvider}
           onSelectModel={setModel}
+          onSelectClaudeAuthMode={setClaudeAuthMode}
+          onContinueWithApi={continueWithApi}
           skin={skin}
           onSelectSkin={setSkin}
           onRename={renameCurrent}
@@ -734,6 +768,7 @@ export function App() {
                 provider: state.state!.provider,
                 cwd: state.state!.cwd,
                 resumeClaudeId: state.state!.claudeSessionId,
+                claudeAuthMode: state.state!.claudeAuthMode,
                 title: sessionTitle,
               })
             : undefined}

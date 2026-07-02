@@ -5,7 +5,8 @@ import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveClaudePath } from './resolveClaudePath.js';
 import { loadClaudeTranscriptMessages } from './claudeTranscript.js';
 import { envWithGitIdentity, type GitIdentity } from '../git/identity.js';
-import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type AgentProviderId, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
+import { defaultClaudeAuthMode, envWithClaudeAuth, hasClaudeApiKey } from '../authInfo.js';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type AgentProviderId, type ClaudeAuthMode, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
 
 export type SessionEvent = { id: number; event: SDKMessage };
 export type EventListener = (ev: SessionEvent) => void;
@@ -110,6 +111,7 @@ export class ClaudeSession {
     cwd: string;
     resume?: string;
     model?: string;
+    claudeAuthMode?: ClaudeAuthMode;
     permissionMode?: PermissionMode;
     viewerMode?: boolean;
     searchRoot?: string;
@@ -134,6 +136,7 @@ export class ClaudeSession {
       // live event.
       claudeSessionId: opts.resume,
       model: opts.model,
+      claudeAuthMode: opts.claudeAuthMode ?? defaultClaudeAuthMode(),
       permissionMode: opts.permissionMode ?? 'default',
       runtimeStatus: 'idle',
       attachedCount: 0,
@@ -449,6 +452,7 @@ export class ClaudeSession {
 
   private buildOptions(resume?: string): Options {
     const claudePath = resolveClaudePath();
+    const baseEnv = envWithGitIdentity(process.env, this.gitIdentity);
     return {
       cwd: this.cwd,
       abortController: this.abortCtl,
@@ -464,7 +468,7 @@ export class ClaudeSession {
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
       // Attribute commits to the session owner. Without this, the SDK inherits
       // the server's process.env and every teammate commits as the box owner.
-      ...(this.gitIdentity ? { env: envWithGitIdentity(process.env, this.gitIdentity) } : {}),
+      env: envWithClaudeAuth(baseEnv, this.state.claudeAuthMode ?? defaultClaudeAuthMode()),
       canUseTool: this.canUseToolImpl,
     };
   }
@@ -560,6 +564,21 @@ export class ClaudeSession {
     this.updateState({ model });
     if (!this.query) return; // history still loading; options will pick this up
     await this.query.setModel(model);
+  }
+
+  async setClaudeAuthMode(mode: ClaudeAuthMode): Promise<void> {
+    if (mode === 'api' && !hasClaudeApiKey()) {
+      throw new Error('Claude API fallback is not configured on this server.');
+    }
+    const previous = this.state.claudeAuthMode ?? defaultClaudeAuthMode();
+    this.updateState({ claudeAuthMode: mode });
+    if (!this.query || previous === mode || !this.state.claudeSessionId) return;
+    this.pushEvent({
+      type: 'system',
+      subtype: 'info' as unknown as 'status',
+      message: `Claude auth changed to ${mode === 'api' ? 'API billing' : 'Claude account'}. Re-initializing session...`,
+    } as unknown as SDKMessage);
+    try { this.abortCtl.abort(); } catch { /* pump will relaunch with current options */ }
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
