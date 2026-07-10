@@ -90,7 +90,8 @@ export function ActivityRow({ session, onOpen, onEnd }: { session: ActivitySessi
       </button>
       <button
         onClick={(e) => { e.stopPropagation(); onEnd(session.sessionId); }}
-        className={`activity-end absolute top-2 right-2 px-2 py-1 rounded-sm text-[11px] text-text-muted opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-bg-base transition-all duration-hover ${finished ? 'hover:text-text-primary' : 'hover:text-danger'}`}
+        className={`activity-end absolute top-1 right-1 min-h-11 min-w-11 px-2 py-1 rounded-sm text-[11px] text-text-muted opacity-100 sm:top-2 sm:right-2 sm:min-h-0 sm:min-w-0 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 hover:bg-bg-base transition-all duration-hover ${finished ? 'hover:text-text-primary' : 'hover:text-danger'}`}
+        aria-label={`${actionLabel} ${session.title}`}
         title={finished ? 'Dismiss this finished task' : 'End this task'}
       >
         {actionLabel}
