@@ -72,10 +72,12 @@ export class CodexSession {
   private seenToolResults = new BoundedKeySet();
   private resultPushedForTurn = false;
   private readonly gitIdentity?: GitIdentity;
+  private readonly searchRoot?: string;
 
   constructor(opts: AgentSessionOptions) {
     this.id = opts.id;
     this.gitIdentity = opts.gitIdentity;
+    this.searchRoot = opts.searchRoot;
     this.state = {
       sessionId: opts.id,
       nodeId: opts.nodeId ?? DEFAULT_NODE_ID,
@@ -520,6 +522,7 @@ export class CodexSession {
 
   private async replayHistory(resumeId: string): Promise<void> {
     for await (const event of streamCodexTranscriptEvents(resumeId, {
+      searchRoot: this.searchRoot,
       signal: this.historyAbortCtl.signal,
       onTruncated: (truncated) => { this.historySourceTruncated ||= truncated; },
     })) {

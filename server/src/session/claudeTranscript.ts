@@ -3,6 +3,7 @@ import { access, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { streamBoundedJsonLines } from './boundedJsonl.js';
+import { assertSafeTranscriptId } from './transcriptId.js';
 
 export type ClaudeTranscriptMessage = SDKMessage | Record<string, unknown>;
 
@@ -23,6 +24,7 @@ export async function* streamClaudeTranscriptMessages(
   cwd: string,
   options: ClaudeTranscriptStreamOptions = {},
 ): AsyncGenerator<ClaudeTranscriptMessage> {
+  assertSafeTranscriptId(sessionId);
   const home = options.home ?? homedir();
   const file = await findClaudeTranscriptFile(sessionId, cwd, home, options.searchRoot, options.signal);
   if (file) {
@@ -65,6 +67,7 @@ export async function findClaudeTranscriptFile(
   searchRoot?: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
+  assertSafeTranscriptId(sessionId);
   throwIfAborted(signal);
   const projects = join(home, '.claude', 'projects');
   const direct = join(projects, encodeClaudeProjectPath(cwd), `${sessionId}.jsonl`);

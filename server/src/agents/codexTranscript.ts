@@ -1,12 +1,14 @@
-import { access, readdir, stat } from 'node:fs/promises';
+import { access, open, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { streamBoundedJsonLines } from '../session/boundedJsonl.js';
+import { assertSafeTranscriptId } from '../session/transcriptId.js';
 
 export type CodexTranscriptEvent = Record<string, unknown>;
 
 export type CodexTranscriptOptions = {
   home?: string;
+  searchRoot?: string;
   signal?: AbortSignal;
   onTruncated?: (truncated: boolean) => void;
 };
@@ -19,7 +21,12 @@ export async function* streamCodexTranscriptEvents(
   sessionId: string,
   options: CodexTranscriptOptions = {},
 ): AsyncGenerator<CodexTranscriptEvent> {
-  const file = await findCodexSessionFile(sessionId, options.home ?? codexHome(), options.signal);
+  const file = await findCodexSessionFile(
+    sessionId,
+    options.home ?? codexHome(),
+    options.signal,
+    options.searchRoot,
+  );
   if (!file) return;
   yield* streamBoundedJsonLines<CodexTranscriptEvent>(file, {
     signal: options.signal,
@@ -34,10 +41,13 @@ export async function findCodexSessionFile(
   sessionId: string,
   home = codexHome(),
   signal?: AbortSignal,
+  searchRoot?: string,
 ): Promise<string | undefined> {
+  assertSafeTranscriptId(sessionId);
   throwIfAborted(signal);
   const root = join(home, 'sessions');
-  const cacheKey = `${root}\0${sessionId}`;
+  const scope = searchRoot ? resolve(searchRoot) : '';
+  const cacheKey = `${root}\0${scope}\0${sessionId}`;
   const cached = transcriptPathCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     try {
@@ -68,8 +78,10 @@ export async function findCodexSessionFile(
       const path = join(current.dir, entry.name);
       if (entry.isDirectory() && current.depth < 5) {
         pending.push({ dir: path, depth: current.depth + 1 });
-      } else if (entry.isFile() && entry.name.endsWith('.jsonl') && basename(entry.name).includes(sessionId)) {
+      } else if (entry.isFile() && filenameMatchesSession(entry.name, sessionId)) {
         try {
+          const metadata = await readSessionMetadata(path, signal);
+          if (metadata?.id !== sessionId || !isMetadataInScope(metadata.cwd, scope)) continue;
           const info = await stat(path);
           if (!best || info.mtimeMs >= best.mtime) best = { path, mtime: info.mtimeMs };
         } catch (error) {
@@ -82,6 +94,48 @@ export async function findCodexSessionFile(
 
   if (best) cacheTranscriptPath(cacheKey, best.path);
   return best?.path;
+}
+
+function filenameMatchesSession(filename: string, sessionId: string): boolean {
+  return filename === `${sessionId}.jsonl` || filename.endsWith(`-${sessionId}.jsonl`);
+}
+
+type CodexSessionMetadata = { id?: string; cwd?: string };
+
+async function readSessionMetadata(path: string, signal?: AbortSignal): Promise<CodexSessionMetadata | undefined> {
+  throwIfAborted(signal);
+  const handle = await open(path, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(256 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, 0);
+    throwIfAborted(signal);
+    for (const line of buffer.toString('utf8', 0, bytesRead).split('\n')) {
+      if (!line.includes('"session_meta"')) continue;
+      try {
+        const parsed = JSON.parse(line) as { type?: unknown; payload?: unknown };
+        if (parsed.type !== 'session_meta' || typeof parsed.payload !== 'object' || parsed.payload === null) continue;
+        const payload = parsed.payload as Record<string, unknown>;
+        return {
+          id: typeof payload.id === 'string' ? payload.id : undefined,
+          cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
+        };
+      } catch {
+        // Keep scanning: malformed unrelated lines must not make a candidate
+        // eligible, and a later valid session_meta can still identify it.
+      }
+    }
+    return undefined;
+  } finally {
+    await handle.close();
+  }
+}
+
+function isMetadataInScope(cwd: string | undefined, scope: string): boolean {
+  if (!scope) return true;
+  if (!cwd || !isAbsolute(cwd)) return false;
+  const candidate = resolve(cwd);
+  const rel = relative(scope, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 function codexHome(): string {
