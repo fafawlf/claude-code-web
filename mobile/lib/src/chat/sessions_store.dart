@@ -11,25 +11,53 @@ class SessionsState {
     this.byId = const <String, ChatState>{},
     this.list = const <SessionStateSnapshot>[],
     this.activeId,
+    this.attachId,
+    this.attachmentSessionId,
+    this.attachmentReady = false,
   });
 
   final Map<String, ChatState> byId;
   final List<SessionStateSnapshot> list;
   final String? activeId;
+  final String? attachId;
+  final String? attachmentSessionId;
+
+  /// True only after the current attachment has received both `ready` and the
+  /// final replay batch. Session commands must not be sent before this point.
+  final bool attachmentReady;
 
   SessionsState copyWith({
     Map<String, ChatState>? byId,
     List<SessionStateSnapshot>? list,
     Object? activeId = _sentinel,
+    Object? attachId = _sentinel,
+    Object? attachmentSessionId = _sentinel,
+    bool? attachmentReady,
   }) {
     return SessionsState(
       byId: byId ?? this.byId,
       list: list ?? this.list,
       activeId: identical(activeId, _sentinel) ? this.activeId : activeId as String?,
+      attachId: identical(attachId, _sentinel) ? this.attachId : attachId as String?,
+      attachmentSessionId: identical(attachmentSessionId, _sentinel)
+          ? this.attachmentSessionId
+          : attachmentSessionId as String?,
+      attachmentReady: attachmentReady ?? this.attachmentReady,
     );
   }
 
   static const Object _sentinel = Object();
+}
+
+class _AttachmentAttempt {
+  _AttachmentAttempt({required this.attachId, this.sessionId});
+
+  final String attachId;
+  String? sessionId;
+  bool readyReceived = false;
+  bool replayComplete = false;
+
+  bool get canSend => readyReceived && replayComplete;
 }
 
 /// Non-Riverpod-backed SessionsStore. Tests instantiate via [forTest]; app code
@@ -40,12 +68,17 @@ class SessionsStore {
     required Stream<ServerMessage> messages,
     required SendFn send,
   }) : _send = send {
-    _sub = messages.listen(_onMessage);
+    _sub = messages.listen(
+      _onMessage,
+      onDone: _onDisconnected,
+      onError: (Object _, StackTrace __) => _onDisconnected(),
+    );
   }
 
   final SendFn _send;
   StreamSubscription<ServerMessage>? _sub;
   String? _pendingCwd;
+  _AttachmentAttempt? _attachment;
 
   SessionsState _state = const SessionsState();
   SessionsState get state => _state;
@@ -75,13 +108,97 @@ class SessionsStore {
     });
   }
 
+  bool _isCurrentAttachmentFrame(AttachmentScopedServerMessage frame) {
+    final _AttachmentAttempt? current = _attachment;
+    if (current == null || frame.attachId != current.attachId) return false;
+    final String? frameSessionId = frame.sessionId;
+    return frameSessionId == null ||
+        current.sessionId == null ||
+        frameSessionId == current.sessionId;
+  }
+
+  void _beginAttachment(ClientHello hello, {required String? selectedSessionId}) {
+    final String attachId = hello.attachId!;
+    _attachment = _AttachmentAttempt(
+      attachId: attachId,
+      sessionId: selectedSessionId,
+    );
+    _send(hello);
+    _emit(_state.copyWith(
+      activeId: selectedSessionId,
+      attachId: attachId,
+      attachmentSessionId: selectedSessionId,
+      attachmentReady: false,
+    ));
+  }
+
+  void _onDisconnected() {
+    _attachment = null;
+    _emit(_state.copyWith(
+      attachId: null,
+      attachmentSessionId: null,
+      attachmentReady: false,
+    ));
+  }
+
+  void _acceptBootstrapReady(ServerReady message) {
+    final SessionStateSnapshot snapshot = message.state;
+    final Map<String, ChatState> byId = Map<String, ChatState>.of(_state.byId);
+    byId[snapshot.sessionId] = withReady(
+      byId[snapshot.sessionId] ?? ChatState.initial,
+      snapshot,
+    );
+    _emit(_state.copyWith(byId: byId, activeId: snapshot.sessionId));
+
+    // ConnectController consumes the first ready frame before SessionsStore is
+    // subscribed, then replays only its unscoped snapshot. Replace that
+    // bootstrap attachment with a full, client-scoped attach so no transcript
+    // frames can be lost or mistaken for a later switch.
+    _beginAttachment(
+      ClientHello.attached(sessionId: snapshot.sessionId, lastEventId: 0),
+      selectedSessionId: snapshot.sessionId,
+    );
+  }
+
+  bool get _canSendToAttachment {
+    final _AttachmentAttempt? current = _attachment;
+    return current != null &&
+        current.canSend &&
+        current.sessionId != null &&
+        current.sessionId == _state.activeId;
+  }
+
   void _onMessage(ServerMessage m) {
+    if (m is AttachmentScopedServerMessage && !_isCurrentAttachmentFrame(m)) {
+      if (m is ServerReady && m.attachId == null && _attachment == null) {
+        _acceptBootstrapReady(m);
+      }
+      return;
+    }
+
     switch (m) {
-      case ServerReady(:final SessionStateSnapshot state):
+      case ServerReady(
+          :final SessionStateSnapshot state,
+          :final String? sessionId,
+        ):
+        final _AttachmentAttempt current = _attachment!;
+        final String scopedSessionId = sessionId ?? state.sessionId;
+        if (scopedSessionId != state.sessionId ||
+            (current.sessionId != null && current.sessionId != state.sessionId)) {
+          return;
+        }
+        current
+          ..sessionId = state.sessionId
+          ..readyReceived = true;
         final Map<String, ChatState> byId = Map<String, ChatState>.of(_state.byId);
         final ChatState prior = byId[state.sessionId] ?? ChatState.initial;
         byId[state.sessionId] = withReady(prior, state);
-        _emit(_state.copyWith(byId: byId, activeId: state.sessionId));
+        _emit(_state.copyWith(
+          byId: byId,
+          activeId: state.sessionId,
+          attachmentSessionId: state.sessionId,
+          attachmentReady: current.canSend,
+        ));
         // Pull the list once per attach so the drawer is populated without
         // the old push-on-every-state-change storm.
         _send(const ClientListSessions());
@@ -97,7 +214,10 @@ class SessionsStore {
         final Map<String, ChatState> byId = Map<String, ChatState>.of(_state.byId);
         byId[active] = applyEvent(byId[active] ?? ChatState.initial, event, id);
         _emit(_state.copyWith(byId: byId));
-      case ServerSdkEventBatch(:final List<SdkEventEntry> events):
+      case ServerSdkEventBatch(
+          :final List<SdkEventEntry> events,
+          :final bool? replayComplete,
+        ):
         final String? active = _state.activeId;
         if (active == null) return;
         final Map<String, ChatState> byId = Map<String, ChatState>.of(_state.byId);
@@ -106,10 +226,16 @@ class SessionsStore {
           cs = applyEvent(cs, e.event, e.id);
         }
         byId[active] = cs;
-        _emit(_state.copyWith(byId: byId));
+        final _AttachmentAttempt current = _attachment!;
+        if (replayComplete == true) current.replayComplete = true;
+        _emit(_state.copyWith(
+          byId: byId,
+          attachmentReady: current.canSend,
+        ));
       case ServerStateUpdate(:final SessionStatePatch state):
         final String? active = _state.activeId;
         if (active == null) return;
+        if (state.sessionId != null && state.sessionId != active) return;
         final ChatState? prior = _state.byId[active];
         if (prior == null) return;
         final Map<String, ChatState> byId = Map<String, ChatState>.of(_state.byId);
@@ -123,6 +249,7 @@ class SessionsStore {
         byId[active] = addSystem(prior, message, level: SystemLevel.error);
         _emit(_state.copyWith(byId: byId));
       case ServerHeartbeat(:final SessionStateSnapshot? session, :final int? noActivityMs):
+        if (session != null && session.sessionId != _attachment?.sessionId) return;
         final String? sid = session?.sessionId ?? _state.activeId;
         if (sid == null) return;
         final Map<String, ChatState> byId = Map<String, ChatState>.of(_state.byId);
@@ -187,6 +314,7 @@ class SessionsStore {
     required PermissionDecision decision,
     PermissionScope? scope,
   }) {
+    if (!_canSendToAttachment) return;
     _send(ClientPermissionResponse(
       reqId: reqId,
       decision: decision,
@@ -204,6 +332,7 @@ class SessionsStore {
 
   /// Reply to a plan proposal and clear the pending control locally.
   void respondPlan({required String reqId, required PlanDecision decision}) {
+    if (!_canSendToAttachment) return;
     _send(ClientPlanResponse(reqId: reqId, decision: decision));
     final String? active = _state.activeId;
     if (active == null) return;
@@ -217,6 +346,7 @@ class SessionsStore {
 
   /// Send an interrupt for the active session.
   void interrupt() {
+    if (!_canSendToAttachment) return;
     _send(const ClientInterrupt());
   }
 
@@ -224,6 +354,7 @@ class SessionsStore {
   /// so the UI reflects the change immediately; server will confirm via
   /// state_update.
   void setModel(String model) {
+    if (!_canSendToAttachment) return;
     _send(ClientSetModel(model: model));
     final String? active = _state.activeId;
     if (active == null) return;
@@ -236,6 +367,7 @@ class SessionsStore {
 
   /// Set the permission mode. Optimistically patches local snapshot.
   void setMode(PermissionMode mode) {
+    if (!_canSendToAttachment) return;
     _send(ClientSetMode(mode: mode));
     final String? active = _state.activeId;
     if (active == null) return;
@@ -249,6 +381,7 @@ class SessionsStore {
 
   /// Ask the server to rescan and re-emit the sessions list.
   void refreshHistory() {
+    if (!_canSendToAttachment) return;
     _send(const ClientRefreshHistory());
   }
 
@@ -260,6 +393,7 @@ class SessionsStore {
 
   /// Optimistically append a user message and send it over the wire.
   void sendUser(String text) {
+    if (!_canSendToAttachment) return;
     final String? active = _state.activeId;
     if (active == null) return;
     final Map<String, ChatState> byId = Map<String, ChatState>.of(_state.byId);
@@ -277,8 +411,10 @@ class SessionsStore {
     final int fromEvents = cs?.lastEventId ?? 0;
     final int fromSnap = cs?.state?.lastEventId ?? 0;
     final int resume = fromEvents > fromSnap ? fromEvents : fromSnap;
-    _send(ClientHello(sessionId: sessionId, lastEventId: resume));
-    _emit(_state.copyWith(activeId: sessionId));
+    _beginAttachment(
+      ClientHello.attached(sessionId: sessionId, lastEventId: resume),
+      selectedSessionId: sessionId,
+    );
   }
 
   /// Start a new session. If [cwd] is null the server uses its default working
@@ -286,8 +422,10 @@ class SessionsStore {
   /// activeId becomes null until the next ServerReady arrives, at which point
   /// it's set to the new sessionId.
   void newSession([String? cwd]) {
-    _send(ClientHello(cwd: cwd));
-    _emit(_state.copyWith(activeId: null));
+    _beginAttachment(
+      ClientHello.attached(cwd: cwd),
+      selectedSessionId: null,
+    );
   }
 
   /// Stash a cwd to be used on the next ConnectReady (first-time connect).

@@ -18,11 +18,53 @@ class _Harness {
   late final StreamController<ServerMessage> controller;
   late final List<ClientMessage> sent;
   late final SessionsStore store;
+  bool _controllerClosed = false;
 
   Future<void> pump() => Future<void>.delayed(Duration.zero);
 
-  Future<void> close() async {
+  ClientHello switchTo(String sessionId) {
+    store.switchTo(sessionId);
+    return sent.last as ClientHello;
+  }
+
+  void ready(ClientHello hello, {String? sessionId}) {
+    final sid = sessionId ?? hello.sessionId!;
+    controller.add(ServerReady(
+      state: _snap(id: sid),
+      attachId: hello.attachId,
+      sessionId: sid,
+      replayMode: ReplayMode.delta,
+      historyStatus: HistoryStatus.ready,
+    ));
+  }
+
+  void replayComplete(ClientHello hello, {String? sessionId}) {
+    final sid = sessionId ?? hello.sessionId!;
+    controller.add(ServerSdkEventBatch(
+      events: const <SdkEventEntry>[],
+      attachId: hello.attachId,
+      sessionId: sid,
+      replayComplete: true,
+    ));
+  }
+
+  Future<ClientHello> attach(String sessionId) async {
+    final hello = switchTo(sessionId);
+    ready(hello);
+    replayComplete(hello);
+    await pump();
+    return hello;
+  }
+
+  Future<void> disconnect() async {
+    if (_controllerClosed) return;
+    _controllerClosed = true;
     await controller.close();
+    await pump();
+  }
+
+  Future<void> close() async {
+    await disconnect();
     store.dispose();
   }
 }
@@ -46,36 +88,61 @@ SessionStateSnapshot _snap({
     );
 
 void main() {
-  test('ServerReady sets activeId and seeds ChatState.state', () async {
+  test('bootstrap ready seeds cache then starts a full scoped attachment', () async {
     final h = _Harness();
-    h.controller.add(ServerReady(state: _snap(id: 'S1')));
+    h.controller.add(ServerReady(state: _snap(id: 'S1', lastEventId: 99)));
     await h.pump();
+
     expect(h.store.state.activeId, 'S1');
     expect(h.store.state.byId['S1']?.state?.sessionId, 'S1');
+    final hello = h.sent.single as ClientHello;
+    expect(hello.attachId, isNotEmpty);
+    expect(hello.sessionId, 'S1');
+    expect(hello.lastEventId, 0);
+    expect(h.store.state.attachId, hello.attachId);
+    expect(h.store.state.attachmentReady, isFalse);
+
+    h.ready(hello);
+    h.replayComplete(hello);
+    await h.pump();
+    expect(h.store.state.attachmentReady, isTrue);
     await h.close();
   });
 
-  test('ServerSessionsUpdate populates list and seeds empty byId entries', () async {
+  test('ServerSessionsUpdate remains a global frame', () async {
     final h = _Harness();
     h.controller.add(ServerSessionsUpdate(sessions: <SessionStateSnapshot>[
       _snap(id: 'A'),
       _snap(id: 'B'),
     ]));
     await h.pump();
-    expect(h.store.state.list.map((SessionStateSnapshot s) => s.sessionId), <String>['A', 'B']);
+
+    expect(
+      h.store.state.list.map((SessionStateSnapshot s) => s.sessionId),
+      <String>['A', 'B'],
+    );
     expect(h.store.state.byId.keys, containsAll(<String>['A', 'B']));
     await h.close();
   });
 
-  test('ServerSdkEvent reduces onto active session', () async {
+  test('scoped sdk event reduces onto its active session', () async {
     final h = _Harness();
-    h.controller.add(ServerReady(state: _snap(id: 'S1')));
+    final hello = await h.attach('S1');
+    h.controller.add(ServerSdkEvent(
+      id: 7,
+      event: <String, dynamic>{
+        'type': 'assistant',
+        'message': {
+          'content': [
+            {'type': 'text', 'text': 'hi'},
+          ],
+        },
+      },
+      attachId: hello.attachId,
+      sessionId: 'S1',
+    ));
     await h.pump();
-    h.controller.add(ServerSdkEvent(id: 7, event: <String, dynamic>{
-      'type': 'assistant',
-      'message': {'content': [{'type': 'text', 'text': 'hi'}]},
-    }));
-    await h.pump();
+
     final cs = h.store.state.byId['S1']!;
     expect(cs.items, hasLength(1));
     expect((cs.items.single as AssistantTextItem).text, 'hi');
@@ -83,78 +150,232 @@ void main() {
     await h.close();
   });
 
-  test('ServerSdkEventBatch folds events in order', () async {
+  test('replay batch folds in order and completion unlocks sending', () async {
     final h = _Harness();
-    h.controller.add(ServerReady(state: _snap(id: 'S1')));
+    final hello = h.switchTo('S1');
+    h.ready(hello);
     await h.pump();
-    h.controller.add(ServerSdkEventBatch(events: <SdkEventEntry>[
-      SdkEventEntry(id: 1, event: <String, dynamic>{'type': 'result'}),
-      SdkEventEntry(id: 2, event: <String, dynamic>{
-        'type': 'assistant',
-        'message': {'content': [{'type': 'text', 'text': 'ok'}]},
-      }),
-    ]));
+    expect(h.store.state.attachmentReady, isFalse);
+
+    h.controller.add(ServerSdkEventBatch(
+      events: <SdkEventEntry>[
+        SdkEventEntry(id: 1, event: <String, dynamic>{'type': 'result'}),
+        SdkEventEntry(id: 2, event: <String, dynamic>{
+          'type': 'assistant',
+          'message': {
+            'content': [
+              {'type': 'text', 'text': 'ok'},
+            ],
+          },
+        }),
+      ],
+      attachId: hello.attachId,
+      sessionId: 'S1',
+      replayComplete: true,
+    ));
     await h.pump();
+
     final cs = h.store.state.byId['S1']!;
     expect(cs.lastEventId, 2);
     expect(cs.items, hasLength(1));
+    expect(h.store.state.attachmentReady, isTrue);
     await h.close();
   });
 
-  test('sendUser appends optimistic UserItem and sends ClientUserMessage frame', () async {
+  test('sendUser is blocked until both ready and replayComplete', () async {
     final h = _Harness();
-    h.controller.add(ServerReady(state: _snap(id: 'S1')));
+    final hello = h.switchTo('S1');
+    h.sent.clear();
+
+    h.store.sendUser('before ready');
+    expect(h.sent, isEmpty);
+    h.ready(hello);
     await h.pump();
     h.sent.clear();
+    h.store.sendUser('during replay');
+    expect(h.sent, isEmpty);
+
+    h.replayComplete(hello);
+    await h.pump();
     h.store.sendUser('hello');
     final cs = h.store.state.byId['S1']!;
-    final u = cs.items.single as UserItem;
-    expect(u.text, 'hello');
-    expect(u.optimistic, isTrue);
+    final user = cs.items.single as UserItem;
+    expect(user.text, 'hello');
+    expect(user.optimistic, isTrue);
     expect(h.sent.single, isA<ClientUserMessage>());
-    expect((h.sent.single as ClientUserMessage).text, 'hello');
     await h.close();
   });
 
-  test('switchTo sends ClientHello with sessionId + lastEventId', () async {
+  test('switchTo sends a unique scoped hello with the resume cursor', () async {
     final h = _Harness();
     h.controller.add(ServerSessionsUpdate(sessions: <SessionStateSnapshot>[
       _snap(id: 'A', lastEventId: 42),
+      _snap(id: 'B', lastEventId: 7),
     ]));
     await h.pump();
     h.sent.clear();
-    h.store.switchTo('A');
-    expect(h.sent.single, isA<ClientHello>());
-    final hello = h.sent.single as ClientHello;
-    expect(hello.sessionId, 'A');
-    expect(hello.lastEventId, 42);
+
+    final first = h.switchTo('A');
+    final second = h.switchTo('B');
+    expect(first.sessionId, 'A');
+    expect(first.lastEventId, 42);
+    expect(first.attachId, isNotEmpty);
+    expect(second.attachId, isNot(equals(first.attachId)));
+    expect(h.store.state.activeId, 'B');
+    expect(h.store.state.attachId, second.attachId);
+    expect(h.store.state.attachmentReady, isFalse);
     await h.close();
   });
 
-  test('newSession sends ClientHello with cwd and clears activeId', () async {
+  test('newSession sends scoped hello and waits for assigned session id', () async {
     final h = _Harness();
-    h.controller.add(ServerReady(state: _snap(id: 'OLD')));
-    await h.pump();
-    h.sent.clear();
     h.store.newSession('/home/me/repo');
+
     expect(h.store.state.activeId, isNull);
-    expect(h.sent.single, isA<ClientHello>());
     final hello = h.sent.single as ClientHello;
+    expect(hello.attachId, isNotEmpty);
     expect(hello.cwd, '/home/me/repo');
     expect(hello.sessionId, isNull);
+    expect(h.store.state.attachmentReady, isFalse);
+
+    h.controller.add(ServerReady(
+      state: _snap(id: 'NEW'),
+      attachId: hello.attachId,
+      sessionId: 'NEW',
+      replayMode: ReplayMode.full,
+      historyStatus: HistoryStatus.ready,
+    ));
+    h.controller.add(ServerSdkEventBatch(
+      events: const <SdkEventEntry>[],
+      attachId: hello.attachId,
+      sessionId: 'NEW',
+      replayComplete: true,
+    ));
+    await h.pump();
+    expect(h.store.state.activeId, 'NEW');
+    expect(h.store.state.attachmentSessionId, 'NEW');
+    expect(h.store.state.attachmentReady, isTrue);
     await h.close();
   });
 
-  test('ServerError appends SystemItem(error) on active', () async {
+  test('late A frames cannot overwrite B after rapid A to B switch', () async {
     final h = _Harness();
-    h.controller.add(ServerReady(state: _snap(id: 'S1')));
+    final a = h.switchTo('A');
+    final b = h.switchTo('B');
+
+    h.ready(a);
+    h.replayComplete(a);
+    h.ready(b);
+    h.replayComplete(b);
+    h.controller.add(ServerSdkEvent(
+      id: 1,
+      event: <String, dynamic>{
+        'type': 'assistant',
+        'message': {
+          'content': [
+            {'type': 'text', 'text': 'stale A'},
+          ],
+        },
+      },
+      attachId: a.attachId,
+      sessionId: 'A',
+    ));
+    h.controller.add(ServerSdkEvent(
+      id: 2,
+      event: <String, dynamic>{
+        'type': 'assistant',
+        'message': {
+          'content': [
+            {'type': 'text', 'text': 'current B'},
+          ],
+        },
+      },
+      attachId: b.attachId,
+      sessionId: 'B',
+    ));
     await h.pump();
-    h.controller.add(const ServerError(message: 'bad thing'));
+
+    expect(h.store.state.activeId, 'B');
+    expect(h.store.state.byId['A']?.items ?? const <ChatItem>[], isEmpty);
+    final bItems = h.store.state.byId['B']!.items;
+    expect((bItems.single as AssistantTextItem).text, 'current B');
+    await h.close();
+  });
+
+  test('rapid A to B to C accepts only the last attachment', () async {
+    final h = _Harness();
+    final a = h.switchTo('A');
+    final b = h.switchTo('B');
+    final c = h.switchTo('C');
+
+    h.ready(b);
+    h.replayComplete(a);
+    h.ready(c);
+    h.replayComplete(b);
     await h.pump();
-    final cs = h.store.state.byId['S1']!;
-    final item = cs.items.single as SystemItem;
-    expect(item.text, 'bad thing');
+    expect(h.store.state.activeId, 'C');
+    expect(h.store.state.attachmentReady, isFalse);
+
+    h.replayComplete(c);
+    await h.pump();
+    expect(h.store.state.attachId, c.attachId);
+    expect(h.store.state.attachmentSessionId, 'C');
+    expect(h.store.state.attachmentReady, isTrue);
+    await h.close();
+  });
+
+  test('matching attachId with wrong sessionId is ignored', () async {
+    final h = _Harness();
+    final hello = h.switchTo('A');
+    h.controller.add(ServerReady(
+      state: _snap(id: 'B'),
+      attachId: hello.attachId,
+      sessionId: 'B',
+    ));
+    await h.pump();
+
+    expect(h.store.state.activeId, 'A');
+    expect(h.store.state.byId.containsKey('B'), isFalse);
+    expect(h.store.state.attachmentReady, isFalse);
+    await h.close();
+  });
+
+  test('scoped errors affect only the current attachment', () async {
+    final h = _Harness();
+    final a = h.switchTo('A');
+    final b = await h.attach('B');
+    h.controller.add(ServerError(
+      message: 'old error',
+      attachId: a.attachId,
+      sessionId: 'A',
+    ));
+    h.controller.add(ServerError(
+      message: 'current error',
+      attachId: b.attachId,
+      sessionId: 'B',
+    ));
+    await h.pump();
+
+    expect(h.store.state.byId['A']?.items ?? const <ChatItem>[], isEmpty);
+    final item = h.store.state.byId['B']!.items.single as SystemItem;
+    expect(item.text, 'current error');
     expect(item.level, SystemLevel.error);
+    await h.close();
+  });
+
+  test('disconnect clears readiness and blocks later sends', () async {
+    final h = _Harness();
+    await h.attach('S1');
+    expect(h.store.state.attachmentReady, isTrue);
+    h.sent.clear();
+
+    await h.disconnect();
+    expect(h.store.state.activeId, 'S1');
+    expect(h.store.state.attachId, isNull);
+    expect(h.store.state.attachmentReady, isFalse);
+    h.store.sendUser('lost');
+    expect(h.sent, isEmpty);
+    expect(h.store.state.byId['S1']!.items, isEmpty);
     await h.close();
   });
 }

@@ -18,6 +18,20 @@ void main() {
     });
   });
 
+  test('ClientHello.attached generates and serializes a unique attachId', () {
+    final first = ClientHello.attached(sessionId: 'A');
+    final second = ClientHello.attached(sessionId: 'B');
+
+    expect(first.attachId, isNotEmpty);
+    expect(second.attachId, isNotEmpty);
+    expect(first.attachId, isNot(second.attachId));
+    expect(first.toJson(), {
+      'type': 'hello',
+      'attachId': first.attachId,
+      'sessionId': 'A',
+    });
+  });
+
   test('ClientUserMessage', () {
     expect(const ClientUserMessage(text: 'hi').toJson(), {'type': 'user', 'text': 'hi'});
   });

@@ -1,3 +1,5 @@
+import 'package:uuid/uuid.dart';
+
 import 'session_state.dart';
 
 sealed class ClientMessage {
@@ -7,6 +9,7 @@ sealed class ClientMessage {
 
 class ClientHello extends ClientMessage {
   const ClientHello({
+    this.attachId,
     this.sessionId,
     this.resumeClaudeId,
     this.cwd,
@@ -16,6 +19,30 @@ class ClientHello extends ClientMessage {
     this.viewerMode,
   });
 
+  /// Creates a session attachment intent with a client-owned id. The server
+  /// echoes this id on every attachment-scoped frame, allowing a rapid switch
+  /// to reject late frames from the session that was just superseded.
+  factory ClientHello.attached({
+    String? sessionId,
+    String? resumeClaudeId,
+    String? cwd,
+    String? model,
+    PermissionMode? permissionMode,
+    int? lastEventId,
+    bool? viewerMode,
+  }) =>
+      ClientHello(
+        attachId: const Uuid().v4(),
+        sessionId: sessionId,
+        resumeClaudeId: resumeClaudeId,
+        cwd: cwd,
+        model: model,
+        permissionMode: permissionMode,
+        lastEventId: lastEventId,
+        viewerMode: viewerMode,
+      );
+
+  final String? attachId;
   final String? sessionId;
   final String? resumeClaudeId;
   final String? cwd;
@@ -27,6 +54,7 @@ class ClientHello extends ClientMessage {
   @override
   Map<String, dynamic> toJson() => {
         'type': 'hello',
+        if (attachId != null) 'attachId': attachId,
         if (sessionId != null) 'sessionId': sessionId,
         if (resumeClaudeId != null) 'resumeClaudeId': resumeClaudeId,
         if (cwd != null) 'cwd': cwd,
@@ -41,6 +69,7 @@ class ClientHello extends ClientMessage {
       identical(this, other) ||
       other is ClientHello &&
           runtimeType == other.runtimeType &&
+          attachId == other.attachId &&
           sessionId == other.sessionId &&
           resumeClaudeId == other.resumeClaudeId &&
           cwd == other.cwd &&
@@ -50,8 +79,16 @@ class ClientHello extends ClientMessage {
           viewerMode == other.viewerMode;
 
   @override
-  int get hashCode =>
-      Object.hash(sessionId, resumeClaudeId, cwd, model, permissionMode, lastEventId, viewerMode);
+  int get hashCode => Object.hash(
+        attachId,
+        sessionId,
+        resumeClaudeId,
+        cwd,
+        model,
+        permissionMode,
+        lastEventId,
+        viewerMode,
+      );
 }
 
 class ClientUserMessage extends ClientMessage {

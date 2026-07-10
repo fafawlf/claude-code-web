@@ -48,12 +48,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _send() {
+    final SessionsStore store = ref.read(sessionsStoreProvider);
+    if (!store.state.attachmentReady) return;
     final String text = _input.text.trim();
     if (text.isEmpty) return;
     // Arm the pin BEFORE dispatching so the next rebuild (triggered by the
     // store's optimistic UserItem append) attaches the key to the new item.
     _pinKey = GlobalKey();
-    ref.read(sessionsStoreProvider).sendUser(text);
+    store.sendUser(text);
     _history.add(text);
     if (_history.length > _historyCap) {
       _history.removeAt(0);
@@ -108,6 +110,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final List<ChatItem> items = active?.items ?? const <ChatItem>[];
     final String streaming = active?.streamingText ?? '';
     final bool busy = active?.busy ?? false;
+    final bool canSend = connected && s.attachmentReady;
 
     // On session switch (or first attach) we want to land at the bottom so the
     // user sees the latest context. After that, we stop auto-following stream
@@ -184,7 +187,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   },
                 ),
         ),
-        _composer(palette, t, connected, busy),
+        _composer(palette, t, connected, canSend, busy),
       ],
     );
   }
@@ -326,7 +329,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  Widget _composer(SkinPalette p, ThemeData t, bool connected, bool busy) {
+  Widget _composer(
+    SkinPalette p,
+    ThemeData t,
+    bool connected,
+    bool canSend,
+    bool busy,
+  ) {
     return Container(
       decoration: BoxDecoration(
         color: p.bgRaised,
@@ -349,7 +358,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     maxLines: 8,
                     keyboardType: TextInputType.multiline,
                     decoration: InputDecoration(
-                      hintText: 'Message Claude…',
+                      hintText: !connected
+                          ? 'Disconnected'
+                          : canSend
+                              ? 'Message Claude…'
+                              : 'Syncing session…',
                       filled: true,
                       fillColor: p.bgSurface,
                       contentPadding: const EdgeInsets.symmetric(
@@ -368,7 +381,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             color: p.borderSubtle.withValues(alpha: 0.5)),
                       ),
                     ),
-                    enabled: connected,
+                    enabled: canSend,
                   ),
                 ),
               ),
@@ -379,8 +392,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   shape: const CircleBorder(),
                   child: InkWell(
                     customBorder: const CircleBorder(),
-                    onTap: () =>
-                        ref.read(sessionsStoreProvider).interrupt(),
+                    onTap: canSend
+                        ? () => ref.read(sessionsStoreProvider).interrupt()
+                        : null,
                     child: Padding(
                       padding: const EdgeInsets.all(12),
                       child: Icon(Icons.stop_rounded,
@@ -390,16 +404,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 )
               else
                 Material(
-                  color: connected ? p.accent : p.borderSubtle,
+                  color: canSend ? p.accent : p.borderSubtle,
                   shape: const CircleBorder(),
                   child: InkWell(
                     customBorder: const CircleBorder(),
-                    onTap: connected ? _send : null,
+                    onTap: canSend ? _send : null,
                     child: Padding(
                       padding: const EdgeInsets.all(12),
                       child: Icon(Icons.arrow_upward_rounded,
                           color:
-                              connected ? p.textInverse : p.textMuted,
+                              canSend ? p.textInverse : p.textMuted,
                           size: 20),
                     ),
                   ),
