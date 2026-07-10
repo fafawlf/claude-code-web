@@ -282,9 +282,16 @@ deploy_candidate() {
     exit 1
   fi
 
-  git -C "$REPO_DIR" fetch --prune origin
   local sha release_dir build_time
-  sha=$(git -C "$REPO_DIR" rev-parse "$RELEASE_REF^{commit}")
+  git -C "$REPO_DIR" fetch --prune origin
+  if sha=$(git -C "$REPO_DIR" rev-parse "$RELEASE_REF^{commit}" 2>/dev/null); then
+    :
+  else
+    # Production clones may intentionally fetch only multi-user. Explicitly
+    # fetch a release branch/ref without widening that persistent refspec.
+    git -C "$REPO_DIR" fetch origin "$RELEASE_REF"
+    sha=$(git -C "$REPO_DIR" rev-parse 'FETCH_HEAD^{commit}')
+  fi
   release_dir=$RELEASES_DIR/$sha
 
   if [ -d "$release_dir" ] && [ ! -f "$release_dir/server/dist/bin/claudecode-web.js" ]; then

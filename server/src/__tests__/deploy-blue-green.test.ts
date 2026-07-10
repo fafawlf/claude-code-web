@@ -28,6 +28,7 @@ test('blue-green deployment shell is valid and alternates inactive slots', () =>
 
   const source = readFileSync(script, 'utf8');
   assert.match(source, /Environment="CCW_ROLLBACK_TOKEN=\$rollback_cookie"/);
+  assert.match(source, /git -C "\$REPO_DIR" fetch origin "\$RELEASE_REF"/);
   assert.match(source, /render_nginx "\$CANDIDATE_PORT" "\$ACTIVE_PORT" "\$CANDIDATE_ROLLBACK_COOKIE"/);
   assert.match(source, /render_nginx "\$ACTIVE_PORT" "\$ACTIVE_PORT" "\$retired_cookie"/);
 });
