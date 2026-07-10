@@ -94,6 +94,7 @@ export function App() {
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const connected = connection === 'open';
   const [sessionTitle, setSessionTitle] = useState<string | undefined>(undefined);
+  const [renameRequest, setRenameRequest] = useState(0);
   const lastEventAtRef = useRef<number>(Date.now());
   const [secondsSinceLastEvent, setSecondsSinceLastEvent] = useState(0);
   const [projectLauncherOpen, setProjectLauncherOpen] = useState(false);
@@ -826,8 +827,12 @@ export function App() {
   const cycleMode = useCallback((next: PermissionMode) => setMode(next), [setMode]);
 
   const openRename = useCallback(() => {
-    setSessionTitle(sessionTitle ?? 'Rename this session');
-  }, [sessionTitle]);
+    if (!stateRef.current.state?.claudeSessionId) {
+      pushToast('Open a saved chat before renaming it.', { level: 'error' });
+      return;
+    }
+    setRenameRequest((request) => request + 1);
+  }, [pushToast]);
 
   const handlePaletteAction = useCallback((a: CommandAction) => {
     switch (a.kind) {
@@ -1054,6 +1059,7 @@ export function App() {
           skin={skin}
           onSelectSkin={setSkin}
           onRename={renameCurrent}
+          renameRequest={renameRequest}
           onContinueWriting={state.state?.viewerMode && state.state?.claudeSessionId
             ? () => newSession({
                 nodeId: state.state!.nodeId,
