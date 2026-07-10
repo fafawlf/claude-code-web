@@ -120,3 +120,27 @@ test('slugify strips unsafe characters', () => {
   assert.equal(slugify('---'), '');
   assert.equal(slugify('黑客@123'), '123');
 });
+
+test('multiple registry processes merge writes and refresh stale reads', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccw-users-multi-'));
+  const file = join(dir, 'users.json');
+  try {
+    const first = new UserRegistry(file, ['boss@x.com']);
+    const second = new UserRegistry(file, ['boss@x.com']);
+    first.load();
+    second.load();
+
+    first.addToAllowlist('alice@x.com');
+    first.upsertOnLogin({ openId: 'ou_alice', email: 'alice@x.com', name: 'Alice' });
+    second.addToAllowlist('bob@x.com');
+    second.upsertOnLogin({ openId: 'ou_bob', email: 'bob@x.com', name: 'Bob' });
+
+    assert.deepEqual(first.allowlist().sort(), ['alice@x.com', 'bob@x.com']);
+    assert.deepEqual(second.list().map((user) => user.openId).sort(), ['ou_alice', 'ou_bob']);
+
+    first.setRole('ou_bob', 'admin');
+    assert.equal(second.getByOpenId('ou_bob')?.role, 'admin');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export type UserRole = 'admin' | 'user';
@@ -37,6 +37,7 @@ export type LoginInfo = {
 export class UserRegistry {
   private data: UsersFile = { version: 1, users: [], allowlist: [] };
   private loaded = false;
+  private revision: string | undefined;
 
   constructor(
     private readonly file: string,
@@ -55,8 +56,9 @@ export class UserRegistry {
   }
 
   load(): void {
+    const snapshot = readStableSnapshot(this.file);
     try {
-      const parsed = JSON.parse(readFileSync(this.file, 'utf8')) as Partial<UsersFile>;
+      const parsed = snapshot.raw ? JSON.parse(snapshot.raw) as Partial<UsersFile> : {};
       this.data = {
         version: 1,
         users: Array.isArray(parsed.users) ? (parsed.users as StoredUser[]) : [],
@@ -65,18 +67,34 @@ export class UserRegistry {
     } catch {
       this.data = { version: 1, users: [], allowlist: [] };
     }
+    this.revision = snapshot.revision;
     this.loaded = true;
   }
 
   private ensureLoaded(): void {
-    if (!this.loaded) this.load();
+    if (!this.loaded || fileRevision(this.file) !== this.revision) this.load();
   }
 
-  private save(): void {
+  private saveUnlocked(): void {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
-    const tmp = join(dirname(this.file), `.users.json.tmp-${process.pid}`);
+    const tmp = join(dirname(this.file), `.users.json.tmp-${process.pid}-${Date.now()}`);
     writeFileSync(tmp, JSON.stringify(this.data, null, 2) + '\n', { mode: 0o600 });
     renameSync(tmp, this.file);
+    this.revision = fileRevision(this.file);
+  }
+
+  private mutate<T>(update: () => T): T {
+    const release = acquireFileLock(this.file);
+    try {
+      // Another process may have changed users.json after this instance last
+      // read it. Always merge a mutation into the latest atomic snapshot.
+      this.load();
+      const result = update();
+      this.saveUnlocked();
+      return result;
+    } finally {
+      release();
+    }
   }
 
   getByOpenId(openId: string): StoredUser | undefined {
@@ -124,69 +142,67 @@ export class UserRegistry {
   }
 
   upsertOnLogin(info: LoginInfo): StoredUser {
-    this.ensureLoaded();
-    const now = Date.now();
-    let user = this.getByOpenId(info.openId);
-    if (user) {
-      user.lastLoginAt = now;
-      if (info.email) user.email = info.email;
-      if (info.name) user.name = info.name;
-      if (info.avatarUrl) user.avatarUrl = info.avatarUrl;
-      if (this.isAdminEmail(user.email)) user.role = 'admin';
-      this.save();
+    return this.mutate(() => {
+      const now = Date.now();
+      let user = this.data.users.find((candidate) => candidate.openId === info.openId);
+      if (user) {
+        user.lastLoginAt = now;
+        if (info.email) user.email = info.email;
+        if (info.name) user.name = info.name;
+        if (info.avatarUrl) user.avatarUrl = info.avatarUrl;
+        if (this.isAdminEmail(user.email)) user.role = 'admin';
+        return user;
+      }
+      // Bootstrap-first-admin only applies when no admin emails are configured;
+      // with CCW_ADMIN_EMAILS set, admins come exclusively from that list.
+      const bootstrap = this.data.users.length === 0 && this.adminEmails.length === 0;
+      user = {
+        openId: info.openId,
+        email: info.email ?? '',
+        name: info.name || info.email || info.openId,
+        slug: this.assignSlug(info.email, info.openId),
+        role: bootstrap || this.isAdminEmail(info.email) ? 'admin' : 'user',
+        avatarUrl: info.avatarUrl,
+        createdAt: now,
+        lastLoginAt: now,
+      };
+      this.data.users.push(user);
       return user;
-    }
-    // Bootstrap-first-admin only applies when no admin emails are configured;
-    // with CCW_ADMIN_EMAILS set, admins come exclusively from that list.
-    const bootstrap = this.data.users.length === 0 && this.adminEmails.length === 0;
-    user = {
-      openId: info.openId,
-      email: info.email ?? '',
-      name: info.name || info.email || info.openId,
-      slug: this.assignSlug(info.email, info.openId),
-      role: bootstrap || this.isAdminEmail(info.email) ? 'admin' : 'user',
-      avatarUrl: info.avatarUrl,
-      createdAt: now,
-      lastLoginAt: now,
-    };
-    this.data.users.push(user);
-    this.save();
-    return user;
+    });
   }
 
   addToAllowlist(entry: string): void {
-    this.ensureLoaded();
     const value = entry.trim();
     if (!value) throw new Error('empty allowlist entry');
-    if (!this.data.allowlist.some((e) => e.toLowerCase() === value.toLowerCase())) {
-      this.data.allowlist.push(value);
-      this.save();
-    }
+    this.mutate(() => {
+      if (!this.data.allowlist.some((e) => e.toLowerCase() === value.toLowerCase())) {
+        this.data.allowlist.push(value);
+      }
+    });
   }
 
   removeFromAllowlist(entry: string): void {
-    this.ensureLoaded();
-    const before = this.data.allowlist.length;
-    this.data.allowlist = this.data.allowlist.filter((e) => e.toLowerCase() !== entry.toLowerCase());
-    if (this.data.allowlist.length !== before) this.save();
+    this.mutate(() => {
+      this.data.allowlist = this.data.allowlist.filter((e) => e.toLowerCase() !== entry.toLowerCase());
+    });
   }
 
   setRole(openId: string, role: UserRole): StoredUser {
-    this.ensureLoaded();
-    const user = this.getByOpenId(openId);
-    if (!user) throw new Error('user not found');
-    user.role = role;
-    this.save();
-    return user;
+    return this.mutate(() => {
+      const user = this.data.users.find((candidate) => candidate.openId === openId);
+      if (!user) throw new Error('user not found');
+      user.role = role;
+      return user;
+    });
   }
 
   setDisabled(openId: string, disabled: boolean): StoredUser {
-    this.ensureLoaded();
-    const user = this.getByOpenId(openId);
-    if (!user) throw new Error('user not found');
-    user.disabled = disabled;
-    this.save();
-    return user;
+    return this.mutate(() => {
+      const user = this.data.users.find((candidate) => candidate.openId === openId);
+      if (!user) throw new Error('user not found');
+      user.disabled = disabled;
+      return user;
+    });
   }
 
   private assignSlug(email: string | undefined, openId: string): string {
@@ -198,6 +214,55 @@ export class UserRegistry {
       if (!taken.has(candidate)) return candidate;
     }
     return `${base}-${openId.slice(-6).toLowerCase()}`;
+  }
+}
+
+const LOCK_WAIT = new Int32Array(new SharedArrayBuffer(4));
+
+function acquireFileLock(file: string): () => void {
+  const lock = `${file}.lock`;
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    try {
+      const fd = openSync(lock, 'wx', 0o600);
+      writeFileSync(fd, `${process.pid}\n`);
+      return () => {
+        try { closeSync(fd); } catch { /* best effort */ }
+        try { unlinkSync(lock); } catch { /* best effort */ }
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 30_000) {
+          unlinkSync(lock);
+          continue;
+        }
+      } catch { /* lock changed between checks */ }
+      if (Date.now() >= deadline) throw new Error('users registry is busy; retry the operation');
+      Atomics.wait(LOCK_WAIT, 0, 0, 10);
+    }
+  }
+}
+
+function readStableSnapshot(file: string): { raw: string; revision: string | undefined } {
+  let raw = '';
+  let revision: string | undefined;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = fileRevision(file);
+    try { raw = readFileSync(file, 'utf8'); } catch { raw = ''; }
+    revision = fileRevision(file);
+    if (before === revision) break;
+  }
+  return { raw, revision };
+}
+
+function fileRevision(file: string): string | undefined {
+  try {
+    const info = statSync(file, { bigint: true });
+    return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}`;
+  } catch {
+    return undefined;
   }
 }
 
