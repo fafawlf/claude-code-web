@@ -12,6 +12,12 @@ export const MAX_UPLOAD_FILES = 12;
 export const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_UPLOAD_TOTAL_BYTES = 50 * 1024 * 1024;
 
+export function uploadStartBlockReason(ready: boolean, readOnly: boolean): string | null {
+  if (readOnly) return 'Press Continue writing to take over this chat.';
+  if (!ready) return 'Still connecting. Try again in a moment.';
+  return null;
+}
+
 type UploadSelectionFile = Pick<File, 'name' | 'size' | 'type'>;
 
 export type UploadSelectionResult<T extends UploadSelectionFile> = {
@@ -159,6 +165,10 @@ export type MultipartUploadOptions = {
   signal?: AbortSignal;
   onProgress?: (percent: number) => void;
   xhrFactory?: () => XMLHttpRequest;
+  /** Stable chat identity used only for server-side upload admission. */
+  sessionKey?: string;
+  /** One id shared by every file selected in the same browser action. */
+  selectionId?: string;
 };
 
 export function uploadFileMultipart(
@@ -177,7 +187,12 @@ export function uploadFileMultipart(
     };
     const abort = () => xhr.abort();
 
-    xhr.open('POST', apiUrl(`/api/uploads?cwd=${encodeURIComponent(cwd)}`));
+    const query = [
+      `cwd=${encodeURIComponent(cwd)}`,
+      options.sessionKey ? `sessionKey=${encodeURIComponent(options.sessionKey)}` : '',
+      options.selectionId ? `selectionId=${encodeURIComponent(options.selectionId)}` : '',
+    ].filter(Boolean).join('&');
+    xhr.open('POST', apiUrl(`/api/uploads?${query}`));
     xhr.withCredentials = true;
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable || event.total <= 0) return;

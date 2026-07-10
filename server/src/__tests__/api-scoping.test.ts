@@ -242,9 +242,15 @@ test('uploads, file search and session listings are workspace-scoped', async () 
   try {
     const upload = await s.app.inject({
       method: 'POST',
-      url: '/api/uploads',
-      headers: { cookie: s.cookies.alice },
-      payload: { cwd: s.bobRoot, files: [{ name: 'x.txt', dataBase64: Buffer.from('hi').toString('base64') }] },
+      url: `/api/uploads?cwd=${encodeURIComponent(s.bobRoot)}`,
+      headers: { cookie: s.cookies.alice, 'content-type': 'multipart/form-data; boundary=ccw-scope' },
+      payload: Buffer.from(
+        '--ccw-scope\r\n'
+        + 'Content-Disposition: form-data; name="files"; filename="x.txt"\r\n'
+        + 'Content-Type: text/plain\r\n\r\n'
+        + 'hi\r\n'
+        + '--ccw-scope--\r\n',
+      ),
     });
     assert.equal(upload.statusCode, 403);
 

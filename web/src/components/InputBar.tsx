@@ -11,6 +11,7 @@ import {
   MAX_UPLOAD_FILES,
   planUploadSelection,
   uploadFileMultipart,
+  uploadStartBlockReason,
   UploadPool,
   type UploadHandle,
   type UploadedFileRef,
@@ -55,6 +56,7 @@ type Attachment = {
   progress?: number;
   retryable?: boolean;
   countsTowardTotal?: boolean;
+  selectionId?: string;
 };
 
 function InputBarImpl(p: Props) {
@@ -270,6 +272,8 @@ function InputBarImpl(p: Props) {
       : item));
     const handle = uploadPoolRef.current.enqueue(targetScope, (signal) => uploadFileMultipart(file, targetCwd, {
       signal,
+      sessionKey: p.sessionKey,
+      selectionId: attachment.selectionId,
       onProgress: (progress) => updateAttachmentsForScope(targetScope, (items) => items.map((item) => item.id === attachment.id
         ? { ...item, progress }
         : item)),
@@ -310,7 +314,14 @@ function InputBarImpl(p: Props) {
 
   const uploadFiles = (filesLike: FileList | File[]) => {
     const files = Array.from(filesLike);
-    if (!files.length || p.readOnly) return;
+    if (!files.length) return;
+    const blocked = uploadStartBlockReason(p.ready, !!p.readOnly);
+    if (blocked) {
+      setDragging(false);
+      setSendHint(blocked);
+      return;
+    }
+    const selectionId = makeId();
     const planned = planUploadSelection({
       fileCount: attachments.length,
       totalBytes: attachments.reduce((sum, attachment) => sum + (attachment.countsTowardTotal ? attachment.size : 0), 0),
@@ -334,6 +345,7 @@ function InputBarImpl(p: Props) {
         progress: canUpload ? 0 : undefined,
         retryable: false,
         countsTowardTotal: canUpload,
+        selectionId,
         previewUrl,
       };
     });
@@ -359,6 +371,8 @@ function InputBarImpl(p: Props) {
 
   const retryAttachment = (attachment: Attachment) => {
     if (!attachment.file || !attachment.retryable) return;
+    const blocked = uploadStartBlockReason(p.ready, !!p.readOnly);
+    if (blocked) { setSendHint(blocked); return; }
     startUpload(attachment, scopeKey, p.cwd);
   };
 
@@ -388,13 +402,13 @@ function InputBarImpl(p: Props) {
   return (
     <div className="composer-wrap absolute left-6 right-6 bottom-6 pointer-events-none flex justify-center">
       <div
-        onDragEnter={(e) => { e.preventDefault(); if (!p.readOnly) setDragging(true); }}
-        onDragOver={(e) => { e.preventDefault(); if (!p.readOnly) setDragging(true); }}
+        onDragEnter={(e) => { e.preventDefault(); if (p.ready && !p.readOnly) setDragging(true); }}
+        onDragOver={(e) => { e.preventDefault(); if (p.ready && !p.readOnly) setDragging(true); }}
         onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          if (!p.readOnly) void uploadFiles(e.dataTransfer.files);
+          if (p.ready && !p.readOnly) void uploadFiles(e.dataTransfer.files);
         }}
         className={`composer-shell pointer-events-auto w-full max-w-[720px] bg-bg-surface rounded-xl px-4 pt-3.5 pb-2.5 shadow-pop transition-[border-color,box-shadow] duration-hover ease-out border ${dragging ? 'border-accent [box-shadow:var(--tw-shadow),0_0_0_4px_rgba(217,119,87,.16)]' : focused ? 'border-accent shadow-pop [box-shadow:var(--tw-shadow),0_0_0_4px_rgba(217,119,87,.12)]' : 'border-border'}`}
       >

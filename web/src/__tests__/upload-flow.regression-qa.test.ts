@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { UploadPool, planUploadSelection, uploadFileMultipart } from '../uploads';
+import { UploadPool, planUploadSelection, uploadFileMultipart, uploadStartBlockReason } from '../uploads';
 import { setApiToken } from '../api';
 
 // QA regression: the browser must stop a thirteenth attachment before any network work starts.
@@ -33,6 +33,12 @@ test('[QA] upload selection enforces the 50 MiB total cap', () => {
 
   assert.equal(result.accepted.length, 0);
   assert.match(result.rejected[0].error, /50 MB total limit/);
+});
+
+test('[QA] attachment input and drop are blocked until the target chat is ready', () => {
+  assert.equal(uploadStartBlockReason(false, false), 'Still connecting. Try again in a moment.');
+  assert.equal(uploadStartBlockReason(true, true), 'Press Continue writing to take over this chat.');
+  assert.equal(uploadStartBlockReason(true, false), null);
 });
 
 // QA regression: selecting a large batch must not start more than two browser uploads.
@@ -97,10 +103,12 @@ test('[QA] upload transport uses credentialed multipart without Base64 encoding'
     const uploaded = await uploadFileMultipart(file, '/project with spaces', {
       xhrFactory: () => xhr as unknown as XMLHttpRequest,
       onProgress: (value) => progress.push(value),
+      sessionKey: 'chat one',
+      selectionId: 'selection one',
     });
 
     assert.equal(xhr.method, 'POST');
-    assert.match(xhr.url, /\/api\/uploads\?cwd=%2Fproject%20with%20spaces&t=secret%20token$/);
+    assert.match(xhr.url, /\/api\/uploads\?cwd=%2Fproject%20with%20spaces&sessionKey=chat%20one&selectionId=selection%20one&t=secret%20token$/);
     assert.equal(xhr.withCredentials, true);
     assert.ok(xhr.body instanceof FormData);
     const sentFile = (xhr.body as FormData).get('files');

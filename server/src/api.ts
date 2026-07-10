@@ -18,6 +18,12 @@ import type { UserRegistry } from './users/registry.js';
 import { findClaudeTranscriptFile } from './session/claudeTranscript.js';
 import { timingSafeEqualStr } from './auth.js';
 import { serializeCookie } from './auth/cookie.js';
+import {
+  assertSafeUploadDirectory,
+  ensureSafeUploadDirectory,
+  UploadAdmissionController,
+  type UploadLease,
+} from './uploadSecurity.js';
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv',
@@ -55,7 +61,7 @@ export function registerApi(
   defaultCwd: string,
   sm: SessionManager,
   nodes: NodeRegistry = new NodeRegistry(defaultCwd),
-  runtime: { host?: string; port?: number } = {},
+  runtime: { host?: string; port?: number; uploadAdmission?: UploadAdmissionController } = {},
   identity: IdentityOptions = { config: tokenModeConfig() }
 ) {
   app.register(fastifyMultipart, {
@@ -73,6 +79,10 @@ export function registerApi(
     config: identity.config,
     registry: identity.registry,
   };
+  const uploadAdmission = runtime.uploadAdmission ?? new UploadAdmissionController({
+    maxFiles: MAX_UPLOAD_FILES,
+    maxBytes: MAX_UPLOAD_TOTAL_BYTES,
+  });
 
   app.get('/__ccw_canary', async (req, reply) => {
     const tokens = [process.env.CCW_CANARY_TOKEN, process.env.CCW_ROLLBACK_TOKEN]
@@ -241,10 +251,20 @@ export function registerApi(
     }
   });
 
-  app.post('/api/uploads', { bodyLimit: UPLOAD_BODY_LIMIT }, async (req, reply) => {
+  app.post('/api/uploads', {
+    bodyLimit: UPLOAD_BODY_LIMIT,
+    // Production Feishu clients use the streaming multipart transport. Reject
+    // legacy Base64 JSON before Fastify parses it, avoiding a large in-memory
+    // string plus decoded Buffer. Token mode remains backward compatible.
+    onRequest: async (req, reply) => {
+      if (!hasMultipartContentType(req) && userOf(req).via === 'cookie') {
+        return reply.code(415).send({ error: 'Legacy JSON uploads are disabled; use multipart/form-data' });
+      }
+    },
+  }, async (req, reply) => {
     const user = userOf(req);
     if (req.isMultipart()) {
-      return receiveMultipartUploads(req, reply, user);
+      return receiveMultipartUploads(req, reply, user, uploadAdmission);
     }
     const body = req.body as UploadRequest | undefined;
     let root: string;
@@ -261,26 +281,28 @@ export function registerApi(
       return reply.code(400).send({ error: `Upload at most ${MAX_UPLOAD_FILES} files at once` });
     }
 
+    let lease: UploadLease | undefined;
+    const savedPaths: string[] = [];
     try {
       const rootStat = await stat(root);
       if (!rootStat.isDirectory()) return reply.code(400).send({ error: 'cwd is not a directory' });
-      const uploadDir = join(root, '.claudecode-web', 'uploads', new Date().toISOString().slice(0, 10));
-      await mkdir(uploadDir, { recursive: true });
+      const q = req.query as UploadQuery | undefined;
+      lease = await uploadAdmission.acquire(admissionRequest(user, root, q));
+      const uploadDir = await ensureSafeUploadDirectory(root, new Date().toISOString().slice(0, 10), user.fsRoot || root);
 
       const saved = [];
-      let totalBytes = 0;
       for (const file of files) {
+        lease.reserveFile();
         const name = sanitizeFileName(file?.name);
         const bytes = decodeUploadBytes(file?.dataBase64);
-        if (bytes.byteLength === 0) return reply.code(400).send({ error: `${name} is empty` });
+        if (bytes.byteLength === 0) throw new Error(`${name} is empty`);
         if (bytes.byteLength > MAX_UPLOAD_FILE_BYTES) {
-          return reply.code(400).send({ error: `${name} is larger than 25 MB` });
+          throw new Error(`${name} is larger than 25 MB`);
         }
-        totalBytes += bytes.byteLength;
-        if (totalBytes > MAX_UPLOAD_TOTAL_BYTES) {
-          return reply.code(400).send({ error: 'Uploads are larger than the 50 MB total limit' });
-        }
+        lease.addBytes(bytes.byteLength);
+        await assertSafeUploadDirectory(root, uploadDir, user.fsRoot || root);
         const path = await writeUniqueFile(uploadDir, name, bytes);
+        savedPaths.push(path);
         const rel = relative(root, path);
         saved.push({
           name: basename(path),
@@ -292,7 +314,10 @@ export function registerApi(
       }
       return { files: saved };
     } catch (e) {
-      return reply.code(400).send({ error: (e as Error).message });
+      await Promise.all(savedPaths.map((path) => unlink(path).catch(() => undefined)));
+      return reply.code(uploadErrorStatus(e)).send({ error: uploadErrorMessage(e) });
+    } finally {
+      lease?.release();
     }
   });
 
@@ -436,6 +461,12 @@ type UploadRequest = {
   files?: Array<{ name?: string; mime?: string; dataBase64?: string }>;
 };
 
+type UploadQuery = {
+  cwd?: string;
+  sessionKey?: string;
+  selectionId?: string;
+};
+
 type UploadReply = {
   code: (status: number) => { send: (body: unknown) => unknown };
 };
@@ -444,8 +475,9 @@ async function receiveMultipartUploads(
   req: FastifyRequest,
   reply: UploadReply,
   user: CcwUser,
+  admission: UploadAdmissionController,
 ): Promise<unknown> {
-  const q = req.query as { cwd?: string } | undefined;
+  const q = req.query as UploadQuery | undefined;
   let root: string;
   try {
     root = resolveSafe(q?.cwd ?? user.workspaceRoot, user);
@@ -455,17 +487,19 @@ async function receiveMultipartUploads(
     return sendScoped(reply, e);
   }
 
-  const uploadDir = join(root, '.claudecode-web', 'uploads', new Date().toISOString().slice(0, 10));
+  let lease: UploadLease | undefined;
   const savedPaths: string[] = [];
   const saved: Array<{ name: string; path: string; relativePath: string; mime?: string; size: number }> = [];
-  const total = { bytes: 0 };
 
   try {
-    await mkdir(uploadDir, { recursive: true });
+    lease = await admission.acquire(admissionRequest(user, root, q));
+    const uploadDir = await ensureSafeUploadDirectory(root, new Date().toISOString().slice(0, 10), user.fsRoot || root);
     for await (const part of req.parts()) {
       if (part.type !== 'file') continue;
       const name = sanitizeFileName(part.filename);
-      const written = await writeUniqueUploadStream(uploadDir, name, part, total);
+      lease.reserveFile();
+      await assertSafeUploadDirectory(root, uploadDir, user.fsRoot || root);
+      const written = await writeUniqueUploadStream(uploadDir, name, part, lease);
       savedPaths.push(written.path);
       const rel = relative(root, written.path);
       saved.push({
@@ -481,7 +515,9 @@ async function receiveMultipartUploads(
   } catch (e) {
     await Promise.all(savedPaths.map((path) => unlink(path).catch(() => undefined)));
     const message = uploadErrorMessage(e);
-    return reply.code(400).send({ error: message });
+    return reply.code(uploadErrorStatus(e)).send({ error: message });
+  } finally {
+    lease?.release();
   }
 }
 
@@ -489,16 +525,17 @@ async function writeUniqueUploadStream(
   dir: string,
   name: string,
   part: MultipartFile,
-  total: { bytes: number },
+  lease: UploadLease,
 ): Promise<{ path: string; size: number }> {
   const reserved = await reserveUniqueFile(dir, name);
   let size = 0;
   const counter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       size += chunk.byteLength;
-      total.bytes += chunk.byteLength;
-      if (total.bytes > MAX_UPLOAD_TOTAL_BYTES) {
-        callback(new Error('Uploads are larger than the 50 MB total limit'));
+      try {
+        lease.addBytes(chunk.byteLength);
+      } catch (error) {
+        callback(error as Error);
         return;
       }
       callback(null, chunk);
@@ -537,6 +574,27 @@ function uploadErrorMessage(e: unknown): string {
   if (code === 'FST_REQ_FILE_TOO_LARGE') return 'A file is larger than 25 MB';
   if (code === 'FST_FILES_LIMIT') return `Upload at most ${MAX_UPLOAD_FILES} files at once`;
   return String((e as Error)?.message || e || 'Upload failed');
+}
+
+function uploadErrorStatus(e: unknown): number {
+  const code = (e as { code?: string } | undefined)?.code;
+  if (code === 'FST_REQ_FILE_TOO_LARGE' || code === 'FST_FILES_LIMIT') return 400;
+  const statusCode = Number((e as { statusCode?: unknown } | undefined)?.statusCode);
+  return Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599 ? statusCode : 400;
+}
+
+function hasMultipartContentType(req: FastifyRequest): boolean {
+  const contentType = req.headers['content-type'];
+  return typeof contentType === 'string' && /^multipart\/form-data(?:;|$)/i.test(contentType.trim());
+}
+
+function admissionRequest(user: CcwUser, root: string, q: UploadQuery | undefined) {
+  return {
+    userKey: `${user.via}:${user.openId}`,
+    cwd: root,
+    sessionKey: q?.sessionKey,
+    selectionId: q?.selectionId,
+  };
 }
 
 function sanitizeFileName(name: string | undefined): string {
