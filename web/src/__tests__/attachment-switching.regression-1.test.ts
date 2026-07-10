@@ -58,6 +58,19 @@ test('attachment scope remains compatible with legacy unscoped frames', () => {
   assert.equal(isMessageForAttachment({ type: 'sessions_update', sessions: [] }, attachment, 'session-b'), true);
 });
 
+test('matching attach id accepts ready when an expired runtime id is recovered to a new session id', () => {
+  const recoveredReady: ServerMessage = {
+    type: 'ready',
+    attachId: 'attach-b',
+    sessionId: 'session-recovered',
+    state: snapshot('session-recovered'),
+    replayMode: 'full',
+    historyStatus: 'loading',
+  };
+
+  assert.equal(isMessageForAttachment(recoveredReady, attachment, 'session-b'), true);
+});
+
 test('ready replay mode is explicit when supplied and inferred for legacy servers', () => {
   const explicit: Extract<ServerMessage, { type: 'ready' }> = {
     type: 'ready',

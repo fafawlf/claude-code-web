@@ -34,6 +34,12 @@ export function isMessageForAttachment(
   if (message.type === 'sessions_update') return true;
   if (message.attachId && message.attachId !== attachment.attachId) return false;
 
+  // A restored runtime id is only a hint: the server may recover the same
+  // provider transcript into a fresh runtime session. In that case the
+  // matching attachId is the authoritative response to this hello and the
+  // ready frame intentionally carries a new sessionId.
+  if (message.type === 'ready' && message.attachId === attachment.attachId) return true;
+
   const expectedSessionId = activeSessionId ?? attachment.requestedSessionId;
   if (!expectedSessionId) return true;
   const frameSessionId = sessionIdForMessage(message);
