@@ -31,10 +31,39 @@ type Props = {
   skin?: SkinId;
 };
 
-type ProjectView = ProjectEntry & {
+export type ProjectView = ProjectEntry & {
   name: string;
   sessions: StoredSession[];
 };
+
+export function buildProjectViews(
+  projects: ProjectEntry[],
+  projectSessions: ProjectSessions,
+  search: string,
+  activeId: string | null,
+): ProjectView[] {
+  const q = search.trim().toLowerCase();
+  return projects
+    .map((project) => {
+      const name = projectName(project.path);
+      const sessions = [...(projectSessions[project.path] ?? [])]
+        .sort((a, b) => b.lastModified - a.lastModified);
+      const matchesProject = !q || name.toLowerCase().includes(q) || project.path.toLowerCase().includes(q);
+      const visibleSessions = matchesProject
+        ? sessions
+        : sessions.filter((session) => {
+            if (session.sessionId === activeId) return true;
+            return [session.customTitle, session.summary, session.firstPrompt]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(q);
+          });
+      if (!matchesProject && visibleSessions.length === 0) return null;
+      return { ...project, name, sessions: visibleSessions };
+    })
+    .filter(Boolean) as ProjectView[];
+}
 
 export function Sidebar({
   cwd,
@@ -62,22 +91,10 @@ export function Sidebar({
   const [draft, setDraft] = useState('');
   const brand = skinBrand(skin);
 
-  const projectViews = useMemo<ProjectView[]>(() => {
-    const q = search.trim().toLowerCase();
-    return projects
-      .map((project) => {
-        const name = projectName(project.path);
-        const sessions = [...(projectSessions[project.path] ?? [])]
-          .sort((a, b) => b.lastModified - a.lastModified);
-        const filteredSessions = q
-          ? sessions.filter((s) => [s.customTitle, s.summary, s.firstPrompt].filter(Boolean).join(' ').toLowerCase().includes(q))
-          : sessions;
-        const matchesProject = !q || name.toLowerCase().includes(q) || project.path.toLowerCase().includes(q);
-        if (!matchesProject && filteredSessions.length === 0) return null;
-        return { ...project, name, sessions: matchesProject ? filteredSessions : filteredSessions };
-      })
-      .filter(Boolean) as ProjectView[];
-  }, [projectSessions, projects, search]);
+  const projectViews = useMemo(
+    () => buildProjectViews(projects, projectSessions, search, activeId),
+    [activeId, projectSessions, projects, search],
+  );
 
   return (
     <aside className={`app-sidebar skin-sidebar-${skin} w-72 shrink-0 bg-bg-raised border-r border-border-subtle flex flex-col h-full`}>
@@ -140,7 +157,7 @@ export function Sidebar({
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search projects…"
+            placeholder="Search projects or chats…"
             className="flex-1 text-sm outline-none bg-transparent text-text-primary placeholder:text-text-muted"
           />
         </div>
