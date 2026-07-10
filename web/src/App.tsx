@@ -19,6 +19,7 @@ import { InitialSetup } from './components/InitialSetup';
 import { CommandPalette, type CommandAction } from './components/CommandPalette';
 import { StatusBar } from './components/StatusBar';
 import { useKeyboard, isMod } from './hooks/useKeyboard';
+import { blocksGlobalAppShortcuts, resolveTopLevelModal, useModalBackground } from './hooks/useModalLayer';
 import { useToast } from './components/Toast';
 import type { SlashAction } from './components/SlashPalette';
 import { normalizeProjectPath, readPinnedProjects, readRecentProjects, rememberProject, togglePinnedProject, type ProjectEntry } from './projectHistory';
@@ -101,11 +102,26 @@ export function App() {
   const wsRef = useRef<WsClient | null>(null);
   const selectedNodeIdRef = useRef(selectedNodeId);
   const selectedProviderRef = useRef(selectedProvider);
+  const [backgroundRef, setBackgroundRef] = useState<HTMLDivElement | null>(null);
+
+  const activeModal = resolveTopLevelModal({
+    setup: !setupSeen,
+    permission: !!nonEditPermReq,
+    plan: !!planProposed,
+    project: projectLauncherOpen,
+    palette: paletteOpen,
+  });
+  useModalBackground(backgroundRef, activeModal !== null);
 
   useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
   useEffect(() => { selectedProviderRef.current = selectedProvider; }, [selectedProvider]);
   useEffect(() => installMobileViewportVars(), []);
   useEffect(() => () => projectRequestsRef.current.dispose(), []);
+  useEffect(() => {
+    if (activeModal !== 'setup' && activeModal !== 'permission' && activeModal !== 'plan') return;
+    setProjectLauncherOpen(false);
+    setPaletteOpen(false);
+  }, [activeModal]);
 
   const commitState = useCallback((nextState: ChatState | ((prev: ChatState) => ChatState)) => {
     const next = typeof nextState === 'function' ? nextState(stateRef.current) : nextState;
@@ -728,6 +744,17 @@ export function App() {
     pushToast(`Skin: ${skinById(next).label}`, { level: 'success', icon: 'palette' });
   }, [pushToast]);
 
+  const openCommandPalette = useCallback(() => {
+    setSidebarOpen(false);
+    setProjectLauncherOpen(false);
+    setPaletteOpen(true);
+  }, []);
+  const openProjectLauncher = useCallback(() => {
+    setSidebarOpen(false);
+    setPaletteOpen(false);
+    setProjectLauncherOpen(true);
+  }, []);
+
   const cycleMode = useCallback((next: PermissionMode) => setMode(next), [setMode]);
 
   const openRename = useCallback(() => {
@@ -737,7 +764,7 @@ export function App() {
   const handlePaletteAction = useCallback((a: CommandAction) => {
     switch (a.kind) {
       case 'new-chat': newSession({ cwd: state.state?.cwd }); break;
-      case 'open-cwd': setSidebarOpen(false); setProjectLauncherOpen(true); break;
+      case 'open-cwd': openProjectLauncher(); break;
       case 'rename': openRename(); break;
       case 'refresh': refreshSessions(state.state?.cwd); break;
       case 'set-model': setModel(a.id); break;
@@ -750,20 +777,26 @@ export function App() {
         break;
       }
     }
-  }, [allKnownSessions, newSession, openRename, sessionProject, state.state?.cwd, setModel, setSkin, setMode, refreshSessions]);
+  }, [allKnownSessions, newSession, openProjectLauncher, openRename, sessionProject, state.state?.cwd, setModel, setSkin, setMode, refreshSessions]);
 
   const onSlash = useCallback((a: SlashAction) => {
     if (a.kind === 'new') newSession({ cwd: state.state?.cwd });
-    else if (a.kind === 'cwd') { setSidebarOpen(false); setProjectLauncherOpen(true); }
+    else if (a.kind === 'cwd') openProjectLauncher();
     else if (a.kind === 'model') setModel(a.id);
     else if (a.kind === 'mode') setMode(a.mode);
     else if (a.kind === 'history') setSidebarOpen(true);
-  }, [newSession, state.state?.cwd, setModel, setMode]);
+  }, [newSession, openProjectLauncher, state.state?.cwd, setModel, setMode]);
 
   useKeyboard(useCallback((e: KeyboardEvent) => {
-    if (e.key === 'k' && isMod(e)) { e.preventDefault(); setPaletteOpen((v) => !v); return; }
+    const appShortcut = isMod(e) && ['k', 'n', 'o'].includes(e.key.toLowerCase());
+    if (blocksGlobalAppShortcuts(activeModal)) {
+      if (appShortcut) e.preventDefault();
+      if (activeModal === 'palette' && e.key.toLowerCase() === 'k' && isMod(e)) setPaletteOpen(false);
+      return;
+    }
+    if (e.key === 'k' && isMod(e)) { e.preventDefault(); openCommandPalette(); return; }
     if (e.key === 'n' && isMod(e)) { e.preventDefault(); newSession({ cwd: state.state?.cwd }); return; }
-    if (e.key === 'o' && isMod(e)) { e.preventDefault(); setSidebarOpen(false); setProjectLauncherOpen(true); return; }
+    if (e.key === 'o' && isMod(e)) { e.preventDefault(); openProjectLauncher(); return; }
     if (e.shiftKey && e.key === 'Tab' && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLInputElement)) {
       e.preventDefault();
       const cur = state.state?.permissionMode ?? 'default';
@@ -771,7 +804,7 @@ export function App() {
       const next = MODE_ORDER[(idx + 1) % MODE_ORDER.length];
       cycleMode(next);
     }
-  }, [state.state?.permissionMode, state.state?.cwd, cycleMode, newSession]));
+  }, [activeModal, state.state?.permissionMode, state.state?.cwd, cycleMode, newSession, openCommandPalette, openProjectLauncher]));
 
   const renameCurrent = useCallback(async (title: string) => {
     if (!state.state?.claudeSessionId || !token) return;
@@ -889,12 +922,17 @@ export function App() {
   return (
     <div className="app-shell flex h-full">
       <div
-        className={`mobile-sidebar-backdrop ${sidebarOpen ? 'is-open' : ''}`}
-        onClick={() => setSidebarOpen(false)}
-        aria-hidden
-      />
-      <div className={`sidebar-shell ${sidebarOpen ? 'is-open' : ''}`}>
-        <Sidebar
+        ref={setBackgroundRef}
+        className="app-background flex h-full w-full min-w-0"
+        aria-hidden={activeModal !== null ? true : undefined}
+      >
+        <div
+          className={`mobile-sidebar-backdrop ${sidebarOpen ? 'is-open' : ''}`}
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden
+        />
+        <div className={`sidebar-shell ${sidebarOpen ? 'is-open' : ''}`}>
+          <Sidebar
           cwd={currentCwd}
           projects={projectEntries}
           projectSessions={projectSessions}
@@ -910,25 +948,13 @@ export function App() {
           onEndActivity={closeLiveSession}
           onRefresh={() => refreshProjects(projectEntries, currentCwd)}
           onRename={renameInList}
-          onOpenCommandPalette={() => { setSidebarOpen(false); setPaletteOpen(true); }}
-          onOpenProject={() => { setSidebarOpen(false); setProjectLauncherOpen((v) => !v); }}
+          onOpenCommandPalette={openCommandPalette}
+          onOpenProject={openProjectLauncher}
           connected={connected}
           skin={skin}
-        />
-      </div>
-      {projectLauncherOpen && (
-        <ProjectLauncher
-          token={token!}
-          current={currentCwd || defaultCwd || '/root'}
-          recents={recentProjects}
-          pinned={pinnedProjects}
-          busy={state.busy}
-          onClose={() => setProjectLauncherOpen(false)}
-          onPick={(cwd) => { setSidebarOpen(false); newSession({ cwd }); }}
-          onTogglePin={toggleProjectPin}
-        />
-      )}
-      <main className="flex-1 flex flex-col min-w-0 relative">
+          />
+        </div>
+        <main className="flex-1 flex flex-col min-w-0 relative">
         <TopBar
           state={state.state}
           cwd={currentCwd}
@@ -939,7 +965,7 @@ export function App() {
           selectedNodeId={selectedNodeId}
           selectedProvider={selectedProvider}
           onOpenSidebar={() => setSidebarOpen(true)}
-          onOpenProject={() => { setSidebarOpen(false); setProjectLauncherOpen((v) => !v); }}
+          onOpenProject={openProjectLauncher}
           onSelectNodeProvider={selectNodeProvider}
           onSelectModel={setModel}
           skin={skin}
@@ -963,7 +989,7 @@ export function App() {
         {showAttachmentPlaceholder ? (
           <AttachmentPlaceholder phase={attachment.phase} onRetry={retryAttachment} />
         ) : showEmpty ? (
-          <EmptyState skin={skin} cwd={currentCwd} onOpenProject={() => setProjectLauncherOpen(true)} />
+          <EmptyState skin={skin} cwd={currentCwd} onOpenProject={openProjectLauncher} />
         ) : (
           <div className="relative flex flex-1 min-h-0">
             <MessageList
@@ -1031,8 +1057,21 @@ export function App() {
           onCycleMode={cycleMode}
           onSetMode={setMode}
         />
-      </main>
-      {nonEditPermReq && (
+        </main>
+      </div>
+      {activeModal === 'project' && (
+        <ProjectLauncher
+          token={token ?? ''}
+          current={currentCwd || defaultCwd || '/root'}
+          recents={recentProjects}
+          pinned={pinnedProjects}
+          busy={state.busy}
+          onClose={() => setProjectLauncherOpen(false)}
+          onPick={(cwd) => { setSidebarOpen(false); newSession({ cwd }); }}
+          onTogglePin={toggleProjectPin}
+        />
+      )}
+      {activeModal === 'permission' && nonEditPermReq && (
         <PermissionModal
           req={nonEditPermReq}
           onAllow={(scope) => {
@@ -1045,9 +1084,9 @@ export function App() {
           }}
         />
       )}
-      {planProposed && <PlanApprovalModal plan={planProposed.plan} onApprove={onPlanApprove} onReject={onPlanReject} />}
+      {activeModal === 'plan' && planProposed && <PlanApprovalModal plan={planProposed.plan} onApprove={onPlanApprove} onReject={onPlanReject} />}
       <CommandPalette
-        open={paletteOpen}
+        open={activeModal === 'palette'}
         onClose={() => setPaletteOpen(false)}
         state={state.state}
         sessions={allKnownSessions}
@@ -1055,7 +1094,7 @@ export function App() {
         currentProvider={state.state?.provider ?? selectedProvider}
         onAction={handlePaletteAction}
       />
-      {!setupSeen && (
+      {activeModal === 'setup' && (
         <InitialSetup
           cwd={currentCwd}
           home={serverInfo?.home}
@@ -1065,6 +1104,7 @@ export function App() {
           onDone={dismissSetup}
           onOpenProject={() => {
             dismissSetup();
+            setPaletteOpen(false);
             setProjectLauncherOpen(true);
           }}
         />

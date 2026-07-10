@@ -15,7 +15,7 @@
 
     --text-primary: #f0e8d9;
     --text-secondary: #b5a898;
-    --text-muted: #7a7065;
+    --text-muted: #a49788;
     --text-inverse: #1a1714;
 
     --accent: #d97757;
@@ -81,7 +81,7 @@
 
     --text-primary: #181818;
     --text-secondary: #4a4f55;
-    --text-muted: #858585;
+    --text-muted: #666666;
     --text-inverse: #ffffff;
 
     --accent: #07c160;
@@ -106,8 +106,8 @@
     --border-default: #e8b0c8;
 
     --text-primary: #5f3d5c;
-    --text-secondary: #8a637e;
-    --text-muted: #bd8ca6;
+    --text-secondary: #76536e;
+    --text-muted: #8b637a;
     --text-inverse: #fffafd;
 
     --accent: #f0a8c8;
@@ -210,6 +210,41 @@
 
   textarea, input[type="text"], input:not([type]) {
     caret-color: var(--accent);
+  }
+
+  :where(button, a, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent-hi);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+
+  .animate-ping,
+  .animate-pulse,
+  .animate-pulse-soft,
+  .animate-spin,
+  .cursor-bar {
+    animation: none !important;
+  }
+
+  .animate-modal-in,
+  .animate-toast-in,
+  .animate-fade-up,
+  .animate-backdrop-in {
+    animation: none !important;
+    transform: none !important;
+  }
+
+  .tool-use-card:hover {
+    transform: none !important;
   }
 }
 
@@ -842,6 +877,14 @@
   flex: 0 0 auto;
 }
 
+.app-background {
+  min-width: 0;
+}
+
+.modal-action {
+  min-height: 44px;
+}
+
 .mobile-sidebar-backdrop,
 .mobile-sidebar-button {
   display: none;
@@ -918,7 +961,7 @@
     overflow: hidden;
   }
 
-  .app-shell > main {
+  .app-background > main {
     width: 100%;
     max-width: 100%;
     overflow: hidden;
@@ -990,6 +1033,12 @@
     flex: 0 0 auto;
     height: 32px;
     padding-inline: 9px;
+  }
+
+  .app-topbar button,
+  .app-sidebar-header > button {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .app-topbar .chip span.font-mono {

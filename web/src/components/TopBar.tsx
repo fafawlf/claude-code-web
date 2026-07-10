@@ -54,7 +54,7 @@ export function TopBar(p: Props) {
           </button>
         )}
 
-        <button onClick={p.onOpenProject} className="chip" title={p.cwd}>
+        <button onClick={p.onOpenProject} className="chip" title={p.cwd} aria-label="Choose project folder">
           <Icon name="folder" size={14} className="opacity-80" />
           <span className="font-mono text-[11px]">{cwdShort}</span>
           <Icon name="chev-down" size={12} className="opacity-50" />
@@ -119,7 +119,7 @@ export function TopBar(p: Props) {
               placeholder="Session title…"
             />
           ) : p.sessionTitle ? (
-            <button onClick={() => { setRenaming(true); setDraft(p.sessionTitle ?? ''); }} className="topbar-session-title px-2 py-1 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover max-w-[220px] truncate" title="rename">
+            <button onClick={() => { setRenaming(true); setDraft(p.sessionTitle ?? ''); }} className="topbar-session-title px-2 py-1 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover max-w-[220px] truncate" title="rename" aria-label={`Rename session ${p.sessionTitle}`}>
               {p.sessionTitle}
             </button>
           ) : null}

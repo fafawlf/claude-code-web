@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useId, useRef } from 'react';
 import type { ServerPermissionRequest } from '../types';
 import { Icon, type IconName } from './Icon';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -18,6 +18,7 @@ const TOOL_ICON: Record<string, IconName> = {
 
 export function PermissionModal({ req, onAllow, onDeny }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   useFocusTrap(ref, onDeny);
 
   const icon = TOOL_ICON[req.toolName] ?? 'shield';
@@ -25,14 +26,14 @@ export function PermissionModal({ req, onAllow, onDeny }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 bg-[rgba(20,16,15,.65)] backdrop-blur-[6px] flex items-center justify-center p-4 animate-backdrop-in">
-      <div ref={ref} className="w-full max-w-[560px] bg-bg-surface rounded-lg shadow-modal overflow-hidden animate-modal-in" role="dialog" aria-modal="true">
+      <div ref={ref} tabIndex={-1} className="w-full max-w-[560px] bg-bg-surface rounded-lg shadow-modal overflow-hidden animate-modal-in" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="px-6 pt-5 pb-3.5 border-b border-border-subtle">
           <div className="w-9 h-9 rounded-full bg-bg-accent-soft text-accent grid place-items-center mb-3">
             <Icon name={icon} size={18} />
           </div>
-          <div className="text-lg font-medium text-text-primary">
+          <h2 id={titleId} className="text-lg font-medium text-text-primary">
             {req.title ?? `Claude wants to use ${req.toolName}`}
-          </div>
+          </h2>
           {req.description && <div className="text-xs text-text-muted mt-1">{req.description}</div>}
         </div>
         <div className="px-6 py-4.5">
@@ -45,9 +46,9 @@ export function PermissionModal({ req, onAllow, onDeny }: Props) {
           )}
         </div>
         <div className="px-6 py-4 bg-bg-base/50 border-t border-border-subtle flex gap-2 justify-end">
-          <button onClick={onDeny} className="px-3.5 py-2 text-sm font-medium rounded-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-all duration-hover">Deny</button>
-          <button onClick={() => onAllow('once')} className="px-3.5 py-2 text-sm font-medium rounded-sm text-text-primary border border-border hover:bg-bg-hover hover:border-accent hover:text-accent-hi transition-all duration-hover">Allow once</button>
-          <button onClick={() => onAllow('session')} className="px-3.5 py-2 text-sm font-medium rounded-sm bg-accent text-text-inverse hover:bg-accent-hi transition-all duration-hover">Allow for session</button>
+          <button onClick={onDeny} className="modal-action px-3.5 py-2 text-sm font-medium rounded-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-all duration-hover">Deny</button>
+          <button onClick={() => onAllow('once')} className="modal-action px-3.5 py-2 text-sm font-medium rounded-sm text-text-primary border border-border hover:bg-bg-hover hover:border-accent hover:text-accent-hi transition-all duration-hover">Allow once</button>
+          <button onClick={() => onAllow('session')} className="modal-action px-3.5 py-2 text-sm font-medium rounded-sm bg-accent text-text-inverse hover:bg-accent-hi transition-all duration-hover">Allow for session</button>
         </div>
       </div>
     </div>

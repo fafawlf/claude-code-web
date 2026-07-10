@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { normalizeProjectPath, projectName, type ProjectEntry } from '../projectHistory';
 import { Icon } from './Icon';
 import { appUrl } from '../appUrl';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 type DirsResponse = { path: string; parent: string | null; dirs: string[] };
 
@@ -26,18 +27,21 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
+  useFocusTrap(ref, () => {
+    if (newFolderOpen) {
+      setNewFolderOpen(false);
+      setNewFolderName('');
+      return;
+    }
+    onClose();
+  }, true, inputRef);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (newFolderOpen) {
-          e.preventDefault();
-          setNewFolderOpen(false);
-          setNewFolderName('');
-          return;
-        }
-        onClose();
-      }
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) choose(selectedPath || browsePath);
     };
     window.addEventListener('keydown', onKey);
@@ -106,7 +110,8 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
   };
 
   return (
-    <div className="project-launcher fixed left-1/2 top-[7vh] z-50 w-[760px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-hidden rounded-lg border border-border-subtle bg-bg-surface shadow-modal" role="dialog" aria-modal="true" aria-label="Project Finder">
+    <div ref={ref} tabIndex={-1} className="project-launcher fixed left-1/2 top-[7vh] z-50 w-[760px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-hidden rounded-lg border border-border-subtle bg-bg-surface shadow-modal" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId}>
+      <span id={descriptionId} className="sr-only">Project Finder</span>
       <div className="h-11 border-b border-border-subtle bg-bg-raised/70 px-4 flex items-center gap-3">
         <div className="flex items-center gap-1.5" aria-hidden>
           <span className="w-3 h-3 rounded-full bg-danger/80" />
@@ -114,7 +119,7 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
           <span className="w-3 h-3 rounded-full bg-success/80" />
         </div>
         <div className="min-w-0 flex-1 text-center">
-          <div className="text-sm font-medium text-text-primary">Choose project folder</div>
+          <h2 id={titleId} className="text-sm font-medium text-text-primary">Choose project folder</h2>
         </div>
         <button
           onClick={onClose}
@@ -160,7 +165,7 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
                 onSubmit={(e) => { e.preventDefault(); openPath(input); }}
               >
                 <input
-                  autoFocus
+                  ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   className="w-full bg-bg-base border border-border-subtle rounded-sm px-3 py-1.5 text-sm font-mono text-text-primary outline-none focus:border-accent"

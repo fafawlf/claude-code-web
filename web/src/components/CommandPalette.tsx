@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { AgentProviderId, PermissionMode, SessionStateSnapshot, StoredSession } from '../types';
 import { defaultModelForProvider, modelOptionsForProvider, modeLabel } from '../types';
 import type { SkinId } from '../skins';
@@ -42,8 +42,9 @@ export function CommandPalette({ open, onClose, state, sessions, currentSkin, cu
   const [i, setI] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const titleId = useId();
 
-  useFocusTrap(ref, onClose, open);
+  useFocusTrap(ref, onClose, open, inputRef);
 
   useEffect(() => { if (open) { setQ(''); setI(0); setTimeout(() => inputRef.current?.focus(), 0); } }, [open]);
 
@@ -135,8 +136,6 @@ export function CommandPalette({ open, onClose, state, sessions, currentSkin, cu
         e.preventDefault();
         const row = filtered[i];
         if (row) { onAction(row.action); onClose(); }
-      } else if (e.key === 'Escape') {
-        e.preventDefault(); onClose();
       }
     };
     window.addEventListener('keydown', onKey, true);
@@ -159,11 +158,14 @@ export function CommandPalette({ open, onClose, state, sessions, currentSkin, cu
     <div className="fixed inset-0 z-[60] bg-[rgba(20,16,15,.55)] backdrop-blur-[8px] flex justify-center pt-[15vh] animate-backdrop-in" onClick={onClose}>
       <div
         ref={ref}
+        tabIndex={-1}
         className="w-[640px] max-h-[520px] bg-bg-surface rounded-lg shadow-modal overflow-hidden flex flex-col animate-modal-in"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
       >
+        <h2 id={titleId} className="sr-only">Command palette</h2>
         <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border-subtle">
           <Icon name="search" size={18} className="text-text-muted" />
           <input

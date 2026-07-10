@@ -247,7 +247,7 @@ function ProjectBlock({
   const draftChat = activeDraftChat(project, activeSession, activeDraftTitle);
   return (
     <div className={`project-block pt-2 ${activeProject ? 'project-active' : ''}`}>
-      <div className={`project-folder-row group flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm ${activeProject ? 'text-text-primary' : 'text-text-secondary'} hover:bg-bg-hover transition-colors duration-hover`}>
+      <div className={`project-folder-row group flex min-h-11 items-center gap-1.5 px-2.5 py-1.5 rounded-sm ${activeProject ? 'text-text-primary' : 'text-text-secondary'} hover:bg-bg-hover transition-colors duration-hover sm:min-h-0`}>
         <button
           onClick={() => onNewInProject(project.path)}
           className="min-w-0 flex-1 flex items-center gap-2 text-left"
@@ -258,7 +258,7 @@ function ProjectBlock({
         </button>
         <button
           onClick={() => onNewInProject(project.path)}
-          className="w-6 h-6 rounded-sm grid place-items-center text-text-muted opacity-0 group-hover:opacity-100 hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
+          className="grid min-h-11 min-w-11 place-items-center rounded-sm text-text-muted opacity-100 hover:text-text-primary hover:bg-bg-base transition-all duration-hover sm:h-6 sm:min-h-0 sm:w-6 sm:min-w-0 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
           title={`New chat in ${project.name}`}
           aria-label={`New chat in ${project.name}`}
         >
@@ -279,7 +279,7 @@ function ProjectBlock({
           </div>
         )}
         {project.sessions.length === 0 && !draftChat ? (
-          <div className="project-empty px-2 py-1.5 text-xs text-text-muted/70">No chats</div>
+          <div className="project-empty px-2 py-1.5 text-xs text-text-muted">No chats</div>
         ) : project.sessions.map((session) => {
           const active = session.sessionId === activeId;
           const title = session.customTitle ?? session.summary ?? session.firstPrompt ?? '(untitled)';
@@ -301,24 +301,26 @@ function ProjectBlock({
                 <>
                   <button
                     onClick={() => onResume(session.sessionId, title, project.path)}
-                    className={`project-chat-row ${active ? 'project-chat-active' : ''} w-full grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors duration-hover ${active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'}`}
+                    className={`project-chat-row ${active ? 'project-chat-active' : ''} w-full min-h-11 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md py-1.5 pl-2.5 pr-[5.75rem] text-left transition-colors duration-hover sm:min-h-0 sm:px-2.5 ${active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'}`}
                     title={title}
                   >
                     <span className="truncate text-sm">{title}</span>
                     <span className="text-[11px] text-text-muted tabular-nums">{formatAge(session.lastModified)}</span>
                   </button>
-                  <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-hover bg-bg-hover pl-1">
+                  <div className="project-chat-actions absolute inset-y-0 right-0 flex items-center gap-0.5 bg-bg-hover pl-1 opacity-100 transition-opacity duration-hover sm:inset-y-auto sm:top-1 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
                     <button
                       onClick={(e) => { e.stopPropagation(); onView(session.sessionId, title, project.path); }}
-                      className="w-[21px] h-[21px] rounded grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
+                      className="session-action-button grid min-h-11 min-w-11 place-items-center rounded text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover sm:h-[21px] sm:min-h-0 sm:w-[21px] sm:min-w-0"
                       title="view read-only"
+                      aria-label={`View ${title} read-only`}
                     >
                       <Icon name="circle-dot" size={11} />
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); onStartRename(session); }}
-                      className="w-[21px] h-[21px] rounded grid place-items-center text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover"
+                      className="session-action-button grid min-h-11 min-w-11 place-items-center rounded text-text-muted hover:text-text-primary hover:bg-bg-base transition-all duration-hover sm:h-[21px] sm:min-h-0 sm:w-[21px] sm:min-w-0"
                       title="rename"
+                      aria-label={`Rename ${title}`}
                     >
                       <Icon name="pencil" size={11} />
                     </button>
