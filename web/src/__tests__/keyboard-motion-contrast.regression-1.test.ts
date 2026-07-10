@@ -5,6 +5,7 @@ import React, { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Sidebar } from '../components/Sidebar';
 import { TopBar } from '../components/TopBar';
+import { ActivityRow } from '../components/ActivitySection';
 
 (globalThis as unknown as { React: typeof React }).React = React;
 
@@ -35,6 +36,22 @@ test('session and top-bar actions remain visible to keyboard and touch users', (
   assert.match(sidebar, /min-w-11/);
   assert.match(sidebar, /aria-label="View Review auth read-only"/);
   assert.match(sidebar, /aria-label="Rename Review auth"/);
+
+  const activity = renderToStaticMarkup(createElement(ActivityRow, {
+    session: {
+      sessionId: 'live-1',
+      title: 'Fix checkout',
+      subtitle: '~/repo · now',
+      status: 'working',
+      statusLabel: 'Working',
+      tone: 'info',
+      lastEventAt: 1,
+    },
+    onOpen: () => {},
+    onEnd: () => {},
+  }));
+  assert.match(activity, /min-h-11/);
+  assert.match(activity, /group-focus-within:opacity-100/);
 
   const topbar = renderToStaticMarkup(createElement(TopBar, {
     state: null,
