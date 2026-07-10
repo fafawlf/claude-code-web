@@ -158,6 +158,36 @@ test('canary cookie setter requires both the random capability and an admin sess
   }
 });
 
+test('browser error telemetry stays authenticated and bounded', async () => {
+  const s = await setup();
+  try {
+    const anonymous = await s.app.inject({
+      method: 'POST',
+      url: '/api/client-errors',
+      payload: { kind: 'error', message: 'boom' },
+    });
+    assert.equal(anonymous.statusCode, 401);
+
+    const accepted = await s.app.inject({
+      method: 'POST',
+      url: '/api/client-errors',
+      headers: { cookie: s.cookies.alice },
+      payload: { kind: 'error', message: `boom\n${'x'.repeat(800)}`, source: 'bundle.js' },
+    });
+    assert.equal(accepted.statusCode, 204);
+
+    const missing = await s.app.inject({
+      method: 'POST',
+      url: '/api/client-errors',
+      headers: { cookie: s.cookies.alice },
+      payload: { kind: 'error' },
+    });
+    assert.equal(missing.statusCode, 400);
+  } finally {
+    await s.cleanup();
+  }
+});
+
 test('directory browsing is confined to the user workspace', async () => {
   const s = await setup();
   try {

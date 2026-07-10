@@ -159,6 +159,29 @@ export function registerApi(
     return reply.code(204).send();
   });
 
+  app.post('/api/client-errors', async (req, reply) => {
+    const user = userOf(req);
+    const body = req.body as Partial<{
+      kind: string;
+      message: string;
+      source: string;
+      line: number;
+      column: number;
+    }> | undefined;
+    const message = cleanTelemetryText(body?.message, 500);
+    if (!message) return reply.code(400).send({ error: 'message required' });
+    req.log.warn({
+      event: 'client_error',
+      userId: user.openId,
+      kind: cleanTelemetryText(body?.kind, 32) || 'error',
+      message,
+      source: cleanTelemetryText(body?.source, 160) || undefined,
+      line: safeTelemetryCoordinate(body?.line),
+      column: safeTelemetryCoordinate(body?.column),
+    }, 'browser error');
+    return reply.code(204).send();
+  });
+
   app.get('/api/sessions', async (req, reply) => {
     const user = userOf(req);
     const q = req.query as { cwd?: string; limit?: string } | undefined;
@@ -606,6 +629,14 @@ function sanitizeFileName(name: string | undefined): string {
     clean = clean.slice(0, 128 - ext.length) + ext;
   }
   return clean;
+}
+
+function cleanTelemetryText(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.replace(/[\r\n]+/g, ' ').trim().slice(0, max) : '';
+}
+
+function safeTelemetryCoordinate(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : undefined;
 }
 
 function decodeUploadBytes(dataBase64: string | undefined): Buffer {

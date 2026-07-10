@@ -14,12 +14,15 @@ import '@fontsource/nunito/800.css';
 import '@fontsource/nunito/900.css';
 import './index.css';
 import { readSkin } from './skins';
+import { installClientErrorReporting } from './clientErrors';
 
 try {
   document.documentElement.dataset.skin = readSkin();
 } catch {
   document.documentElement.dataset.skin = 'warm';
 }
+
+installClientErrorReporting();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
