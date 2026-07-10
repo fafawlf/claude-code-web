@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from './Icon';
 
 type ToastLevel = 'info' | 'success' | 'error';
@@ -26,9 +26,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setItems((prev) => [...prev, t]);
     setTimeout(() => setItems((prev) => prev.filter((x) => x.id !== id)), 4000);
   }, []);
+  const value = useMemo<Ctx>(() => ({ push }), [push]);
 
   return (
-    <ToastCtx.Provider value={{ push }}>
+    <ToastCtx.Provider value={value}>
       {children}
       <div className="fixed top-14 right-6 z-[80] flex flex-col gap-2 pointer-events-none">
         {items.map((t) => (
