@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { ServerAttachmentScope, ServerMessage, ServerSdkEventBatch } from './protocol.js';
 import type { SessionEvent } from './session/ClaudeSession.js';
+import { boundReplayValue } from './session/ReplayBuffer.js';
 
 export const WS_REPLAY_FRAME_MAX_BYTES = 256 * 1024;
 export const WS_BUFFER_SOFT_BYTES = 1024 * 1024;
@@ -32,7 +33,7 @@ export class WsSendQueue {
 
   constructor(private readonly socket: WsLike) {}
 
-  send(message: ServerMessage, priority: Priority = 'control', generation?: number): boolean {
+  send(message: ServerMessage, priority: Priority = priorityForMessage(message), generation?: number): boolean {
     if (this.stopped || this.socket.readyState !== this.socket.OPEN) return false;
     let payload: string;
     try {
@@ -128,45 +129,153 @@ export class WsSendQueue {
   }
 }
 
-/** Build replay batches close to, but normally never above, the transport cap.
- * A single SDK event is indivisible in the current backwards-compatible wire
- * protocol; an individually oversized event is therefore emitted alone rather
- * than silently dropping or corrupting transcript content. */
-export function buildReplayBatches(
+export type ReplayBatchBuildOptions = {
+  maxBytes?: number;
+  signal?: AbortSignal;
+  /** Cooperative scheduling budget. Primarily exposed for deterministic tests. */
+  maxEventsPerSlice?: number;
+  maxSliceMs?: number;
+};
+
+/**
+ * Build replay frames incrementally. Each SDK event is serialized once for
+ * sizing, and construction yields to the event loop between short slices so a
+ * large transcript cannot monopolize the server thread.
+ */
+export async function* buildReplayBatches(
   events: SessionEvent[],
   scope: ServerAttachmentScope,
-  maxBytes = WS_REPLAY_FRAME_MAX_BYTES
-): ServerSdkEventBatch[] {
-  const batches: ServerSdkEventBatch[] = [];
-  let current: Array<{ id: number; event: unknown }> = [];
+  options: ReplayBatchBuildOptions | number = {}
+): AsyncGenerator<ServerSdkEventBatch, void, void> {
+  const normalized = typeof options === 'number' ? { maxBytes: options } : options;
+  const maxBytes = normalized.maxBytes ?? WS_REPLAY_FRAME_MAX_BYTES;
+  const maxEventsPerSlice = Math.max(1, normalized.maxEventsPerSlice ?? 64);
+  const maxSliceMs = Math.max(1, normalized.maxSliceMs ?? 8);
+  const signal = normalized.signal;
 
-  const flush = () => {
-    if (current.length === 0) return;
-    batches.push({ type: 'sdk_events_batch', ...scope, events: current });
+  const emptyComplete: ServerSdkEventBatch = {
+    type: 'sdk_events_batch',
+    ...scope,
+    events: [],
+    replayComplete: true,
+  };
+  const emptyCompleteBytes = serializedBytes(emptyComplete);
+  if (emptyCompleteBytes > maxBytes) {
+    throw new RangeError(`Replay scope exceeds frame limit (${emptyCompleteBytes} > ${maxBytes} bytes)`);
+  }
+
+  let current: Array<{ id: number; event: unknown }> = [];
+  let currentEntriesBytes = 0;
+  let pending: ServerSdkEventBatch | undefined;
+  let eventsInSlice = 0;
+  let sliceStartedAt = performance.now();
+
+  const takeCurrent = (): ServerSdkEventBatch | undefined => {
+    if (current.length === 0) return undefined;
+    const batch: ServerSdkEventBatch = { type: 'sdk_events_batch', ...scope, events: current };
     current = [];
+    currentEntriesBytes = 0;
+    return batch;
   };
 
   for (const entry of events) {
-    const wireEntry = { id: entry.id, event: entry.event as unknown };
-    const candidate: ServerSdkEventBatch = {
-      type: 'sdk_events_batch',
-      ...scope,
-      events: [...current, wireEntry],
-      // Account for the largest form of the final frame while sizing.
-      replayComplete: true,
-    };
-    if (current.length > 0 && Buffer.byteLength(JSON.stringify(candidate)) > maxBytes) flush();
+    if (signal?.aborted) return;
+    const { wireEntry, bytes: entryBytes } = fitWireEntry(entry, maxBytes - emptyCompleteBytes);
+    const candidateBytes = emptyCompleteBytes
+      + currentEntriesBytes
+      + entryBytes
+      + (current.length > 0 ? current.length : 0);
+
+    if (current.length > 0 && candidateBytes > maxBytes) {
+      const complete = takeCurrent()!;
+      if (pending) {
+        yield pending;
+        await yieldToEventLoop();
+        if (signal?.aborted) return;
+        eventsInSlice = 0;
+        sliceStartedAt = performance.now();
+      }
+      pending = complete;
+    }
     current.push(wireEntry);
-    const single: ServerSdkEventBatch = {
-      type: 'sdk_events_batch',
-      ...scope,
-      events: current,
-      replayComplete: true,
-    };
-    if (current.length === 1 && Buffer.byteLength(JSON.stringify(single)) > maxBytes) flush();
+    currentEntriesBytes += entryBytes;
+
+    eventsInSlice += 1;
+    if (eventsInSlice >= maxEventsPerSlice || performance.now() - sliceStartedAt >= maxSliceMs) {
+      await yieldToEventLoop();
+      if (signal?.aborted) return;
+      eventsInSlice = 0;
+      sliceStartedAt = performance.now();
+    }
   }
-  flush();
-  if (batches.length === 0) batches.push({ type: 'sdk_events_batch', ...scope, events: [] });
-  batches[batches.length - 1]!.replayComplete = true;
-  return batches;
+
+  const finalCurrent = takeCurrent();
+  if (finalCurrent) {
+    if (pending) {
+      yield pending;
+      await yieldToEventLoop();
+      if (signal?.aborted) return;
+    }
+    pending = finalCurrent;
+  }
+  if (signal?.aborted) return;
+  const finalBatch = pending ?? emptyComplete;
+  finalBatch.replayComplete = true;
+  yield finalBatch;
+}
+
+function priorityForMessage(message: ServerMessage): Priority {
+  return message.type === 'sdk_event' || message.type === 'sdk_events_batch' ? 'replay' : 'control';
+}
+
+function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+
+function fitWireEntry(
+  entry: SessionEvent,
+  maxEntryBytes: number
+): { wireEntry: { id: number; event: unknown }; bytes: number } {
+  const make = (event: unknown) => {
+    const wireEntry = { id: entry.id, event };
+    return { wireEntry, bytes: serializedBytes(wireEntry) };
+  };
+
+  let candidate = make(entry.event as unknown);
+  if (candidate.bytes <= maxEntryBytes) return candidate;
+
+  // ReplayBuffer already bounds individual strings, but an event containing
+  // many large fields can still exceed a transport frame. Preserve as much of
+  // its structure as possible before falling back to an explicit placeholder.
+  for (const maxStringChars of [8_192, 2_048, 512, 128]) {
+    candidate = make(boundReplayValue(entry.event, maxStringChars, true));
+    if (candidate.bytes <= maxEntryBytes) return candidate;
+  }
+
+  const originalType = isRecord(entry.event) && typeof entry.event.type === 'string'
+    ? entry.event.type
+    : 'SDK';
+  candidate = make({
+    type: 'assistant',
+    message: {
+      content: [{
+        type: 'text',
+        text: `[Historical ${originalType} event omitted because it exceeded the replay frame limit.]`,
+      }],
+    },
+    replayTruncated: true,
+    originalType,
+  });
+  if (candidate.bytes > maxEntryBytes) {
+    throw new RangeError(`Replay frame limit is too small for event ${entry.id}`);
+  }
+  return candidate;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }

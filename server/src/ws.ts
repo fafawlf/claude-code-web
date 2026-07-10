@@ -78,7 +78,7 @@ export function registerWs(
     const scopedSend = (
       ctx: AttachmentContext,
       message: ServerMessage,
-      priority: 'control' | 'replay' = 'control'
+      priority?: 'control' | 'replay'
     ): boolean => {
       if (!isCurrent(ctx)) return false;
       return writer.send({ ...message, ...scopeFor(ctx) } as ServerMessage, priority, ctx.generation);
@@ -202,11 +202,23 @@ export function registerWs(
       const replayAfterId = resolved.replayMode === 'delta' ? resolved.replayAfterId : 0;
       const replay = dedupeEvents([...s.replay(replayAfterId), ...ctx.liveEvents], replayAfterId);
       ctx.liveEvents = [];
-      ctx.replaying = false;
 
-      for (const batch of buildReplayBatches(replay, scopeFor(ctx))) {
-        if (!scopedSend(ctx, batch, 'replay')) break;
+      for await (const batch of buildReplayBatches(replay, scopeFor(ctx), { signal: ctx.abort.signal })) {
+        if (!isCurrent(ctx) || !scopedSend(ctx, batch, 'replay')) return;
       }
+      if (!isCurrent(ctx)) return;
+
+      // Keep events emitted while batches were being constructed behind the
+      // replay completion frame. Both history and live SDK frames share the
+      // replay FIFO lane; state, heartbeat, and approval controls may still
+      // overtake that lane on slow connections.
+      const replayHighWater = replay.at(-1)?.id ?? replayAfterId;
+      const trailingLive = dedupeEvents(ctx.liveEvents, replayHighWater);
+      ctx.liveEvents = [];
+      for (const event of trailingLive) {
+        if (!scopedSend(ctx, { type: 'sdk_event', id: event.id, event: event.event }, 'replay')) return;
+      }
+      ctx.replaying = false;
     };
 
     const heartbeat = setInterval(() => {
