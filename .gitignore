@@ -12,3 +12,4 @@ web/dist
 .claude/
 .claudecode-web/
 coverage/
+.gstack/
