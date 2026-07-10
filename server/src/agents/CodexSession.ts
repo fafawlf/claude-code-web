@@ -1,7 +1,4 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
@@ -10,7 +7,8 @@ import { DEFAULT_NODE_ID, type ActiveToolInfo, type PendingControl, type Permiss
 import type { AgentSessionOptions } from './types.js';
 import { envWithGitIdentity, type GitIdentity } from '../git/identity.js';
 import type { ControlListener, EventListener, SessionEvent, StateListener } from '../session/ClaudeSession.js';
-import { ReplayBuffer, boundReplayValue } from '../session/ReplayBuffer.js';
+import { ReplayBuffer, boundReplayValue, type HistoryLoadMetadata } from '../session/ReplayBuffer.js';
+import { streamCodexTranscriptEvents } from './codexTranscript.js';
 
 type CodexJsonEvent = {
   type?: string;
@@ -63,10 +61,15 @@ export class CodexSession {
   private stderrTail = '';
   private activeTurn?: ActiveToolInfo;
   private historyReadyResolve!: () => void;
-  private seenAssistantTexts = new Set<string>();
-  private seenUserTexts = new Set<string>();
-  private seenToolCalls = new Set<string>();
-  private seenToolResults = new Set<string>();
+  private historySettled = false;
+  private historyMetadata: HistoryLoadMetadata = { status: 'ready', truncated: false };
+  private historySourceTruncated = false;
+  private historyAbortCtl = new AbortController();
+  private deferredHistoryPrompts: string[] = [];
+  private seenAssistantTexts = new BoundedKeySet();
+  private seenUserTexts = new BoundedKeySet();
+  private seenToolCalls = new BoundedKeySet();
+  private seenToolResults = new BoundedKeySet();
   private resultPushedForTurn = false;
   private readonly gitIdentity?: GitIdentity;
 
@@ -97,14 +100,27 @@ export class CodexSession {
     this.planBroker = new PlanBroker(() => {
       throw new Error('Codex provider does not expose plan approval yet');
     });
+    this.historyMetadata = {
+      status: opts.resume ? 'loading' : 'ready',
+      truncated: false,
+    };
     this.historyReady = new Promise<void>((resolve) => { this.historyReadyResolve = resolve; });
     if (opts.resume) void this.loadHistory(opts.resume);
-    else this.historyReadyResolve();
+    else this.settleHistory('ready');
   }
 
   sendUser(text: string): void {
     if (this.closed || this.state.viewerMode) return;
-    this.seenUserTexts.add(normalizeForDedupe(text));
+    if (this.historyMetadata.status === 'loading') {
+      this.deferredHistoryPrompts.push(text);
+      return;
+    }
+    this.sendUserAfterHistory(text);
+  }
+
+  private sendUserAfterHistory(text: string): void {
+    if (this.closed || this.state.viewerMode) return;
+    this.seenUserTexts.add(dedupeTextKey(text));
     this.pushEvent({ type: 'user', message: { role: 'user', content: text } });
     if (this.running) {
       this.pendingPrompts.push(text);
@@ -133,7 +149,15 @@ export class CodexSession {
   }
 
   async refreshHistory(): Promise<number> {
-    return 0;
+    const resumeId = this.state.providerSessionId;
+    if (!resumeId || this.closed) return 0;
+    const before = this.state.lastEventId;
+    try {
+      await this.replayHistory(resumeId);
+    } catch {
+      // Best effort. Initial-load failures are surfaced through metadata.
+    }
+    return this.state.lastEventId - before;
   }
 
   isViewer(): boolean { return !!this.state.viewerMode; }
@@ -142,6 +166,8 @@ export class CodexSession {
   async close(): Promise<void> {
     this.closed = true;
     this.pendingPrompts = [];
+    this.deferredHistoryPrompts = [];
+    try { this.historyAbortCtl.abort(); } catch { /* best effort */ }
     try { this.child?.kill('SIGTERM'); } catch { /* best effort */ }
     this.permissionBroker.drainDeny();
     this.planBroker.drainReject();
@@ -150,6 +176,10 @@ export class CodexSession {
 
   getState(): SessionStateSnapshot {
     return { ...this.state };
+  }
+
+  getHistoryMetadata(): HistoryLoadMetadata {
+    return { ...this.historyMetadata, truncated: this.historySourceTruncated || this.ring.truncated };
   }
 
   replay(afterId = 0): SessionEvent[] {
@@ -427,22 +457,22 @@ export class CodexSession {
   private pushEvent(event: any): void {
     const id = this.nextEventId++;
     this.state = { ...this.state, lastEventId: id, lastEventAt: Date.now() };
-    const se: SessionEvent = { id, event: boundReplayValue(event) };
+    const se: SessionEvent = { id, event: boundReplayValue(event, undefined, true) };
     this.ring.push(se);
     for (const listener of this.listeners) { try { listener(se); } catch { /* noop */ } }
   }
 
   private pushUserText(text: string): void {
-    const normalized = normalizeForDedupe(text);
-    if (!normalized || this.seenUserTexts.has(normalized)) return;
-    this.seenUserTexts.add(normalized);
+    const key = dedupeTextKey(text);
+    if (!key || this.seenUserTexts.has(key)) return;
+    this.seenUserTexts.add(key);
     this.pushEvent({ type: 'user', message: { role: 'user', content: text } });
   }
 
   private pushAssistantText(text: string): void {
-    const normalized = normalizeForDedupe(text);
-    if (!normalized || this.seenAssistantTexts.has(normalized)) return;
-    this.seenAssistantTexts.add(normalized);
+    const key = dedupeTextKey(text);
+    if (!key || this.seenAssistantTexts.has(key)) return;
+    this.seenAssistantTexts.add(key);
     this.pushEvent({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } });
   }
 
@@ -469,17 +499,47 @@ export class CodexSession {
   }
 
   private async loadHistory(resumeId: string): Promise<void> {
+    let failure: string | undefined;
+    let cancelled = false;
     try {
-      const file = findCodexSessionFile(resumeId);
-      if (!file) return;
-      const lines = readFileSync(file, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean);
-      for (const line of lines) this.parseJsonLine(line, (event) => this.handleCodexEvent(event));
+      await this.replayHistory(resumeId);
+    } catch (error) {
+      cancelled = this.closed || isAbortError(error);
+      if (!cancelled) {
+        failure = (error as Error).message || 'failed to load Codex history';
+        this.pushEvent({ type: 'system', subtype: 'error', message: `Could not load Codex transcript: ${failure}` });
+      }
     } finally {
       if (!this.running && this.state.runtimeStatus === 'running') {
         this.updateState({ runtimeStatus: 'idle', activeTool: undefined });
       }
-      this.historyReadyResolve();
+      this.settleHistory(failure ? 'error' : 'ready', failure, cancelled);
     }
+  }
+
+  private async replayHistory(resumeId: string): Promise<void> {
+    for await (const event of streamCodexTranscriptEvents(resumeId, {
+      signal: this.historyAbortCtl.signal,
+      onTruncated: (truncated) => { this.historySourceTruncated ||= truncated; },
+    })) {
+      if (this.closed) break;
+      this.handleCodexEvent(event as CodexJsonEvent);
+    }
+  }
+
+  private settleHistory(status: 'ready' | 'error', error?: string, cancelled = false): void {
+    if (this.historySettled) return;
+    this.historySettled = true;
+    this.historyMetadata = {
+      status,
+      truncated: this.historySourceTruncated || this.ring.truncated,
+      ...(error ? { error } : {}),
+      ...(cancelled ? { cancelled: true } : {}),
+    };
+    this.historyReadyResolve();
+    if (this.closed || this.state.viewerMode || this.deferredHistoryPrompts.length === 0) return;
+    const prompts = this.deferredHistoryPrompts.splice(0);
+    for (const prompt of prompts) this.sendUserAfterHistory(prompt);
   }
 
   private updateState(delta: Partial<SessionStateSnapshot>): void {
@@ -537,36 +597,52 @@ function summarizeCodexToolInput(name: string, input: Record<string, unknown>): 
   return value.length > 120 ? `${value.slice(0, 117)}...` : value;
 }
 
-function normalizeForDedupe(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+function dedupeTextKey(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  let hashA = 0x811c9dc5;
+  let hashB = 0x9e3779b9;
+  let normalizedLength = 0;
+  let inWhitespace = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    const whitespace = code <= 32 || code === 160;
+    if (whitespace) {
+      if (inWhitespace) continue;
+      inWhitespace = true;
+      hashA = Math.imul(hashA ^ 32, 0x01000193);
+      hashB = Math.imul(hashB ^ 32, 0x85ebca6b);
+    } else {
+      inWhitespace = false;
+      hashA = Math.imul(hashA ^ code, 0x01000193);
+      hashB = Math.imul(hashB ^ code, 0x85ebca6b);
+    }
+    normalizedLength += 1;
+  }
+  return `${normalizedLength}:${hashA >>> 0}:${hashB >>> 0}`;
 }
 
-function codexHome(): string {
-  return process.env.CODEX_HOME || join(homedir(), '.codex');
+class BoundedKeySet {
+  private readonly values = new Map<string, true>();
+
+  constructor(private readonly capacity = 20_000) {}
+
+  has(value: string): boolean {
+    return this.values.has(value);
+  }
+
+  add(value: string): void {
+    if (!value) return;
+    this.values.delete(value);
+    this.values.set(value, true);
+    while (this.values.size > this.capacity) {
+      const oldest = this.values.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.values.delete(oldest);
+    }
+  }
 }
 
-function findCodexSessionFile(sessionId: string): string | undefined {
-  const root = join(codexHome(), 'sessions');
-  if (!existsSync(root)) return undefined;
-  let best: { path: string; mtime: number } | undefined;
-  const walk = (dir: string, depth: number) => {
-    if (depth > 5) return;
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(path, depth + 1);
-      } else if (entry.isFile() && entry.name.endsWith('.jsonl') && basename(entry.name).includes(sessionId)) {
-        const mtime = statSync(path).mtimeMs;
-        if (!best || mtime >= best.mtime) best = { path, mtime };
-      }
-    }
-  };
-  walk(root, 0);
-  return best?.path;
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }

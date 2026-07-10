@@ -2,6 +2,13 @@ export const DEFAULT_REPLAY_MAX_EVENTS = 5_000;
 export const DEFAULT_REPLAY_MAX_BYTES = 32 * 1024 * 1024;
 export const DEFAULT_REPLAY_MAX_STRING_CHARS = 32 * 1024;
 
+export type HistoryLoadMetadata = {
+  status: 'loading' | 'ready' | 'error';
+  truncated: boolean;
+  error?: string;
+  cancelled?: boolean;
+};
+
 export type ReplayBufferOptions<T> = {
   maxEvents?: number;
   maxBytes?: number;
@@ -67,11 +74,18 @@ export class ReplayBuffer<T> {
  * single command output or embedded image from dominating the heap before the
  * byte-bounded replay buffer can evict it.
  */
-export function boundReplayValue<T>(value: T, maxStringChars = DEFAULT_REPLAY_MAX_STRING_CHARS): T {
+export function boundReplayValue<T>(
+  value: T,
+  maxStringChars = DEFAULT_REPLAY_MAX_STRING_CHARS,
+  copyStrings = false,
+): T {
   const seen = new WeakMap<object, unknown>();
 
   const visit = (current: unknown): unknown => {
-    if (typeof current === 'string') return capReplayString(current, maxStringChars);
+    if (typeof current === 'string') {
+      const bounded = capReplayString(current, maxStringChars);
+      return copyStrings ? flatStringCopy(bounded) : bounded;
+    }
     if (!current || typeof current !== 'object') return current;
     const cached = seen.get(current);
     if (cached !== undefined) return cached;
@@ -136,5 +150,13 @@ export function estimateReplayBytes(value: unknown): number {
 
 function capReplayString(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}\n… [trimmed ${value.length - maxChars} chars]`;
+  // V8 may represent slice() as a view over the original string. Explicitly
+  // copy the bounded prefix so retaining 32 KiB never pins a multi-megabyte
+  // JSONL line in the replay ring.
+  const prefix = flatStringCopy(value.slice(0, maxChars));
+  return `${prefix}\n... [trimmed ${value.length - maxChars} chars]`;
+}
+
+function flatStringCopy(value: string): string {
+  return JSON.parse(JSON.stringify(value)) as string;
 }
