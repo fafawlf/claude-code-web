@@ -112,6 +112,40 @@ test('only admins can authorize a canary routing cookie', async () => {
   }
 });
 
+test('canary cookie setter requires both the random capability and an admin session', async () => {
+  const previous = process.env.CCW_CANARY_TOKEN;
+  process.env.CCW_CANARY_TOKEN = 'random-capability-for-test';
+  const s = await setup();
+  try {
+    const wrongKey = await s.app.inject({
+      method: 'GET',
+      url: '/__ccw_canary?key=guess',
+      headers: { cookie: s.cookies.boss },
+    });
+    assert.equal(wrongKey.statusCode, 404);
+
+    const member = await s.app.inject({
+      method: 'GET',
+      url: '/__ccw_canary?key=random-capability-for-test',
+      headers: { cookie: s.cookies.alice },
+    });
+    assert.equal(member.statusCode, 403);
+
+    const admin = await s.app.inject({
+      method: 'GET',
+      url: '/__ccw_canary?key=random-capability-for-test',
+      headers: { cookie: s.cookies.boss },
+    });
+    assert.equal(admin.statusCode, 302);
+    assert.match(String(admin.headers['set-cookie']), /ccw_canary=random-capability-for-test/);
+    assert.equal(admin.headers.location, '/');
+  } finally {
+    await s.cleanup();
+    if (previous === undefined) delete process.env.CCW_CANARY_TOKEN;
+    else process.env.CCW_CANARY_TOKEN = previous;
+  }
+});
+
 test('directory browsing is confined to the user workspace', async () => {
   const s = await setup();
   try {

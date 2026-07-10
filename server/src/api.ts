@@ -16,6 +16,8 @@ import { tokenModeConfig, type CcwConfig } from './config.js';
 import { resolveUser, fsAnchor, assertInScope, isPathInside, resolveScoped, ScopeError, type CcwUser, type IdentityContext } from './users/identity.js';
 import type { UserRegistry } from './users/registry.js';
 import { findClaudeTranscriptFile } from './session/claudeTranscript.js';
+import { timingSafeEqualStr } from './auth.js';
+import { serializeCookie } from './auth/cookie.js';
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv',
@@ -71,6 +73,22 @@ export function registerApi(
     config: identity.config,
     registry: identity.registry,
   };
+
+  app.get('/__ccw_canary', async (req, reply) => {
+    const token = process.env.CCW_CANARY_TOKEN ?? '';
+    const query = req.query as { key?: string } | undefined;
+    if (!token || !query?.key || !timingSafeEqualStr(query.key, token)) {
+      return reply.code(404).send({ error: 'Not found' });
+    }
+    const user = resolveUser(req, idCtx);
+    if (!user) return reply.code(401).send({ error: 'Unauthorized' });
+    if (!user.isAdmin) return reply.code(403).send({ error: 'Admin required' });
+    reply.header('set-cookie', serializeCookie('ccw_canary', token, {
+      maxAge: 4 * 60 * 60,
+      secure: identity.config.cookieSecure,
+    }));
+    return reply.redirect('/');
+  });
 
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return;

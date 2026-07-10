@@ -176,19 +176,11 @@ server {
     }
 
     location = /__ccw_canary {
-        if (\$arg_key != "$canary_cookie") { return 404; }
-        auth_request /__ccw_canary_auth;
-        add_header Set-Cookie "ccw_canary=$canary_cookie; Path=/; Secure; HttpOnly; SameSite=Lax" always;
-        return 302 /;
-    }
-
-    location = /__ccw_canary_auth {
-        internal;
-        proxy_pass http://127.0.0.1:$auth_port/api/admin/canary-check;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length "";
+        proxy_pass http://127.0.0.1:$auth_port;
         proxy_set_header Cookie \$http_cookie;
         proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
@@ -317,7 +309,8 @@ deploy_candidate() {
   fi
   build_time=$(cat "$release_dir/.ccw-build-time" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 
-  local unit_tmp
+  local unit_tmp cookie
+  cookie=$(random_cookie)
   unit_tmp=$(mktemp)
   cat > "$unit_tmp" <<EOF
 [Unit]
@@ -331,6 +324,7 @@ EnvironmentFile=$ENV_FILE
 Environment="CCW_BUILD_SHA=$sha"
 Environment="CCW_BUILD_BRANCH=$RELEASE_REF"
 Environment="CCW_BUILD_TIME=$build_time"
+Environment="CCW_CANARY_TOKEN=$cookie"
 ExecStart=/usr/bin/node $release_dir/server/dist/bin/claudecode-web.js --host 127.0.0.1 --port $candidate_port --cwd $DATA_DIR/users
 Restart=always
 RestartSec=5
@@ -346,8 +340,7 @@ EOF
   wait_for_health "$candidate_port" "$sha"
 
   mkdir -p "$DEPLOY_STATE_DIR"
-  local cookie state_tmp
-  cookie=$(random_cookie)
+  local state_tmp
   state_tmp=$(mktemp "$DEPLOY_STATE_DIR/.candidate.XXXXXX")
   cat > "$state_tmp" <<EOF
 CANDIDATE_SHA=$sha
@@ -388,9 +381,8 @@ promote_candidate() {
   fi
   wait_for_health "$CANDIDATE_PORT" "$CANDIDATE_SHA" >/dev/null
 
-  local rollback_cookie state_tmp
-  rollback_cookie=$(random_cookie)
-  render_nginx "$CANDIDATE_PORT" "$ACTIVE_PORT" "$rollback_cookie" "$CANDIDATE_PORT"
+  local state_tmp
+  render_nginx "$CANDIDATE_PORT" "$ACTIVE_PORT" "$CANDIDATE_COOKIE" "$CANDIDATE_PORT"
 
   state_tmp=$(mktemp "$DEPLOY_STATE_DIR/.promotion.XXXXXX")
   cat > "$state_tmp" <<EOF
@@ -405,7 +397,7 @@ PROMOTED_SHA=$CANDIDATE_SHA
 PROMOTED_REF=$CANDIDATE_REF
 PROMOTED_RELEASE=$CANDIDATE_RELEASE
 PROMOTED_CANARY_COOKIE=$CANDIDATE_COOKIE
-ROLLBACK_COOKIE=$rollback_cookie
+ROLLBACK_COOKIE=$CANDIDATE_COOKIE
 PROMOTED_AT=$(date +%s)
 EOF
   chmod 0600 "$state_tmp"
