@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Sidebar } from '../components/Sidebar';
 import { TopBar } from '../components/TopBar';
 import { ActivityRow } from '../components/ActivitySection';
+import { FolderRow, ProjectLauncher } from '../components/ProjectLauncher';
 
 (globalThis as unknown as { React: typeof React }).React = React;
 
@@ -69,6 +70,26 @@ test('session and top-bar actions remain visible to keyboard and touch users', (
   }));
   assert.match(topbar, /aria-label="Choose project folder"/);
   assert.match(topbar, /aria-label="Rename session Review auth"/);
+
+  const launcher = renderToStaticMarkup(createElement(ProjectLauncher, {
+    token: 't',
+    current: '/root/repo',
+    recents: [{ path: '/root/other', lastUsed: 1 }],
+    pinned: [],
+    onClose: () => {},
+    onPick: () => {},
+    onTogglePin: () => {},
+  }));
+  assert.match(launcher, /group-focus-within:opacity-100/);
+
+  const folder = renderToStaticMarkup(createElement(FolderRow, {
+    label: 'src',
+    path: '/root/repo/src',
+    selected: false,
+    onSelect: () => {},
+    onOpen: () => {},
+  }));
+  assert.match(folder, /group-focus-within:opacity-100/);
 });
 
 test('focus and reduced-motion preferences have explicit global behavior', () => {
