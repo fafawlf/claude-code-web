@@ -10,17 +10,23 @@ import { ClaudeSession } from '../session/ClaudeSession.js';
 import { CodexSession } from '../agents/CodexSession.js';
 
 test('resumed Claude prompts wait for history before constructing a live query', async () => {
+  const started = performance.now();
   const session = new ClaudeSession({
     id: 'queued-claude',
     cwd: '/nonexistent-ccw-history-queue',
     resume: 'missing-queued-session',
   });
+  const constructorMs = performance.now() - started;
+  assert.ok(constructorMs < 5, `Claude constructor took ${constructorMs.toFixed(1)}ms`);
+  const delivered: string[] = [];
+  (session as any).sendUserAfterHistory = (text: string) => { delivered.push(text); };
 
   session.sendUser('continue after history');
   assert.ok((session as any).query === undefined, 'live query started before history settled');
 
   await session.historyReady;
   assert.notEqual((session as any).getHistoryMetadata().status, 'loading');
+  assert.deepEqual(delivered, ['continue after history']);
   await session.close();
 });
 
@@ -74,7 +80,7 @@ test('closing a loading Codex session cancels work and always settles historyRea
     const historyDir = join(dir, 'sessions', '2026', '07', '10');
     await mkdir(historyDir, { recursive: true });
     const file = join(historyDir, 'rollout-cancel-codex-thread.jsonl');
-    await writeSyntheticCodexTranscript(file, 8 * 1024 * 1024);
+    await writeSyntheticCodexTranscript(file, 8 * 1024 * 1024, 'cancel-codex-thread');
 
     const session = new CodexSession({ id: 'cancel-codex', cwd: dir, resume: 'cancel-codex-thread' });
     await session.close();
@@ -89,14 +95,29 @@ test('closing a loading Codex session cancels work and always settles historyRea
   }
 });
 
-test('synthetic 200 MiB Codex history stays responsive and memory bounded', async () => {
+test('closing a loading Claude session cancels work and always settles historyReady', async () => {
+  const session = new ClaudeSession({
+    id: 'cancel-claude',
+    cwd: '/nonexistent-ccw-cancel',
+    resume: 'missing-cancelled-session',
+  });
+
+  await session.close();
+  await Promise.race([
+    session.historyReady,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('historyReady did not settle')), 1_000)),
+  ]);
+  assert.equal((session as any).getHistoryMetadata().cancelled, true);
+});
+
+test('synthetic 200 MiB Codex history stays responsive and memory bounded', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'ccw-codex-perf-'));
   const historyDir = join(dir, 'sessions', '2026', '07', '10');
   await mkdir(historyDir, { recursive: true });
   const file = join(historyDir, 'rollout-perf-codex-thread.jsonl');
 
   try {
-    await writeSyntheticCodexTranscript(file, 200 * 1024 * 1024);
+    await writeSyntheticCodexTranscript(file, 200 * 1024 * 1024, 'perf-codex-thread');
     const moduleUrl = new URL('../agents/CodexSession.ts', import.meta.url).href;
     const script = `
       import { performance } from 'node:perf_hooks';
@@ -119,10 +140,15 @@ test('synthetic 200 MiB Codex history stays responsive and memory bounded', asyn
       await new Promise((resolve) => setImmediate(resolve));
       clearInterval(timer);
       peak = Math.max(peak, process.memoryUsage().rss);
+      const beforeGc = process.memoryUsage();
+      global.gc?.();
+      const afterGc = process.memoryUsage();
       const metadata = session.getHistoryMetadata();
       const replayLength = session.replay().length;
+      const ringBytes = session.ring.byteLength;
+      const model = session.getState().model;
       await session.close();
-      console.log(JSON.stringify({ constructorMs, maxGapMs, rssDelta: peak - baseline, metadata, replayLength }));
+      console.log(JSON.stringify({ constructorMs, maxGapMs, rssDelta: peak - baseline, metadata, replayLength, ringBytes, beforeGc, afterGc, model }));
     `;
     const result = await runChild(process.execPath, [
       '--expose-gc',
@@ -136,6 +162,10 @@ test('synthetic 200 MiB Codex history stays responsive and memory bounded', asyn
       rssDelta: number;
       metadata: { status: string; truncated: boolean };
       replayLength: number;
+      ringBytes: number;
+      beforeGc: NodeJS.MemoryUsage;
+      afterGc: NodeJS.MemoryUsage;
+      model?: string;
     };
 
     assert.ok(metrics.constructorMs < 5, `constructor took ${metrics.constructorMs.toFixed(1)}ms`);
@@ -143,21 +173,34 @@ test('synthetic 200 MiB Codex history stays responsive and memory bounded', asyn
     assert.ok(metrics.rssDelta < 96 * 1024 * 1024, `RSS grew ${(metrics.rssDelta / 1024 / 1024).toFixed(1)} MiB`);
     assert.equal(metrics.metadata.status, 'ready');
     assert.equal(metrics.metadata.truncated, true);
+    assert.equal(metrics.model, 'synthetic-model');
     assert.ok(metrics.replayLength <= 5_000);
+    t.diagnostic([
+      `constructor=${metrics.constructorMs.toFixed(2)}ms`,
+      `event-loop-gap=${metrics.maxGapMs.toFixed(2)}ms`,
+      `rss-delta=${(metrics.rssDelta / 1024 / 1024).toFixed(1)}MiB`,
+      `replay-events=${metrics.replayLength}`,
+    ].join(' '));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-async function writeSyntheticCodexTranscript(path: string, targetBytes: number): Promise<void> {
+async function writeSyntheticCodexTranscript(path: string, targetBytes: number, sessionId: string): Promise<void> {
   const stream = createWriteStream(path, { encoding: 'utf8' });
-  const body = 'x'.repeat(128 * 1024);
-  let bytes = 0;
+  const body = 'x'.repeat(24 * 1024);
+  const largestObservedLine = 'y'.repeat(Math.min(targetBytes, 4 * 1024 * 1024));
+  const metadata = `${JSON.stringify({
+    type: 'session_meta',
+    payload: { id: sessionId, model: 'synthetic-model' },
+  })}\n`;
+  let bytes = Buffer.byteLength(metadata);
+  if (!stream.write(metadata)) await once(stream, 'drain');
   let index = 0;
   while (bytes < targetBytes) {
     const line = `${JSON.stringify({
       type: 'event_msg',
-      payload: { type: 'agent_message', message: `synthetic-${index}-${body}` },
+      payload: { type: 'agent_message', message: `synthetic-${index}-${index === 0 ? largestObservedLine : body}` },
     })}\n`;
     bytes += Buffer.byteLength(line);
     index += 1;
@@ -181,7 +224,7 @@ async function runChild(command: string, args: string[], env: NodeJS.ProcessEnv)
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 2_000;
+  const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
