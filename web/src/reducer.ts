@@ -54,7 +54,7 @@ function absorbOptimistic(items: ChatItem[], text: string): ChatItem[] | null {
 }
 
 export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatState {
-  const items = s.items.slice();
+  if (eventId > 0 && eventId <= s.lastEventId) return s;
   let busy = s.busy;
   let streamingText = s.streamingText;
 
@@ -67,8 +67,10 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
       streamingText = '';
       busy = true;
     }
-    return { ...s, items, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
+    return { ...s, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
   }
+
+  const items = s.items.slice();
 
   if (ev.type === 'assistant' && ev.message?.content) {
     const streamedText = streamingText;
@@ -125,6 +127,12 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
   }
 
   return { ...s, items, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
+}
+
+export function applyEventBatch(s: ChatState, events: Array<{ id: number; event: SdkEvent }>): ChatState {
+  let next = s;
+  for (const { id, event } of events) next = applyEvent(next, event, id);
+  return next;
 }
 
 function isStreamHandoff(streamingText: string, finalText: string): boolean {
