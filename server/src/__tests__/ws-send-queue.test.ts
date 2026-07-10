@@ -192,3 +192,15 @@ test('hard backpressure watermark closes the socket with retry-later code', () =
   assert.equal(writer.send({ type: 'heartbeat', now: 1 }), false);
   assert.equal(socket.closed?.code, 1013);
 });
+
+test('a single direct frame cannot jump past the hard backpressure limit', () => {
+  const socket = new FakeSocket();
+  const writer = new WsSendQueue(socket);
+
+  assert.equal(writer.send({
+    type: 'error',
+    message: 'x'.repeat(WS_BUFFER_HARD_BYTES),
+  }), false);
+  assert.equal(socket.sent.length, 0);
+  assert.equal(socket.closed?.code, 1013);
+});
