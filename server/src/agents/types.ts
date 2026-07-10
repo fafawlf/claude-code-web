@@ -2,6 +2,7 @@ import type { PermissionBroker } from '../permissions/PermissionBroker.js';
 import type { PlanBroker } from '../permissions/PlanBroker.js';
 import type { ClaudeSession, EventListener, StateListener, ControlListener, SessionEvent, PermissionListener, PlanListener } from '../session/ClaudeSession.js';
 import type { AgentProviderId, PendingControl, PermissionMode, SessionStateSnapshot } from '../protocol.js';
+import type { HistoryLoadMetadata } from '../session/ReplayBuffer.js';
 
 export type AgentSession = Pick<
   ClaudeSession,
@@ -21,6 +22,7 @@ export type AgentSession = Pick<
   permissionBroker: PermissionBroker;
   planBroker: PlanBroker;
   getState(): SessionStateSnapshot;
+  getHistoryMetadata(): HistoryLoadMetadata;
   replay(afterId?: number): SessionEvent[];
   subscribe(listener: EventListener): () => void;
   subscribeState(listener: StateListener): () => void;

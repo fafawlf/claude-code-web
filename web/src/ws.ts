@@ -83,9 +83,21 @@ export class WsClient {
   send(m: ClientMessage): boolean {
     if (m.type === 'hello') this.setHelloIntent(m);
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
-    this.ws.send(JSON.stringify(m));
+    const wire = this.withCurrentAttachmentScope(m);
+    this.ws.send(JSON.stringify(wire));
     if (m.type === 'hello') this.helloSentOnSocket = this.ws;
     return true;
+  }
+
+  private withCurrentAttachmentScope(m: ClientMessage): ClientMessage {
+    if (m.type === 'hello' || m.type === 'list_sessions') return m;
+    const hello = this.latestHello;
+    if (!hello) return m;
+    return {
+      ...m,
+      attachId: m.attachId ?? hello.attachId,
+      sessionId: m.sessionId ?? hello.sessionId,
+    } as ClientMessage;
   }
 
   close(): void {

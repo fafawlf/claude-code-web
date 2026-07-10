@@ -9,7 +9,6 @@ import {
   defaultModelForProvider,
   type ClientHello,
   type ClientMessage,
-  type HistoryStatus,
   type PendingControl,
   type PermissionMode,
   type ReplayMode,
@@ -20,6 +19,7 @@ import {
 import type { SessionEvent } from './session/ClaudeSession.js';
 import type { SessionManager } from './session/SessionManager.js';
 import { buildReplayBatches, WsSendQueue } from './wsSendQueue.js';
+import type { HistoryLoadMetadata } from './session/ReplayBuffer.js';
 
 type HelloResolution = {
   session: AgentSession;
@@ -42,6 +42,7 @@ type AttachmentContext = {
   replaying: boolean;
   liveEvents: SessionEvent[];
   readySent: boolean;
+  replayComplete: boolean;
   pendingState: Partial<SessionStateSnapshot>;
   pendingControls: PendingControl[];
   sentControls: Set<string>;
@@ -136,6 +137,7 @@ export function registerWs(
         replaying: true,
         liveEvents: [],
         readySent: false,
+        replayComplete: false,
         pendingState: {},
         pendingControls: [],
         sentControls: new Set(),
@@ -159,40 +161,37 @@ export function registerWs(
         }),
         s.subscribeControls((control) => {
           if (!isCurrent(ctx)) return;
-          if (!ctx.readySent) ctx.pendingControls.push(control);
+          if (!ctx.replayComplete) ctx.pendingControls.push(control);
           else sendControl(ctx, control);
         })
       );
 
-      const initialHistoryStatus = await probeHistoryStatus(s.historyReady);
+      const initialHistory = await probeHistoryMetadata(s);
       if (!isCurrent(ctx)) return;
       const effectiveAfterId = resolved.replayMode === 'delta' ? resolved.replayAfterId : 0;
-      const initialReplay = initialHistoryStatus === 'ready' ? s.replay(effectiveAfterId) : [];
-      const historyTruncated = initialHistoryStatus === 'ready'
-        ? isReplayTruncated(initialReplay, effectiveAfterId, s.getState().lastEventId)
-        : undefined;
+      const initialReplay = initialHistory.status === 'ready' ? s.replay(effectiveAfterId) : [];
+      const historyTruncated = initialHistory.status === 'ready'
+        ? initialHistory.truncated || isReplayTruncated(initialReplay, effectiveAfterId, s.getState().lastEventId)
+        : initialHistory.truncated;
 
       ctx.readySent = true;
       scopedSend(ctx, {
         type: 'ready',
         state: sm.getSnapshot(s.id) ?? s.getState(),
         replayMode: resolved.replayMode,
-        historyStatus: initialHistoryStatus,
+        historyStatus: initialHistory.status,
         historyTruncated: historyTruncated || undefined,
       });
       if (Object.keys(ctx.pendingState).length > 0) {
         scopedSend(ctx, { type: 'state_update', state: ctx.pendingState });
         ctx.pendingState = {};
       }
-      for (const control of [...ctx.pendingControls, ...s.getPendingControls()]) sendControl(ctx, control);
-      ctx.pendingControls = [];
-
-      const historyStatus = initialHistoryStatus === 'loading'
+      const history = initialHistory.status === 'loading'
         ? await waitForHistoryReady(s, ctx.abort.signal)
-        : initialHistoryStatus;
-      if (!isCurrent(ctx) || historyStatus === 'aborted') return;
-      if (historyStatus === 'error') {
-        scopedSend(ctx, { type: 'error', message: 'History loading failed' });
+        : initialHistory;
+      if (!isCurrent(ctx) || history === 'aborted') return;
+      if (history.status === 'error') {
+        scopedSend(ctx, { type: 'error', message: history.error ? `History loading failed: ${history.error}` : 'History loading failed' });
       }
 
       // Runtime correctness is intentionally based on replayMode, not merely
@@ -201,12 +200,22 @@ export function registerWs(
       // helper field for compatibility with older unit callers.
       const replayAfterId = resolved.replayMode === 'delta' ? resolved.replayAfterId : 0;
       const replay = dedupeEvents([...s.replay(replayAfterId), ...ctx.liveEvents], replayAfterId);
+      const finalHistoryTruncated = history.truncated
+        || isReplayTruncated(replay, replayAfterId, s.getState().lastEventId);
       ctx.liveEvents = [];
 
       for await (const batch of buildReplayBatches(replay, scopeFor(ctx), { signal: ctx.abort.signal })) {
-        if (!isCurrent(ctx) || !scopedSend(ctx, batch, 'replay')) return;
+        const frame = batch.replayComplete
+          ? {
+              ...batch,
+              historyStatus: history.status,
+              historyTruncated: finalHistoryTruncated || undefined,
+            }
+          : batch;
+        if (!isCurrent(ctx) || !scopedSend(ctx, frame, 'replay')) return;
       }
       if (!isCurrent(ctx)) return;
+      ctx.replayComplete = true;
 
       // Keep events emitted while batches were being constructed behind the
       // replay completion frame. Both history and live SDK frames share the
@@ -219,6 +228,8 @@ export function registerWs(
         if (!scopedSend(ctx, { type: 'sdk_event', id: event.id, event: event.event }, 'replay')) return;
       }
       ctx.replaying = false;
+      for (const control of [...ctx.pendingControls, ...s.getPendingControls()]) sendControl(ctx, control);
+      ctx.pendingControls = [];
     };
 
     const heartbeat = setInterval(() => {
@@ -271,6 +282,11 @@ export function registerWs(
       }
 
       if (msg.type === 'session_close') {
+        const current = attachment;
+        if (msg.attachId !== undefined && (!current || !isCurrent(current) || msg.attachId !== current.attachId)) {
+          writer.send({ type: 'error', message: 'Stale attachment command rejected', attachId: msg.attachId, sessionId: msg.sessionId });
+          return;
+        }
         const ctx = attachment;
         if (ctx?.sessionId === msg.sessionId) detachContext(ctx);
         await sm.remove(msg.sessionId).catch((error) => {
@@ -282,6 +298,15 @@ export function registerWs(
       const ctx = attachment;
       if (!ctx || !isCurrent(ctx)) {
         writer.send({ type: 'error', message: 'Say hello first' });
+        return;
+      }
+      const scopeError = validateCommandScope(ctx, msg, generation);
+      if (scopeError) {
+        scopedSend(ctx, { type: 'error', message: scopeError });
+        return;
+      }
+      if (!ctx.readySent || !ctx.replayComplete) {
+        scopedSend(ctx, { type: 'error', message: 'Session is still syncing; retry when history replay is complete' });
         return;
       }
       const session = ctx.session;
@@ -324,39 +349,52 @@ export function registerWs(
   });
 }
 
-async function probeHistoryStatus(historyReady: Promise<void>): Promise<HistoryStatus> {
-  let status: HistoryStatus = 'loading';
-  void historyReady.then(
-    () => { status = 'ready'; },
-    () => { status = 'error'; }
-  );
+async function probeHistoryMetadata(session: AgentSession): Promise<HistoryLoadMetadata> {
   // A single microtask detects already-settled promises without delaying the
   // initial ready frame behind disk I/O.
   await Promise.resolve();
-  return status;
+  return session.getHistoryMetadata();
 }
 
 async function waitForHistoryReady(
   session: AgentSession,
-  signal: AbortSignal,
-  timeoutMs = 3000
-): Promise<HistoryStatus | 'aborted'> {
+  signal: AbortSignal
+): Promise<HistoryLoadMetadata | 'aborted'> {
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (status: HistoryStatus | 'aborted') => {
+    const finish = (status: HistoryLoadMetadata | 'aborted') => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
       resolve(status);
     };
     const onAbort = () => finish('aborted');
-    const timer = setTimeout(() => finish('loading'), timeoutMs);
-    timer.unref?.();
     signal.addEventListener('abort', onAbort, { once: true });
-    void session.historyReady.then(() => finish('ready'), () => finish('error'));
+    void session.historyReady.then(
+      () => finish(session.getHistoryMetadata()),
+      (error) => finish({ status: 'error', truncated: false, error: error instanceof Error ? error.message : String(error) })
+    );
     if (signal.aborted) finish('aborted');
   });
+}
+
+function validateCommandScope(
+  ctx: AttachmentContext,
+  msg: Exclude<ClientMessage, ClientHello | { type: 'list_sessions' } | { type: 'session_close' }>,
+  currentGeneration: number,
+): string | undefined {
+  const scoped = msg.attachId !== undefined || msg.sessionId !== undefined;
+  if (scoped) {
+    if (msg.attachId !== undefined && msg.attachId !== ctx.attachId) return 'Stale attachment command rejected';
+    if (msg.sessionId !== undefined && msg.sessionId !== ctx.sessionId) return 'Stale session command rejected';
+    return undefined;
+  }
+  // Old clients did not scope commands. Keep their first, unswitched
+  // attachment usable, but never guess once this socket has changed targets.
+  if (ctx.attachId !== undefined || currentGeneration !== 1) {
+    return 'Unscoped session command rejected after attachment switch';
+  }
+  return undefined;
 }
 
 function dedupeEvents(events: SessionEvent[], afterId: number): SessionEvent[] {

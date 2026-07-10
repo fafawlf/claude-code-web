@@ -93,14 +93,15 @@ export type ServerInfo = {
 
 // Client → server
 export type ClientHello = { type: 'hello'; attachId?: string; nodeId?: string; provider?: AgentProviderId; sessionId?: string; resumeClaudeId?: string; cwd?: string; model?: string; permissionMode?: PermissionMode; lastEventId?: number; viewerMode?: boolean };
-export type ClientUserMessage = { type: 'user'; text: string };
-export type ClientPermissionResponse = { type: 'permission_response'; reqId: string; decision: 'allow' | 'deny'; scope?: 'once' | 'session' };
-export type ClientPlanResponse = { type: 'plan_response'; reqId: string; decision: 'approve' | 'reject' };
-export type ClientInterrupt = { type: 'interrupt' };
-export type ClientSetModel = { type: 'set_model'; model: string };
-export type ClientSetMode = { type: 'set_permission_mode'; mode: PermissionMode };
-export type ClientRefreshHistory = { type: 'refresh_history' };
-export type ClientSessionClose = { type: 'session_close'; sessionId: string };
+export type ClientAttachmentScope = { attachId?: string; sessionId?: string };
+export type ClientUserMessage = ClientAttachmentScope & { type: 'user'; text: string };
+export type ClientPermissionResponse = ClientAttachmentScope & { type: 'permission_response'; reqId: string; decision: 'allow' | 'deny'; scope?: 'once' | 'session' };
+export type ClientPlanResponse = ClientAttachmentScope & { type: 'plan_response'; reqId: string; decision: 'approve' | 'reject' };
+export type ClientInterrupt = ClientAttachmentScope & { type: 'interrupt' };
+export type ClientSetModel = ClientAttachmentScope & { type: 'set_model'; model: string };
+export type ClientSetMode = ClientAttachmentScope & { type: 'set_permission_mode'; mode: PermissionMode };
+export type ClientRefreshHistory = ClientAttachmentScope & { type: 'refresh_history' };
+export type ClientSessionClose = ClientAttachmentScope & { type: 'session_close'; sessionId: string };
 export type ClientListSessions = { type: 'list_sessions' };
 export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientSetModel | ClientSetMode | ClientRefreshHistory | ClientSessionClose | ClientListSessions;
 
@@ -112,7 +113,7 @@ export type ReplayMode = 'full' | 'delta';
 export type HistoryStatus = 'loading' | 'ready' | 'error';
 export type ServerReady = ServerAttachmentScope & { type: 'ready'; state: SessionStateSnapshot; replayMode?: ReplayMode; historyStatus?: HistoryStatus; historyTruncated?: boolean };
 export type ServerSdkEvent = ServerAttachmentScope & { type: 'sdk_event'; id: number; event: SdkEvent };
-export type ServerSdkEventBatch = ServerAttachmentScope & { type: 'sdk_events_batch'; events: Array<{ id: number; event: SdkEvent }>; replayComplete?: boolean };
+export type ServerSdkEventBatch = ServerAttachmentScope & { type: 'sdk_events_batch'; events: Array<{ id: number; event: SdkEvent }>; replayComplete?: boolean; historyStatus?: HistoryStatus; historyTruncated?: boolean };
 export type ServerPermissionRequest = ServerAttachmentScope & { type: 'permission_request'; reqId: string; toolName: string; toolUseId?: string; input: Record<string, unknown>; title?: string; displayName?: string; description?: string };
 export type ServerPlanProposed = ServerAttachmentScope & { type: 'plan_proposed'; reqId: string; plan: string };
 export type PendingControl =

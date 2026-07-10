@@ -17,6 +17,7 @@ import type {
   SessionStateSnapshot,
 } from '../protocol.js';
 import type { ControlListener, EventListener, SessionEvent, StateListener } from '../session/ClaudeSession.js';
+import type { HistoryLoadMetadata } from '../session/ReplayBuffer.js';
 import { SessionManager } from '../session/SessionManager.js';
 import { registerWs } from '../ws.js';
 
@@ -32,6 +33,9 @@ class FakeSession implements AgentSession {
   private stateListeners = new Set<StateListener>();
   private controlListeners = new Set<ControlListener>();
   private closed = false;
+  private historyMetadata: HistoryLoadMetadata;
+  readonly userMessages: string[] = [];
+  interruptCount = 0;
 
   constructor(opts: AgentSessionOptions, ready: boolean) {
     this.id = opts.id;
@@ -54,10 +58,18 @@ class FakeSession implements AgentSession {
       viewerMode: opts.viewerMode,
     };
     this.historyReady = new Promise<void>((resolve) => { this.resolveReady = resolve; });
+    this.historyMetadata = { status: ready ? 'ready' : 'loading', truncated: false };
     if (ready) this.resolveReady();
   }
 
-  resolveHistory(): void { this.resolveReady(); }
+  resolveHistory(options: { truncated?: boolean } = {}): void {
+    this.historyMetadata = { status: 'ready', truncated: !!options.truncated };
+    this.resolveReady();
+  }
+  failHistory(error = 'synthetic history failure'): void {
+    this.historyMetadata = { status: 'error', truncated: false, error };
+    this.resolveReady();
+  }
   listenerCount(): number { return this.eventListeners.size + this.stateListeners.size + this.controlListeners.size; }
 
   seedHistory(count: number): void {
@@ -79,16 +91,17 @@ class FakeSession implements AgentSession {
     for (const listener of this.eventListeners) listener(event);
   }
 
-  sendUser(): void {}
+  sendUser(text: string): void { this.userMessages.push(text); }
   async setModel(model: string): Promise<void> { this.updateState({ model }); }
   async setClaudeAuthMode(): Promise<void> {}
   async setPermissionMode(permissionMode: PermissionMode): Promise<void> { this.updateState({ permissionMode }); }
-  async interrupt(): Promise<void> {}
+  async interrupt(): Promise<void> { this.interruptCount += 1; }
   async refreshHistory(): Promise<number> { return 0; }
   isViewer(): boolean { return !!this.state.viewerMode; }
   isClosed(): boolean { return this.closed; }
   async close(): Promise<void> { this.closed = true; }
   getState(): SessionStateSnapshot { return { ...this.state }; }
+  getHistoryMetadata(): HistoryLoadMetadata { return { ...this.historyMetadata }; }
   replay(afterId = 0): SessionEvent[] { return this.ring.filter((event) => event.id > afterId); }
   subscribe(listener: EventListener): () => void {
     this.eventListeners.add(listener);
@@ -203,6 +216,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for condition');
+    await sleep(5);
+  }
+}
+
 test('rapid A to B attach cancels delayed A replay, listeners, and attach count', async () => {
   const provider = new FakeProvider('claude');
   provider.readyByDefault = false;
@@ -278,6 +299,160 @@ test('events emitted during history loading are replayed once before live events
     assert.equal(live.sessionId, session.id);
     assert.equal(inbox.all.filter((message) => message.type === 'sdk_events_batch')
       .flatMap((message) => message.events).filter((entry) => entry.id === 1).length, 1);
+  } finally {
+    await cleanup(app, sm, ws);
+  }
+});
+
+test('history loading beyond three seconds never emits a false replay completion', async () => {
+  const provider = new FakeProvider('claude');
+  provider.readyByDefault = false;
+  const { app, sm, ws, inbox } = await setup([provider]);
+  try {
+    const session = sm.create({ cwd: '/slow-history' }) as FakeSession;
+    send(ws, { type: 'hello', sessionId: session.id, attachId: 'slow-history' });
+    const ready = await inbox.next((message) => message.type === 'ready' && message.attachId === 'slow-history');
+    assert.equal(ready.type, 'ready');
+    assert.equal(ready.historyStatus, 'loading');
+
+    await sleep(3_100);
+    assert.equal(inbox.all.some((message) => message.type === 'sdk_events_batch' && message.attachId === 'slow-history' && message.replayComplete), false);
+
+    session.resolveHistory();
+    const complete = await inbox.next(
+      (message) => message.type === 'sdk_events_batch' && message.attachId === 'slow-history' && message.replayComplete === true,
+    );
+    assert.equal(complete.type, 'sdk_events_batch');
+    assert.equal(complete.historyStatus, 'ready');
+  } finally {
+    await cleanup(app, sm, ws);
+  }
+});
+
+test('history error and truncation metadata reflect the settled loader outcome', async () => {
+  const provider = new FakeProvider('claude');
+  provider.readyByDefault = false;
+  const { app, sm, ws, inbox } = await setup([provider]);
+  try {
+    const failed = sm.create({ cwd: '/failed-history' }) as FakeSession;
+    send(ws, { type: 'hello', sessionId: failed.id, attachId: 'failed-history' });
+    await inbox.next((message) => message.type === 'ready' && message.attachId === 'failed-history');
+    failed.failHistory('disk read failed');
+    const error = await inbox.next((message) => message.type === 'error' && message.attachId === 'failed-history');
+    assert.equal(error.type, 'error');
+    assert.match(error.message, /disk read failed/);
+    const failedComplete = await inbox.next(
+      (message) => message.type === 'sdk_events_batch' && message.attachId === 'failed-history' && message.replayComplete === true,
+    );
+    assert.equal(failedComplete.type, 'sdk_events_batch');
+    assert.equal(failedComplete.historyStatus, 'error');
+
+    provider.readyByDefault = false;
+    const truncated = sm.create({ cwd: '/truncated-history' }) as FakeSession;
+    send(ws, { type: 'hello', sessionId: truncated.id, attachId: 'truncated-history' });
+    await inbox.next((message) => message.type === 'ready' && message.attachId === 'truncated-history');
+    truncated.resolveHistory({ truncated: true });
+    const truncatedComplete = await inbox.next(
+      (message) => message.type === 'sdk_events_batch' && message.attachId === 'truncated-history' && message.replayComplete === true,
+    );
+    assert.equal(truncatedComplete.type, 'sdk_events_batch');
+    assert.equal(truncatedComplete.historyStatus, 'ready');
+    assert.equal(truncatedComplete.historyTruncated, true);
+  } finally {
+    await cleanup(app, sm, ws);
+  }
+});
+
+test('closing a socket aborts a pending attachment history wait and removes its listeners', async () => {
+  const provider = new FakeProvider('claude');
+  provider.readyByDefault = false;
+  const { app, sm, ws, inbox } = await setup([provider]);
+  try {
+    const session = sm.create({ cwd: '/close-loading' }) as FakeSession;
+    const baselineListeners = session.listenerCount();
+    send(ws, { type: 'hello', sessionId: session.id, attachId: 'close-loading' });
+    await inbox.next((message) => message.type === 'ready' && message.attachId === 'close-loading');
+    assert.equal(session.listenerCount(), baselineListeners + 3);
+
+    const closed = once(ws, 'close');
+    ws.terminate();
+    await closed;
+    await sleep(20);
+    assert.equal(session.listenerCount(), baselineListeners);
+    assert.equal(sm.getSnapshot(session.id)?.attachedCount, 0);
+    session.resolveHistory();
+    await sleep(20);
+    assert.equal(inbox.all.some((message) => message.type === 'sdk_events_batch' && message.attachId === 'close-loading'), false);
+  } finally {
+    await cleanup(app, sm, ws);
+  }
+});
+
+test('session commands are rejected until replay completes, then accepted with matching scope', async () => {
+  const provider = new FakeProvider('claude');
+  provider.readyByDefault = false;
+  const { app, sm, ws, inbox } = await setup([provider]);
+  try {
+    const session = sm.create({ cwd: '/command-gate' }) as FakeSession;
+    send(ws, { type: 'hello', sessionId: session.id, attachId: 'command-gate' });
+    await inbox.next((message) => message.type === 'ready' && message.attachId === 'command-gate');
+    send(ws, { type: 'user', text: 'too early', attachId: 'command-gate', sessionId: session.id });
+    const rejected = await inbox.next((message) => message.type === 'error' && message.attachId === 'command-gate' && /still syncing/i.test(message.message));
+    assert.equal(rejected.type, 'error');
+    assert.deepEqual(session.userMessages, []);
+
+    session.resolveHistory();
+    await inbox.next((message) => message.type === 'sdk_events_batch' && message.attachId === 'command-gate' && message.replayComplete === true);
+    send(ws, { type: 'user', text: 'after replay', attachId: 'command-gate', sessionId: session.id });
+    await waitFor(() => session.userMessages.length === 1);
+    assert.deepEqual(session.userMessages, ['after replay']);
+  } finally {
+    await cleanup(app, sm, ws);
+  }
+});
+
+test('a delayed command from attachment A cannot act on attachment B', async () => {
+  const provider = new FakeProvider('claude');
+  const { app, sm, ws, inbox } = await setup([provider]);
+  try {
+    const a = sm.create({ cwd: '/command-a' }) as FakeSession;
+    const b = sm.create({ cwd: '/command-b' }) as FakeSession;
+    send(ws, { type: 'hello', sessionId: a.id, attachId: 'command-a' });
+    await inbox.next((message) => message.type === 'sdk_events_batch' && message.attachId === 'command-a' && message.replayComplete === true);
+    send(ws, { type: 'hello', sessionId: b.id, attachId: 'command-b' });
+    await inbox.next((message) => message.type === 'sdk_events_batch' && message.attachId === 'command-b' && message.replayComplete === true);
+
+    send(ws, { type: 'user', text: 'stale-a', attachId: 'command-a', sessionId: a.id });
+    const rejected = await inbox.next((message) => message.type === 'error' && message.attachId === 'command-b' && /stale/i.test(message.message));
+    assert.equal(rejected.type, 'error');
+    assert.deepEqual(a.userMessages, []);
+    assert.deepEqual(b.userMessages, []);
+
+    send(ws, { type: 'interrupt', attachId: 'command-b', sessionId: b.id });
+    await waitFor(() => b.interruptCount === 1);
+    assert.equal(a.interruptCount, 0);
+  } finally {
+    await cleanup(app, sm, ws);
+  }
+});
+
+test('legacy unscoped commands are compatible only before the socket switches sessions', async () => {
+  const provider = new FakeProvider('claude');
+  const { app, sm, ws, inbox } = await setup([provider]);
+  try {
+    const a = sm.create({ cwd: '/legacy-a' }) as FakeSession;
+    const b = sm.create({ cwd: '/legacy-b' }) as FakeSession;
+    send(ws, { type: 'hello', sessionId: a.id });
+    await inbox.next((message) => message.type === 'sdk_events_batch' && message.sessionId === a.id && message.replayComplete === true);
+    send(ws, { type: 'user', text: 'legacy-first' });
+    await waitFor(() => a.userMessages.length === 1);
+
+    send(ws, { type: 'hello', sessionId: b.id });
+    await inbox.next((message) => message.type === 'sdk_events_batch' && message.sessionId === b.id && message.replayComplete === true);
+    send(ws, { type: 'user', text: 'legacy-ambiguous' });
+    const rejected = await inbox.next((message) => message.type === 'error' && message.sessionId === b.id && /unscoped/i.test(message.message));
+    assert.equal(rejected.type, 'error');
+    assert.deepEqual(b.userMessages, []);
   } finally {
     await cleanup(app, sm, ws);
   }
@@ -378,7 +553,7 @@ test('cursor produces delta replay only for the exact live wrapper', async () =>
     assert.equal(replay.type, 'sdk_events_batch');
     assert.deepEqual(replay.events.map((entry) => entry.id), [2]);
 
-    send(ws, { type: 'set_model', model: 'next-model' });
+    send(ws, { type: 'set_model', model: 'next-model', attachId: 'delta', sessionId: session.id });
     const state = await inbox.next(
       (message) => message.type === 'state_update' && message.attachId === 'delta' && message.state.model === 'next-model'
     );

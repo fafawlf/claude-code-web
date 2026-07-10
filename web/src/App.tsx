@@ -445,7 +445,11 @@ export function App() {
           replayStateRef.current = null;
           commitState(completed);
           rememberReconnectIntent(completed, completed.lastEventId);
-          commitAttachment((current) => ({ ...current, phase: 'ready', hasCachedState: completed.items.length > 0 }));
+          commitAttachment((current) => ({
+            ...current,
+            phase: m.historyStatus === 'error' ? 'error' : 'ready',
+            hasCachedState: completed.items.length > 0,
+          }));
         }
       } else {
         commitState((s) => {
@@ -454,7 +458,11 @@ export function App() {
         });
         if (m.replayComplete) {
           rememberReconnectIntent(stateRef.current, stateRef.current.lastEventId);
-          commitAttachment((current) => ({ ...current, phase: 'ready', hasCachedState: stateRef.current.items.length > 0 }));
+          commitAttachment((current) => ({
+            ...current,
+            phase: m.historyStatus === 'error' ? 'error' : 'ready',
+            hasCachedState: stateRef.current.items.length > 0,
+          }));
         }
       }
     } else if (m.type === 'sessions_update') {
