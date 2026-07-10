@@ -60,6 +60,18 @@ class FakeSession implements AgentSession {
   resolveHistory(): void { this.resolveReady(); }
   listenerCount(): number { return this.eventListeners.size + this.stateListeners.size + this.controlListeners.size; }
 
+  seedHistory(count: number): void {
+    this.ring = Array.from({ length: count }, (_, index) => ({
+      id: index + 1,
+      event: { type: 'assistant', label: `history-${index + 1}`, content: 'x'.repeat(48) },
+    })) as SessionEvent[];
+    this.state = {
+      ...this.state,
+      lastEventId: count,
+      lastEventAt: Date.now(),
+    };
+  }
+
   emitEvent(id: number, label: string): void {
     const event = { id, event: { type: 'assistant', label } } as SessionEvent;
     this.ring = [...this.ring.filter((entry) => entry.id !== id), event].sort((a, b) => a.id - b.id);
@@ -266,6 +278,44 @@ test('events emitted during history loading are replayed once before live events
     assert.equal(live.sessionId, session.id);
     assert.equal(inbox.all.filter((message) => message.type === 'sdk_events_batch')
       .flatMap((message) => message.events).filter((entry) => entry.id === 1).length, 1);
+  } finally {
+    await cleanup(app, sm, ws);
+  }
+});
+
+test('events emitted while a large replay is being batched arrive after replay completion', async () => {
+  const provider = new FakeProvider('claude');
+  const { app, sm, ws, inbox } = await setup([provider]);
+  try {
+    const session = sm.create({ cwd: '/large-ordering' }) as FakeSession;
+    session.seedHistory(5_000);
+    send(ws, { type: 'hello', sessionId: session.id, attachId: 'large-ordering' });
+    await inbox.next((message) => message.type === 'ready' && message.attachId === 'large-ordering');
+
+    // Async replay construction has started and yielded after its first slice.
+    session.emitEvent(5_001, 'live-during-replay');
+    const complete = await inbox.next(
+      (message) => message.type === 'sdk_events_batch'
+        && message.attachId === 'large-ordering'
+        && message.replayComplete === true,
+      2_000
+    );
+    assert.equal(complete.type, 'sdk_events_batch');
+    const live = await inbox.next(
+      (message) => message.type === 'sdk_event'
+        && message.attachId === 'large-ordering'
+        && message.id === 5_001,
+      2_000
+    );
+    assert.equal(live.type, 'sdk_event');
+
+    const completeIndex = inbox.all.indexOf(complete);
+    const liveIndex = inbox.all.indexOf(live);
+    assert.ok(completeIndex >= 0 && liveIndex > completeIndex);
+    assert.equal(inbox.all
+      .filter((message) => message.type === 'sdk_events_batch')
+      .flatMap((message) => message.events)
+      .some((event) => event.id === 5_001), false);
   } finally {
     await cleanup(app, sm, ws);
   }
