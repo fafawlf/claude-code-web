@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:claudecode_mobile/src/chat/chat_state.dart';
 import 'package:claudecode_mobile/src/chat/sessions_store.dart';
@@ -107,6 +108,116 @@ void main() {
     await h.pump();
     expect(h.store.state.attachmentReady, isTrue);
     await h.close();
+  });
+
+  test('first attachment accepts legacy unscoped ready and replay batches', () async {
+    final h = _Harness();
+    final hello = h.switchTo('LEGACY');
+    h.sent.clear();
+
+    h.controller.add(ServerReady(state: _snap(id: 'LEGACY')));
+    h.controller.add(ServerSdkEventBatch(
+      events: <SdkEventEntry>[
+        SdkEventEntry(id: 1, event: <String, dynamic>{
+          'type': 'assistant',
+          'message': {
+            'content': [
+              {'type': 'text', 'text': 'legacy history'},
+            ],
+          },
+        }),
+      ],
+    ));
+    await h.pump();
+
+    expect(h.store.state.attachId, hello.attachId);
+    expect(h.store.state.activeId, 'LEGACY');
+    expect(h.store.state.attachmentReady, isTrue);
+    expect(h.store.state.attachmentHistoryStatus, HistoryStatus.ready);
+    final items = h.store.state.byId['LEGACY']!.items;
+    expect((items.single as AssistantTextItem).text, 'legacy history');
+
+    h.sent.clear();
+    h.store.sendUser('works with the old server');
+    expect(h.sent.single, isA<ClientAttachmentCommand>());
+    await h.close();
+  });
+
+  test('unscoped legacy frames are rejected after an attachment switch', () async {
+    final h = _Harness();
+    h.switchTo('A');
+    h.controller.add(ServerReady(state: _snap(id: 'A')));
+    h.controller.add(ServerSdkEventBatch(
+      events: <SdkEventEntry>[
+        SdkEventEntry(id: 1, event: <String, dynamic>{
+          'type': 'assistant',
+          'message': {
+            'content': [
+              {'type': 'text', 'text': 'first A'},
+            ],
+          },
+        }),
+      ],
+    ));
+    await h.pump();
+
+    final b = h.switchTo('B');
+    h.controller.add(ServerReady(state: _snap(id: 'A', lastEventId: 2)));
+    h.controller.add(ServerSdkEventBatch(
+      events: <SdkEventEntry>[
+        SdkEventEntry(id: 2, event: <String, dynamic>{
+          'type': 'assistant',
+          'message': {
+            'content': [
+              {'type': 'text', 'text': 'stale A'},
+            ],
+          },
+        }),
+      ],
+    ));
+    await h.pump();
+
+    expect(h.store.state.activeId, 'B');
+    expect(h.store.state.attachId, b.attachId);
+    expect(h.store.state.attachmentReady, isFalse);
+    expect(h.store.state.byId.containsKey('B'), isFalse);
+    final aItems = h.store.state.byId['A']!.items;
+    expect(
+      aItems.map((ChatItem item) => (item as AssistantTextItem).text),
+      <String>['first A'],
+    );
+    await h.close();
+  });
+
+  test('a reconnect resets legacy compatibility for its first attachment', () async {
+    final h = _Harness();
+    h.switchTo('A');
+    h.switchTo('B');
+    h.store.resetTransport();
+
+    h.switchTo('RECONNECTED');
+    h.controller.add(ServerReady(state: _snap(id: 'RECONNECTED')));
+    await h.pump();
+
+    expect(h.store.state.activeId, 'RECONNECTED');
+    expect(h.store.state.attachmentReady, isTrue);
+    expect(h.store.state.attachmentHistoryStatus, HistoryStatus.ready);
+    await h.close();
+  });
+
+  test('the real provider resets transport and only replays an empty bootstrap', () {
+    final source = File('lib/src/app/providers.dart').readAsStringSync();
+    expect(source, contains('if (!nowReady && wasReady)'));
+    expect(source, contains('store.resetTransport()'));
+    expect(
+      source,
+      contains('attachClient(replayBootstrap: active == null && pending == null)'),
+    );
+    expect(source, contains('if (replayBootstrap && st is ConnectReady)'));
+    expect(
+      source.indexOf('final active = store.state.activeId;'),
+      lessThan(source.indexOf('attachClient(replayBootstrap:')),
+    );
   });
 
   test('ServerSessionsUpdate remains a global frame', () async {

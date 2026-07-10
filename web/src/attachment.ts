@@ -13,6 +13,9 @@ export type AttachmentViewState = {
   replayAfterId: number;
   replayMode?: ReplayMode;
   legacyReplay: boolean;
+  /** Old servers do not echo attachment scope. Allow their unscoped frames
+   * only for the first attachment sent on a WebSocket connection. */
+  allowLegacyFrames: boolean;
 };
 
 let nextAttachId = 1;
@@ -28,10 +31,11 @@ export function withAttachId(hello: ClientHello, attachId = createAttachId()): C
 
 export function isMessageForAttachment(
   message: ServerMessage,
-  attachment: Pick<AttachmentViewState, 'attachId' | 'requestedSessionId'>,
+  attachment: Pick<AttachmentViewState, 'attachId' | 'requestedSessionId' | 'allowLegacyFrames'>,
   activeSessionId: string | null,
 ): boolean {
   if (message.type === 'sessions_update') return true;
+  if (!message.attachId && !attachment.allowLegacyFrames) return false;
   if (message.attachId && message.attachId !== attachment.attachId) return false;
 
   // A restored runtime id is only a hint: the server may recover the same

@@ -82,7 +82,7 @@ final sessionsStoreProvider = Provider<SessionsStore>((Ref ref) {
       StreamController<ServerMessage>.broadcast();
   StreamSubscription<ServerMessage>? wsSub;
 
-  void attachClient() {
+  void attachClient({required bool replayBootstrap}) {
     wsSub?.cancel();
     final client = c.client;
     if (client == null) return;
@@ -92,7 +92,7 @@ final sessionsStoreProvider = Provider<SessionsStore>((Ref ref) {
     // stream with no replay buffer. Replay the snapshot we already have so the
     // SessionsStore populates activeId and the UI can send user messages.
     final ConnectState st = c.state;
-    if (st is ConnectReady) {
+    if (replayBootstrap && st is ConnectReady) {
       relay.add(ServerReady(state: st.snapshot));
     }
   }
@@ -115,10 +115,19 @@ final sessionsStoreProvider = Provider<SessionsStore>((Ref ref) {
   bool wasReady = false;
   void onConnectChange() {
     final bool nowReady = c.state is ConnectReady;
+    if (!nowReady && wasReady) {
+      final StreamSubscription<ServerMessage>? previous = wsSub;
+      wsSub = null;
+      if (previous != null) unawaited(previous.cancel());
+      store.resetTransport();
+    }
     if (nowReady && !wasReady) {
-      attachClient();
       final active = store.state.activeId;
       final pending = store.consumePendingCwd();
+      // The synthetic snapshot is only needed on a truly empty bootstrap.
+      // During reconnect or a queued new-session flow it can overtake the
+      // scoped hello below and be mistaken for a legacy ready frame.
+      attachClient(replayBootstrap: active == null && pending == null);
       if (active != null && pending == null) {
         store.switchTo(active);
       } else if (pending != null) {

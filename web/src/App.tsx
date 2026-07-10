@@ -65,6 +65,7 @@ export function App() {
     hasCachedState: false,
     replayAfterId: 0,
     legacyReplay: false,
+    allowLegacyFrames: true,
   });
   const [attachment, setAttachment] = useState<AttachmentViewState>(initialAttachmentRef.current);
   const attachmentRef = useRef<AttachmentViewState>(initialAttachmentRef.current);
@@ -511,6 +512,12 @@ export function App() {
     const client = new WsClient(token ?? '', (message) => serverMessageHandlerRef.current(message));
     wsRef.current = client;
     client.onConnectionChange((s) => setConnection(s));
+    // A newly opened socket has no in-flight frames from its predecessor, so
+    // its first hello may safely interoperate with an old unscoped server.
+    // beginAttachment/retry turn this back off after a same-socket switch.
+    client.onOpen(() => {
+      commitAttachment((current) => ({ ...current, allowLegacyFrames: true }));
+    });
     let hello = currentHelloRef.current;
     if (!hello) {
       const activeId = activeSessionIdRef.current;
@@ -533,7 +540,7 @@ export function App() {
       if (wsRef.current === client) wsRef.current = null;
       client.close();
     };
-  }, [authed, nodes.length, nodesLoaded, token]);
+  }, [authed, commitAttachment, nodes.length, nodesLoaded, token]);
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -562,6 +569,7 @@ export function App() {
       hasCachedState: !!cached && cached.items.length > 0,
       replayAfterId: hello.lastEventId ?? 0,
       legacyReplay: false,
+      allowLegacyFrames: false,
     };
 
     pendingRef.current = [];
@@ -665,6 +673,7 @@ export function App() {
         hasCachedState: false,
         replayAfterId: 0,
         legacyReplay: false,
+        allowLegacyFrames: false,
       });
       setPendingEdits(new Map());
       setNonEditPermReq(null);
@@ -908,7 +917,13 @@ export function App() {
     const hello = withAttachId(previous, attachId);
     currentHelloRef.current = hello;
     replayStateRef.current = null;
-    commitAttachment((current) => ({ ...current, attachId, phase: 'connecting', legacyReplay: false }));
+    commitAttachment((current) => ({
+      ...current,
+      attachId,
+      phase: 'connecting',
+      legacyReplay: false,
+      allowLegacyFrames: false,
+    }));
     wsRef.current?.send(hello);
   }, [commitAttachment]);
 

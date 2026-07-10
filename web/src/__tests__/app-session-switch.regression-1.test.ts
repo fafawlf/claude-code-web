@@ -19,7 +19,9 @@ test('App keeps a target attachment visible until replay completes', async () =>
 test('App websocket lifecycle is independent from toast and chat renders', async () => {
   const source = await readFile(new URL('../App.tsx', import.meta.url), 'utf8');
   assert.match(source, /new WsClient\(token \?\? '', \(message\) => serverMessageHandlerRef\.current\(message\)\)/);
-  assert.match(source, /\}, \[authed, nodes\.length, nodesLoaded, token\]\);/);
+  assert.match(source, /client\.onOpen\(\(\) => \{/);
+  assert.match(source, /allowLegacyFrames: true/);
+  assert.match(source, /\}, \[authed, commitAttachment, nodes\.length, nodesLoaded, token\]\);/);
   assert.doesNotMatch(source, /\[authed[^\]]*pushToast[^\]]*\]/);
 });
 

@@ -61,10 +61,16 @@ class SessionsState {
 }
 
 class _AttachmentAttempt {
-  _AttachmentAttempt({required this.attachId, this.sessionId});
+  _AttachmentAttempt({
+    required this.attachId,
+    required this.generation,
+    this.sessionId,
+  });
 
   final String attachId;
+  final int generation;
   String? sessionId;
+  bool legacyProtocol = false;
   bool readyReceived = false;
   bool replayComplete = false;
   ReplayMode replayMode = ReplayMode.delta;
@@ -96,6 +102,7 @@ class SessionsStore {
   StreamSubscription<ServerMessage>? _sub;
   String? _pendingCwd;
   _AttachmentAttempt? _attachment;
+  int _attachmentGeneration = 0;
 
   SessionsState _state = const SessionsState();
   SessionsState get state => _state;
@@ -127,7 +134,25 @@ class SessionsStore {
 
   bool _isCurrentAttachmentFrame(AttachmentScopedServerMessage frame) {
     final _AttachmentAttempt? current = _attachment;
-    if (current == null || frame.attachId != current.attachId) return false;
+    if (current == null) return false;
+    final String? frameAttachId = frame.attachId;
+    if (frameAttachId == null) {
+      // An old server does not echo attachment scope. Compatibility is safe
+      // only for the first client-owned attachment on this socket: after any
+      // switch/retry/new-session, a delayed unscoped A frame cannot be proven
+      // to belong to B and must be dropped.
+      if (current.generation != 1) return false;
+      if (frame is ServerReady) {
+        final String frameSessionId = frame.sessionId ?? frame.state.sessionId;
+        return current.sessionId == null || frameSessionId == current.sessionId;
+      }
+      if (!current.legacyProtocol) return false;
+      final String? frameSessionId = frame.sessionId;
+      return frameSessionId == null ||
+          current.sessionId == null ||
+          frameSessionId == current.sessionId;
+    }
+    if (frameAttachId != current.attachId) return false;
     // A matching attachId is the authority for ready. The server may recover
     // an expired runtime id from its stable transcript key and assign a fresh
     // session id; rejecting that ready would leave the client syncing forever.
@@ -140,8 +165,10 @@ class SessionsStore {
 
   void _beginAttachment(ClientHello hello, {required String? selectedSessionId}) {
     final String attachId = hello.attachId!;
+    _attachmentGeneration += 1;
     _attachment = _AttachmentAttempt(
       attachId: attachId,
+      generation: _attachmentGeneration,
       sessionId: selectedSessionId,
     );
     _send(hello);
@@ -157,6 +184,9 @@ class SessionsStore {
 
   void _onDisconnected() {
     _attachment = null;
+    // A reconnect is a fresh transport: frames from the closed socket cannot
+    // arrive on it, so the first attachment may safely use legacy fallback.
+    _attachmentGeneration = 0;
     _emit(_state.copyWith(
       attachId: null,
       attachmentSessionId: null,
@@ -164,6 +194,13 @@ class SessionsStore {
       attachmentHistoryStatus: null,
       attachmentHistoryTruncated: false,
     ));
+  }
+
+  /// Mark the current WebSocket transport as gone. A later connection starts
+  /// a fresh attachment generation, so its first hello may safely interoperate
+  /// with an older server that does not echo attachment scope.
+  void resetTransport() {
+    _onDisconnected();
   }
 
   void _acceptBootstrapReady(ServerReady message) {
@@ -236,6 +273,7 @@ class SessionsStore {
     switch (m) {
       case ServerReady(
           :final SessionStateSnapshot state,
+          :final String? attachId,
           :final String? sessionId,
           :final ReplayMode? replayMode,
           :final HistoryStatus? historyStatus,
@@ -246,11 +284,18 @@ class SessionsStore {
         if (scopedSessionId != state.sessionId) {
           return;
         }
+        final bool legacyProtocol = attachId == null;
         current
           ..sessionId = state.sessionId
           ..readyReceived = true
+          ..legacyProtocol = legacyProtocol
           ..replayMode = replayMode ?? ReplayMode.delta
-          ..historyStatus = historyStatus
+          // Old servers send `ready` before optional replay batches and have
+          // no replayComplete frame. Match their protocol semantics: ready is
+          // the completion signal, and later unscoped batches append normally.
+          ..replayComplete = legacyProtocol
+          ..historyStatus = historyStatus ??
+              (legacyProtocol ? HistoryStatus.ready : null)
           ..historyTruncated = historyTruncated ?? false;
         if (current.replayMode == ReplayMode.full) {
           current.replayState = withReady(ChatState.initial, state);

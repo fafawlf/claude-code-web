@@ -8,6 +8,7 @@ import type { ServerMessage, SessionStateSnapshot } from '../types';
 const attachment = {
   attachId: 'attach-b',
   requestedSessionId: 'session-b',
+  allowLegacyFrames: false,
 };
 
 function snapshot(sessionId: string): SessionStateSnapshot {
@@ -54,8 +55,23 @@ test('attachment scope rejects stale attach ids and stale session ids', () => {
 });
 
 test('attachment scope remains compatible with legacy unscoped frames', () => {
-  assert.equal(isMessageForAttachment({ type: 'sdk_event', id: 1, event: { type: 'result' } }, attachment, 'session-b'), true);
+  const initialAttachment = { ...attachment, allowLegacyFrames: true };
+  assert.equal(isMessageForAttachment({ type: 'sdk_event', id: 1, event: { type: 'result' } }, initialAttachment, 'session-b'), true);
   assert.equal(isMessageForAttachment({ type: 'sessions_update', sessions: [] }, attachment, 'session-b'), true);
+});
+
+test('an unscoped replay from A is rejected after switching to B', () => {
+  const staleLegacyBatch: ServerMessage = {
+    type: 'sdk_events_batch',
+    events: [{ id: 7, event: { type: 'assistant', message: { content: 'stale A' } } }],
+  };
+  const staleLegacyReady: ServerMessage = {
+    type: 'ready',
+    state: snapshot('session-a'),
+  };
+
+  assert.equal(isMessageForAttachment(staleLegacyBatch, attachment, 'session-b'), false);
+  assert.equal(isMessageForAttachment(staleLegacyReady, attachment, 'session-b'), false);
 });
 
 test('matching attach id accepts ready when an expired runtime id is recovered to a new session id', () => {
