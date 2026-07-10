@@ -1,7 +1,7 @@
 import { getSessionMessages, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { access, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { streamBoundedJsonLines } from './boundedJsonl.js';
 import { assertSafeTranscriptId } from './transcriptId.js';
 
@@ -31,6 +31,11 @@ export async function* streamClaudeTranscriptMessages(
     yield* streamClaudeTranscriptFile(file, options.signal, options.onTruncated);
     return;
   }
+
+  // Multi-user production must never fall back to the SDK collector: it is
+  // neither cancellable nor bounded, and it does not carry our workspace
+  // scope. A scoped lookup is exact-or-empty.
+  if (options.searchRoot) return;
 
   throwIfAborted(options.signal);
   const messages = await waitForAbort(
@@ -70,11 +75,14 @@ export async function findClaudeTranscriptFile(
   assertSafeTranscriptId(sessionId);
   throwIfAborted(signal);
   const projects = join(home, '.claude', 'projects');
-  const direct = join(projects, encodeClaudeProjectPath(cwd), `${sessionId}.jsonl`);
-  // When a searchRoot is given (multi-user mode), only transcripts whose
-  // recorded cwd lives under that root may be opened — even by exact UUID.
-  const allowedPrefix = searchRoot ? encodeClaudeProjectPath(searchRoot) : undefined;
-  const cacheKey = [projects, allowedPrefix ?? '', sessionId].join('\0');
+  const resolvedCwd = resolve(cwd);
+  const resolvedRoot = searchRoot ? resolve(searchRoot) : undefined;
+  if (resolvedRoot && !isPathInside(resolvedRoot, resolvedCwd)) return undefined;
+  const direct = join(projects, encodeClaudeProjectPath(resolvedCwd), `${sessionId}.jsonl`);
+  // Scoped lookup uses the exact, non-lossy cwd relationship. Including cwd
+  // in the cache key prevents a UUID found for one project from being reused
+  // for another project in the same workspace.
+  const cacheKey = [projects, resolvedRoot ?? '', resolvedRoot ? resolvedCwd : '', sessionId].join('\0');
   const cached = transcriptPathCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     try {
@@ -88,14 +96,13 @@ export async function findClaudeTranscriptFile(
   }
 
   try {
-    if (!allowedPrefix || isEncodedPathInside(encodeClaudeProjectPath(cwd), allowedPrefix)) {
-      await access(direct);
-      cacheTranscriptPath(cacheKey, direct);
-      throwIfAborted(signal);
-      return direct;
-    }
+    await access(direct);
+    cacheTranscriptPath(cacheKey, direct);
+    throwIfAborted(signal);
+    return direct;
   } catch (error) {
     if (isAbortError(error)) throw error;
+    if (resolvedRoot) return undefined;
     // Fall through to a one-level search. This keeps old sessions openable even
     // when the stored cwd differs slightly from the currently selected project.
   }
@@ -105,7 +112,6 @@ export async function findClaudeTranscriptFile(
     for (const dir of dirs) {
       throwIfAborted(signal);
       if (!dir.isDirectory()) continue;
-      if (allowedPrefix && !isEncodedPathInside(dir.name, allowedPrefix)) continue;
       const candidate = join(projects, dir.name, `${sessionId}.jsonl`);
       try {
         await access(candidate);
@@ -146,8 +152,9 @@ function cacheTranscriptPath(key: string, path: string): void {
   }
 }
 
-function isEncodedPathInside(encoded: string, encodedRoot: string): boolean {
-  return encoded === encodedRoot || encoded.startsWith(`${encodedRoot}-`);
+function isPathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 export function encodeClaudeProjectPath(cwd: string): string {

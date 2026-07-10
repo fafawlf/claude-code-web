@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { CodexSession } from '../agents/CodexSession.js';
 import { findCodexSessionFile } from '../agents/codexTranscript.js';
-import { findClaudeTranscriptFile } from '../session/claudeTranscript.js';
+import { encodeClaudeProjectPath, findClaudeTranscriptFile, streamClaudeTranscriptMessages } from '../session/claudeTranscript.js';
 
 test('Codex transcript lookup verifies the exact session id instead of matching a short filename fragment', async () => {
   const home = await mkdtemp(join(tmpdir(), 'ccw-codex-transcript-security-'));
@@ -113,6 +113,51 @@ test('Claude transcript lookup rejects traversal in resume ids before joining a 
     await assert.rejects(
       findClaudeTranscriptFile('../victim', '/srv/ccw/users/alice/project', home),
       /invalid transcript session id/i,
+    );
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('scoped Claude lookup does not confuse alice with alice-2 encoded directories', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'ccw-claude-transcript-security-'));
+  const aliceRoot = '/srv/ccw/users/alice';
+  const aliceCwd = `${aliceRoot}/project`;
+  const alice2Cwd = '/srv/ccw/users/alice-2/project';
+  const projects = join(home, '.claude', 'projects');
+  const alice2File = join(projects, encodeClaudeProjectPath(alice2Cwd), 'shared-id.jsonl');
+  await mkdir(join(projects, encodeClaudeProjectPath(alice2Cwd)), { recursive: true });
+  await writeFile(alice2File, `${JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'private' } })}\n`);
+
+  try {
+    assert.equal(
+      await findClaudeTranscriptFile('shared-id', aliceCwd, home, aliceRoot),
+      undefined,
+    );
+    const streamed: unknown[] = [];
+    for await (const message of streamClaudeTranscriptMessages('shared-id', aliceCwd, { home, searchRoot: aliceRoot })) {
+      streamed.push(message);
+    }
+    assert.deepEqual(streamed, [], 'scoped miss must not invoke the unbounded SDK fallback');
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('scoped Claude lookup accepts only the exact direct transcript inside the workspace', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'ccw-claude-transcript-security-'));
+  const aliceRoot = '/srv/ccw/users/alice';
+  const aliceCwd = `${aliceRoot}/project`;
+  const projects = join(home, '.claude', 'projects');
+  const file = join(projects, encodeClaudeProjectPath(aliceCwd), 'alice-id.jsonl');
+  await mkdir(join(projects, encodeClaudeProjectPath(aliceCwd)), { recursive: true });
+  await writeFile(file, '{}\n');
+
+  try {
+    assert.equal(await findClaudeTranscriptFile('alice-id', aliceCwd, home, aliceRoot), file);
+    assert.equal(
+      await findClaudeTranscriptFile('alice-id', '/srv/ccw/users/alice-2/project', home, aliceRoot),
+      undefined,
     );
   } finally {
     await rm(home, { recursive: true, force: true });

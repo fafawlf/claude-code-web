@@ -143,9 +143,12 @@ test('transcript lookup with a search root never resolves another workspace\'s t
     // Bob knows Alice's session UUID but his search root is his own workspace.
     const stolen = await findClaudeTranscriptFile('sess-a', bobCwd, home, `${usersRoot}/bob`);
     assert.equal(stolen, undefined);
-    // Alice finds her own transcript even from a sibling project cwd.
+    // Scoped production lookup is exact: a sibling project must not trigger
+    // the lossy encoded-directory scan, even within the same workspace.
     const own = await findClaudeTranscriptFile('sess-a', `${usersRoot}/alice/other`, home, `${usersRoot}/alice`);
-    assert.equal(own, join(aliceDir, 'sess-a.jsonl'));
+    assert.equal(own, undefined);
+    const exact = await findClaudeTranscriptFile('sess-a', aliceCwd, home, `${usersRoot}/alice`);
+    assert.equal(exact, join(aliceDir, 'sess-a.jsonl'));
     // Legacy mode without a search root still scans everything.
     const legacy = await findClaudeTranscriptFile('sess-b', aliceCwd, home);
     assert.equal(legacy, join(bobDir, 'sess-b.jsonl'));
