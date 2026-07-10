@@ -336,7 +336,15 @@ export function registerWs(
       }
       const scopeError = validateCommandScope(ctx, msg, generation);
       if (scopeError) {
-        scopedSend(ctx, { type: 'error', message: scopeError });
+        // Echo an explicitly stale scope instead of relabelling the error as
+        // current. Modern clients will ignore it, so a delayed A command cannot
+        // create a toast or error item in the newly selected B conversation.
+        writer.send({
+          type: 'error',
+          message: scopeError,
+          attachId: msg.attachId ?? ctx.attachId,
+          sessionId: msg.sessionId ?? ctx.sessionId,
+        }, 'control', ctx.generation);
         return;
       }
       if (!ctx.readySent || !ctx.replayComplete) {

@@ -423,8 +423,9 @@ test('a delayed command from attachment A cannot act on attachment B', async () 
     await inbox.next((message) => message.type === 'sdk_events_batch' && message.attachId === 'command-b' && message.replayComplete === true);
 
     send(ws, { type: 'user', text: 'stale-a', attachId: 'command-a', sessionId: a.id });
-    const rejected = await inbox.next((message) => message.type === 'error' && message.attachId === 'command-b' && /stale/i.test(message.message));
+    const rejected = await inbox.next((message) => message.type === 'error' && message.attachId === 'command-a' && /stale/i.test(message.message));
     assert.equal(rejected.type, 'error');
+    assert.equal(inbox.all.some((message) => message.type === 'error' && message.attachId === 'command-b' && /stale/i.test(message.message)), false);
     assert.deepEqual(a.userMessages, []);
     assert.deepEqual(b.userMessages, []);
 
