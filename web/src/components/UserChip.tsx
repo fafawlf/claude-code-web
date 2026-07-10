@@ -3,16 +3,15 @@ import type { MeInfo } from '../types';
 import { apiFetch } from '../api';
 import { appUrl } from '../appUrl';
 import { TopbarMenuPortal } from './TopbarMenuPortal';
-import { AdminUsersModal } from './AdminUsersModal';
 
 type Props = {
   me: MeInfo;
+  onOpenAdminUsers?: () => void;
 };
 
 /** Logged-in identity chip (feishu mode only): avatar, role, admin tools, logout. */
-export function UserChip({ me }: Props) {
+export function UserChip({ me, onOpenAdminUsers }: Props) {
   const [open, setOpen] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const user = me.user;
 
@@ -45,9 +44,13 @@ export function UserChip({ me }: Props) {
               </div>
             </div>
             <div className="border-t border-border-subtle my-1" />
-            {user.role === 'admin' && (
+            {user.role === 'admin' && onOpenAdminUsers && (
               <button
-                onClick={() => { setOpen(false); setAdminOpen(true); }}
+                onClick={() => {
+                  setOpen(false);
+                  buttonRef.current?.focus();
+                  onOpenAdminUsers();
+                }}
                 className="w-full text-left px-2 py-1.5 rounded hover:bg-bg-hover text-text-secondary hover:text-text-primary transition-colors duration-hover"
               >Manage users…</button>
             )}
@@ -58,7 +61,6 @@ export function UserChip({ me }: Props) {
           </div>
         </TopbarMenuPortal>
       )}
-      {adminOpen && <AdminUsersModal onClose={() => setAdminOpen(false)} />}
     </div>
   );
 }

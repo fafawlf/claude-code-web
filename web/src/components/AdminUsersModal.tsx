@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { AdminUsersResponse } from '../types';
 import { apiFetch } from '../api';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 type Props = {
   onClose: () => void;
@@ -8,6 +9,8 @@ type Props = {
 
 /** Admin-only whitelist + member management. */
 export function AdminUsersModal({ onClose }: Props) {
+  const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   const [data, setData] = useState<AdminUsersResponse | null>(null);
   const [entry, setEntry] = useState('');
   const [busy, setBusy] = useState(false);
@@ -21,12 +24,7 @@ export function AdminUsersModal({ onClose }: Props) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  useFocusTrap(ref, onClose);
 
   const mutateAllowlist = async (value: string, remove: boolean) => {
     setBusy(true);
@@ -68,9 +66,9 @@ export function AdminUsersModal({ onClose }: Props) {
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative w-full max-w-lg max-h-[85vh] flex flex-col rounded-lg border border-border bg-bg-surface shadow-pop animate-modal-in text-[13px]">
+      <div ref={ref} tabIndex={-1} className="relative w-full max-w-lg max-h-[85vh] flex flex-col rounded-lg border border-border bg-bg-surface shadow-pop animate-modal-in text-[13px]" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="flex items-center justify-between p-4 border-b border-border-subtle shrink-0">
-          <div className="text-text-primary font-medium">Team access</div>
+          <h2 id={titleId} className="text-text-primary font-medium">Team access</h2>
           <button onClick={onClose} className="chip">Close</button>
         </div>
 

@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { ClaudeAuthInfo, ClaudeExecutableInfo, ServerRuntimeInfo } from '../types';
 import { Icon } from './Icon';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 type Props = {
   cwd: string;
@@ -16,10 +17,13 @@ type Mode = 'local' | 'remote';
 
 export function InitialSetup({ cwd, home, auth, claude, server, onDone, onOpenProject }: Props) {
   const [mode, setMode] = useState<Mode>(() => readPreferredMode());
+  const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   const canContinue = !!auth && !!claude && auth.source !== 'none' && claude.source !== 'missing';
+  useFocusTrap(ref);
 
   return (
-    <div className="setup-overlay fixed inset-0 z-[70] flex items-center justify-center bg-bg-base/72 px-4 backdrop-blur-[10px]" role="dialog" aria-modal="true" aria-label="Initial setup">
+    <div ref={ref} tabIndex={-1} className="setup-overlay fixed inset-0 z-[70] flex items-center justify-center bg-bg-base/72 px-4 backdrop-blur-[10px]" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <div className="setup-card w-full max-w-[760px] overflow-hidden rounded-lg border border-border-subtle bg-bg-surface shadow-modal">
         <div className="setup-header border-b border-border-subtle bg-bg-raised/70 px-5 py-4">
           <div className="flex items-start gap-3">
@@ -27,7 +31,7 @@ export function InitialSetup({ cwd, home, auth, claude, server, onDone, onOpenPr
               <Icon name="terminal" size={16} />
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="text-base font-semibold text-text-primary">Set up Claude Code Web</h2>
+              <h2 id={titleId} className="text-base font-semibold text-text-primary">Set up Claude Code Web</h2>
               <p className="mt-1 text-sm leading-6 text-text-secondary">
                 This web app controls Claude Code on the machine where this server is running. Pick the mental model once, then use projects and chats normally.
               </p>
