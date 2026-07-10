@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { WsClient, type ConnectionState } from './ws';
-import { applyEvent, applyStateDelta, initialState, addSystem, addUserOptimistic, settleReplayedHistory, withReady, type ChatState } from './reducer';
-import { cachedChatState, cachedLastEventId, chatStateForReady, forgetChatState, rememberChatState } from './sessionCache';
+import { applyEvent, applyEventBatch, applyStateDelta, initialState, addSystem, addUserOptimistic, settleReplayedHistory, withReady, type ChatState } from './reducer';
+import { cachedChatState, cachedLastEventId, chatStateForReady, displaySessionKey, forgetChatState, rememberChatState, SessionCache, type SessionIdentity } from './sessionCache';
 import { buildReconnectHello } from './reconnect';
+import { createAttachId, isMessageForAttachment, readyUsesExplicitReplay, replayModeForReady, withAttachId, type AttachmentViewState } from './attachment';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
-import type { AgentProviderId, AuthMode, ClaudeAuthInfo, ClaudeAuthMode, MeInfo, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
+import type { AgentProviderId, AuthMode, ClaudeAuthInfo, ClaudeAuthMode, ClientHello, MeInfo, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
 import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, MODE_ORDER } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MessageList } from './components/MessageList';
@@ -44,7 +45,7 @@ function getToken(): string | null {
 export function App() {
   const token = getToken();
   setApiToken(token);
-  const toast = useToast();
+  const { push: pushToast } = useToast();
   const restoredActiveRef = useRef<StoredActiveSession | null>(readStoredActiveSession());
   const initialChatState = restoredActiveRef.current
     ? withReady({ ...initialState }, restoredActiveRef.current.state)
@@ -54,8 +55,24 @@ export function App() {
   const [me, setMe] = useState<MeInfo | null>(null);
   const [state, setState] = useState<ChatState>(initialChatState);
   const stateRef = useRef<ChatState>(initialChatState);
-  const cacheRef = useRef<Map<string, ChatState>>(new Map());
+  const cacheRef = useRef(new SessionCache());
   const activeSessionIdRef = useRef<string | null>(restoredActiveRef.current?.sessionId ?? null);
+  const initialAttachmentRef = useRef<AttachmentViewState>({
+    attachId: createAttachId(),
+    phase: 'connecting',
+    requestedSessionId: restoredActiveRef.current?.sessionId,
+    targetProviderSessionId: restoredActiveRef.current?.state.providerSessionId ?? restoredActiveRef.current?.state.claudeSessionId,
+    targetCwd: restoredActiveRef.current?.state.cwd,
+    displaySessionKey: restoredActiveRef.current ? displaySessionKey(restoredActiveRef.current.state) : 'session:boot',
+    hasCachedState: false,
+    replayAfterId: 0,
+    legacyReplay: false,
+  });
+  const [attachment, setAttachment] = useState<AttachmentViewState>(initialAttachmentRef.current);
+  const attachmentRef = useRef<AttachmentViewState>(initialAttachmentRef.current);
+  const replayStateRef = useRef<ChatState | null>(null);
+  const currentHelloRef = useRef<ClientHello | null>(null);
+  const scrollPositionsRef = useRef(new Map<string, number | 'bottom'>());
   const liveStatusRef = useRef<Map<string, SessionStateSnapshot['runtimeStatus']>>(new Map());
   const [nonEditPermReq, setNonEditPermReq] = useState<ServerPermissionRequest | null>(null);
   const [pendingEdits, setPendingEdits] = useState<Map<string, ServerPermissionRequest>>(new Map());
@@ -92,13 +109,17 @@ export function App() {
   useEffect(() => installMobileViewportVars(), []);
 
   const commitState = useCallback((nextState: ChatState | ((prev: ChatState) => ChatState)) => {
-    setState((prev) => {
-      const next = typeof nextState === 'function' ? nextState(prev) : nextState;
-      stateRef.current = next;
-      rememberChatState(cacheRef.current, activeSessionIdRef.current, next);
-      writeStoredActiveSession(activeSessionIdRef.current, next.state);
-      return next;
-    });
+    const next = typeof nextState === 'function' ? nextState(stateRef.current) : nextState;
+    stateRef.current = next;
+    rememberChatState(cacheRef.current, activeSessionIdRef.current, next);
+    writeStoredActiveSession(activeSessionIdRef.current, next.state);
+    setState(next);
+  }, []);
+
+  const commitAttachment = useCallback((nextState: AttachmentViewState | ((prev: AttachmentViewState) => AttachmentViewState)) => {
+    const next = typeof nextState === 'function' ? nextState(attachmentRef.current) : nextState;
+    attachmentRef.current = next;
+    setAttachment(next);
   }, []);
 
   // rAF-coalesced event queue: high-frequency SDK events (especially stream_event
@@ -124,11 +145,15 @@ export function App() {
   // Tick every second while busy so the StatusBar's "no activity for Ns" counter
   // updates without needing a prop change from each event.
   useEffect(() => {
+    if (!state.busy) {
+      setSecondsSinceLastEvent((seconds) => seconds === 0 ? seconds : 0);
+      return;
+    }
     const t = setInterval(() => {
       setSecondsSinceLastEvent(Math.floor((Date.now() - lastEventAtRef.current) / 1000));
     }, 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [state.busy]);
 
   useEffect(() => {
     document.documentElement.dataset.skin = skin;
@@ -206,7 +231,7 @@ export function App() {
     pinned: pinnedProjects,
   }), [defaultCwd, pinnedProjects, recentProjects, serverInfo?.home, state.state?.cwd]);
 
-  const currentCwd = state.state?.cwd ?? defaultCwd;
+  const currentCwd = attachment.targetCwd ?? state.state?.cwd ?? defaultCwd;
 
   const selectNodeSilently = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
@@ -284,96 +309,218 @@ export function App() {
     }
   }, [authed, currentCwd, projectEntries, projectSessions, refreshProjectSessions]);
 
-  useEffect(() => {
-    if (!authed || !nodesLoaded || nodes.length === 0) return;
-    const onMessage = (m: ServerMessage) => {
-      if (m.type === 'ready') {
-        pendingRef.current = [];
-        lastEventAtRef.current = Date.now();
-        activeSessionIdRef.current = m.state.sessionId;
-        selectNodeSilently(m.state.nodeId);
-        selectProviderSilently(m.state.provider);
-        const cached = cachedChatState(cacheRef.current, m.state);
-        commitState((current) => withReady(chatStateForReady(current, cached, m.state), m.state));
-        setRecentProjects(rememberProject(m.state.cwd));
-        setPendingEdits(new Map());
-        setNonEditPermReq(null);
-        setPlanProposed(null);
-        // Server no longer pushes sessions_update — pull once per attach.
-        wsRef.current?.send({ type: 'list_sessions' });
-      } else if (m.type === 'state_update') {
+  const rememberReconnectIntent = useCallback((chat: ChatState, lastEventId: number) => {
+    if (!chat.state) return;
+    const hello = withAttachId(
+      buildReconnectHello(chat.state.sessionId, chat, lastEventId),
+      attachmentRef.current.attachId,
+    );
+    currentHelloRef.current = hello;
+    wsRef.current?.setHelloIntent(hello);
+  }, []);
+
+  const serverMessageHandlerRef = useRef<(message: ServerMessage) => void>(() => {});
+  serverMessageHandlerRef.current = (m: ServerMessage) => {
+    const currentAttachment = attachmentRef.current;
+    if (!isMessageForAttachment(m, currentAttachment, activeSessionIdRef.current)) return;
+
+    if (m.type === 'ready') {
+      pendingRef.current = [];
+      lastEventAtRef.current = Date.now();
+      activeSessionIdRef.current = m.state.sessionId;
+      selectNodeSilently(m.state.nodeId);
+      selectProviderSilently(m.state.provider);
+
+      const cached = cachedChatState(cacheRef.current, m.state)
+        ?? (currentAttachment.hasCachedState ? stateRef.current : undefined);
+      const base = withReady(chatStateForReady(stateRef.current, cached, m.state), m.state);
+      const explicitReplay = readyUsesExplicitReplay(m);
+      const replayMode = replayModeForReady(m, currentAttachment.replayAfterId);
+      rememberReconnectIntent(base, replayMode === 'delta' ? currentAttachment.replayAfterId : 0);
+      const nextDisplayKey = currentAttachment.displaySessionKey.startsWith('session:pending')
+        || currentAttachment.displaySessionKey.startsWith('session:boot')
+        ? displaySessionKey(m.state)
+        : currentAttachment.displaySessionKey;
+
+      if (m.historyStatus === 'error') {
+        replayStateRef.current = null;
+        commitState(base);
+        commitAttachment({
+          ...currentAttachment,
+          phase: 'error',
+          requestedSessionId: m.state.sessionId,
+          targetProviderSessionId: m.state.providerSessionId ?? m.state.claudeSessionId,
+          targetCwd: m.state.cwd,
+          displaySessionKey: nextDisplayKey,
+          replayMode,
+          legacyReplay: false,
+        });
+      } else if (!explicitReplay) {
+        // Rolling-deploy compatibility with the old server, which sent ready
+        // without an explicit replay completion frame.
+        replayStateRef.current = null;
+        commitState(base);
+        commitAttachment({
+          ...currentAttachment,
+          phase: 'ready',
+          requestedSessionId: m.state.sessionId,
+          targetProviderSessionId: m.state.providerSessionId ?? m.state.claudeSessionId,
+          targetCwd: m.state.cwd,
+          displaySessionKey: nextDisplayKey,
+          replayMode,
+          legacyReplay: true,
+        });
+      } else if (replayMode === 'full') {
+        // Keep the cached transcript visible while a fresh replay is built off
+        // screen. The replacement becomes visible in one commit at completion.
+        replayStateRef.current = withReady({ ...initialState }, m.state);
+        commitAttachment({
+          ...currentAttachment,
+          phase: 'replaying',
+          requestedSessionId: m.state.sessionId,
+          targetProviderSessionId: m.state.providerSessionId ?? m.state.claudeSessionId,
+          targetCwd: m.state.cwd,
+          displaySessionKey: nextDisplayKey,
+          replayMode,
+          legacyReplay: false,
+        });
+      } else {
+        replayStateRef.current = null;
+        commitState(base);
+        commitAttachment({
+          ...currentAttachment,
+          phase: 'replaying',
+          requestedSessionId: m.state.sessionId,
+          targetProviderSessionId: m.state.providerSessionId ?? m.state.claudeSessionId,
+          targetCwd: m.state.cwd,
+          displaySessionKey: nextDisplayKey,
+          replayMode,
+          legacyReplay: false,
+        });
+      }
+
+      try { setRecentProjects(rememberProject(m.state.cwd)); } catch { /* storage may be unavailable */ }
+      setPendingEdits(new Map());
+      setNonEditPermReq(null);
+      setPlanProposed(null);
+      wsRef.current?.send({ type: 'list_sessions' });
+      return;
+    }
+
+    if (m.type === 'state_update') {
+      if (currentAttachment.phase === 'replaying' && currentAttachment.replayMode === 'full' && replayStateRef.current) {
+        replayStateRef.current = applyStateDelta(replayStateRef.current, m.state);
+      } else {
         commitState((s) => applyStateDelta(s, m.state));
-      } else if (m.type === 'heartbeat') {
-        if (m.noActivityMs !== undefined) {
-          lastEventAtRef.current = Date.now() - m.noActivityMs;
-          setSecondsSinceLastEvent(Math.floor(m.noActivityMs / 1000));
-        }
-        if (m.session && m.session.sessionId === activeSessionIdRef.current) {
+      }
+    } else if (m.type === 'heartbeat') {
+      if (m.noActivityMs !== undefined) {
+        lastEventAtRef.current = Date.now() - m.noActivityMs;
+        if (stateRef.current.busy) setSecondsSinceLastEvent(Math.floor(m.noActivityMs / 1000));
+      }
+      if (m.session && m.session.sessionId === activeSessionIdRef.current) {
+        if (currentAttachment.phase === 'replaying' && currentAttachment.replayMode === 'full' && replayStateRef.current) {
+          replayStateRef.current = applyStateDelta(replayStateRef.current, m.session);
+        } else {
           commitState((s) => applyStateDelta(s, m.session!));
         }
-      } else if (m.type === 'sdk_event') {
-        enqueueEvent(m.id, m.event);
-      } else if (m.type === 'sdk_events_batch') {
-        // Batch replay from the server: fold the whole set into one setState to
-        // avoid 900× renders on attach to a long session.
-        const evs = m.events;
-        commitState((s) => settleReplayedHistory(evs.reduce((acc, { id, event }) => applyEvent(acc, event, id), s)));
-      } else if (m.type === 'sessions_update') {
-        const previous = liveStatusRef.current;
-        const activeId = activeSessionIdRef.current;
-        const completed = m.sessions.find((s) => {
-          const prev = previous.get(s.sessionId);
-          return s.sessionId !== activeId
-            && s.runtimeStatus === 'idle'
-            && (prev === 'running' || prev === 'waiting_permission' || prev === 'waiting_plan');
-        });
-        liveStatusRef.current = new Map(m.sessions.map((s) => [s.sessionId, s.runtimeStatus]));
-        setLiveSessions(m.sessions);
-        if (completed) refreshSessions(completed.cwd);
-      } else if (m.type === 'pending_control') {
-        if (m.sessionId !== activeSessionIdRef.current) return;
-        if (m.control.kind === 'permission') {
-          const { kind, ...req } = m.control;
-          if (EDIT_LIKE.has(req.toolName) && req.toolUseId) {
-            setPendingEdits((prev) => new Map(prev).set(req.toolUseId!, { type: 'permission_request', ...req }));
-          } else {
-            setNonEditPermReq({ type: 'permission_request', ...req });
-          }
-        } else {
-          setPlanProposed({ type: 'plan_proposed', reqId: m.control.reqId, plan: m.control.plan });
-        }
-      } else if (m.type === 'permission_request') {
-        if (EDIT_LIKE.has(m.toolName) && m.toolUseId) {
-          setPendingEdits((prev) => new Map(prev).set(m.toolUseId!, m));
-        } else {
-          setNonEditPermReq(m);
-        }
-      } else if (m.type === 'plan_proposed') {
-        setPlanProposed(m);
-      } else if (m.type === 'error') {
-        commitState((s) => addSystem(s, m.message, 'error'));
-        toast.push(m.message, { level: 'error' });
       }
-    };
-    const client = new WsClient(token ?? '', onMessage);
+    } else if (m.type === 'sdk_event') {
+      if (currentAttachment.phase === 'replaying' && currentAttachment.replayMode === 'full' && replayStateRef.current) {
+        replayStateRef.current = applyEvent(replayStateRef.current, m.event, m.id);
+      } else {
+        enqueueEvent(m.id, m.event);
+      }
+    } else if (m.type === 'sdk_events_batch') {
+      if (currentAttachment.phase === 'replaying' && currentAttachment.replayMode === 'full') {
+        const builder = replayStateRef.current ?? { ...initialState };
+        replayStateRef.current = applyEventBatch(builder, m.events);
+        if (m.replayComplete) {
+          const completed = settleReplayedHistory(replayStateRef.current);
+          replayStateRef.current = null;
+          commitState(completed);
+          rememberReconnectIntent(completed, completed.lastEventId);
+          commitAttachment((current) => ({ ...current, phase: 'ready', hasCachedState: completed.items.length > 0 }));
+        }
+      } else {
+        commitState((s) => {
+          const replayed = applyEventBatch(s, m.events);
+          return m.replayComplete || currentAttachment.legacyReplay ? settleReplayedHistory(replayed) : replayed;
+        });
+        if (m.replayComplete) {
+          rememberReconnectIntent(stateRef.current, stateRef.current.lastEventId);
+          commitAttachment((current) => ({ ...current, phase: 'ready', hasCachedState: stateRef.current.items.length > 0 }));
+        }
+      }
+    } else if (m.type === 'sessions_update') {
+      const previous = liveStatusRef.current;
+      const activeId = activeSessionIdRef.current;
+      const completed = m.sessions.find((s) => {
+        const prev = previous.get(s.sessionId);
+        return s.sessionId !== activeId
+          && s.runtimeStatus === 'idle'
+          && (prev === 'running' || prev === 'waiting_permission' || prev === 'waiting_plan');
+      });
+      liveStatusRef.current = new Map(m.sessions.map((s) => [s.sessionId, s.runtimeStatus]));
+      setLiveSessions(m.sessions);
+      if (completed) refreshSessions(completed.cwd);
+    } else if (m.type === 'pending_control') {
+      if (m.control.kind === 'permission') {
+        const { kind, ...req } = m.control;
+        if (EDIT_LIKE.has(req.toolName) && req.toolUseId) {
+          setPendingEdits((prev) => new Map(prev).set(req.toolUseId!, { type: 'permission_request', ...req }));
+        } else {
+          setNonEditPermReq({ type: 'permission_request', ...req });
+        }
+      } else {
+        setPlanProposed({ type: 'plan_proposed', reqId: m.control.reqId, plan: m.control.plan });
+      }
+    } else if (m.type === 'permission_request') {
+      if (EDIT_LIKE.has(m.toolName) && m.toolUseId) {
+        setPendingEdits((prev) => new Map(prev).set(m.toolUseId!, m));
+      } else {
+        setNonEditPermReq(m);
+      }
+    } else if (m.type === 'plan_proposed') {
+      setPlanProposed(m);
+    } else if (m.type === 'error') {
+      if (currentAttachment.phase !== 'ready') {
+        replayStateRef.current = null;
+        commitAttachment((current) => ({ ...current, phase: 'error' }));
+      }
+      commitState((s) => addSystem(s, m.message, 'error'));
+      pushToast(m.message, { level: 'error' });
+    }
+  };
+
+  useEffect(() => {
+    if (!authed || !nodesLoaded || nodes.length === 0) return;
+    const client = new WsClient(token ?? '', (message) => serverMessageHandlerRef.current(message));
     wsRef.current = client;
     client.onConnectionChange((s) => setConnection(s));
-    client.connect();
-    client.onOpen(() => {
+    let hello = currentHelloRef.current;
+    if (!hello) {
       const activeId = activeSessionIdRef.current;
       if (!activeId) {
         const provider = selectedProviderRef.current;
-        client.send({ type: 'hello', nodeId: selectedNodeIdRef.current, provider, model: defaultModelForProvider(provider) });
-        return;
+        hello = { type: 'hello', nodeId: selectedNodeIdRef.current, provider, model: defaultModelForProvider(provider) };
+      } else {
+        hello = buildReconnectHello(
+          activeId,
+          stateRef.current,
+          stateRef.current.state ? cachedLastEventId(cacheRef.current, stateRef.current.state) : 0
+        );
       }
-      client.send(buildReconnectHello(
-        activeId,
-        stateRef.current,
-        activeId && stateRef.current.state ? cachedLastEventId(cacheRef.current, stateRef.current.state) : 0
-      ));
-    });
-    return () => { client.close(); };
-  }, [authed, nodes.length, nodesLoaded, toast, enqueueEvent, commitState, refreshSessions, selectNodeSilently, selectProviderSilently]);
+      hello = withAttachId(hello, attachmentRef.current.attachId);
+      currentHelloRef.current = hello;
+    }
+    client.send(hello);
+    client.connect();
+    return () => {
+      if (wsRef.current === client) wsRef.current = null;
+      client.close();
+    };
+  }, [authed, nodes.length, nodesLoaded, token]);
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -384,6 +531,38 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [sidebarOpen]);
 
+  const beginAttachment = useCallback((
+    helloInput: ClientHello,
+    target: SessionIdentity,
+    cached?: ChatState,
+  ) => {
+    const attachId = createAttachId();
+    const hello = withAttachId(helloInput, attachId);
+    const stableKey = displaySessionKey(target);
+    const nextAttachment: AttachmentViewState = {
+      attachId,
+      phase: 'connecting',
+      requestedSessionId: hello.sessionId,
+      targetProviderSessionId: target.providerSessionId ?? target.claudeSessionId,
+      targetCwd: target.cwd,
+      displaySessionKey: stableKey === 'session:pending' ? `${stableKey}:${attachId}` : stableKey,
+      hasCachedState: !!cached && cached.items.length > 0,
+      replayAfterId: hello.lastEventId ?? 0,
+      legacyReplay: false,
+    };
+
+    pendingRef.current = [];
+    replayStateRef.current = null;
+    activeSessionIdRef.current = hello.sessionId ?? null;
+    currentHelloRef.current = hello;
+    commitAttachment(nextAttachment);
+    commitState(cached ?? { ...initialState });
+    setPendingEdits(new Map());
+    setNonEditPermReq(null);
+    setPlanProposed(null);
+    wsRef.current?.send(hello);
+  }, [commitAttachment, commitState]);
+
   const newSession = useCallback((opts?: { nodeId?: string; provider?: AgentProviderId; cwd?: string; resumeClaudeId?: string; model?: string; claudeAuthMode?: ClaudeAuthMode; mode?: PermissionMode; title?: string; viewerMode?: boolean }) => {
     const nodeId = opts?.nodeId ?? selectedNodeIdRef.current;
     const provider = opts?.provider ?? selectedProviderRef.current;
@@ -392,7 +571,6 @@ export function App() {
       ? (opts?.claudeAuthMode ?? (current.state?.provider === 'claude' ? current.state.claudeAuthMode : undefined))
       : undefined;
     const carryCurrent = canUseCurrentAsResumeSeed(current, opts, nodeId, provider);
-    const lastEventId = carryCurrent ? current.lastEventId : undefined;
     const seededState = carryCurrent && current.state
       ? {
           ...current,
@@ -409,17 +587,25 @@ export function App() {
           },
         }
       : { ...initialState };
-    pendingRef.current = [];
-    activeSessionIdRef.current = null;
-    commitState(seededState);
-    setPendingEdits(new Map());
-    setNonEditPermReq(null);
-    setPlanProposed(null);
+    const identity: SessionIdentity = {
+      nodeId,
+      provider,
+      cwd: opts?.cwd ?? current.state?.cwd,
+      providerSessionId: opts?.resumeClaudeId,
+      claudeSessionId: provider === 'claude' ? opts?.resumeClaudeId : undefined,
+    };
+    const cached = carryCurrent
+      ? seededState
+      : opts?.resumeClaudeId
+        ? cachedChatState(cacheRef.current, identity)
+        : undefined;
     setSessionTitle(opts?.title);
     selectNodeSilently(nodeId);
     selectProviderSilently(provider);
-    if (opts?.cwd) setRecentProjects(rememberProject(opts.cwd));
-    wsRef.current?.send({
+    if (opts?.cwd) {
+      try { setRecentProjects(rememberProject(opts.cwd)); } catch { /* storage may be unavailable */ }
+    }
+    beginAttachment({
       type: 'hello',
       nodeId,
       provider,
@@ -429,98 +615,130 @@ export function App() {
       claudeAuthMode,
       permissionMode: opts?.mode,
       viewerMode: opts?.viewerMode,
-      lastEventId,
-    });
-  }, [commitState, selectNodeSilently, selectProviderSilently]);
+      // A transcript-only resume may create a new runtime wrapper with a new
+      // event-id space. Cursor replay is safe only for an exact live session.
+      lastEventId: undefined,
+    }, identity, cached);
+  }, [beginAttachment, selectNodeSilently, selectProviderSilently]);
 
   const attachLiveSession = useCallback((sessionId: string, title?: string) => {
-    pendingRef.current = [];
-    activeSessionIdRef.current = sessionId;
     const live = liveSessions.find((s) => s.sessionId === sessionId);
-    const cached = cachedChatState(cacheRef.current, live ?? sessionId) ?? { ...initialState };
-    commitState(cached);
-    setPendingEdits(new Map());
-    setNonEditPermReq(null);
-    setPlanProposed(null);
+    const identity: SessionIdentity = live ?? { sessionId };
+    const cached = cachedChatState(cacheRef.current, identity);
     setSessionTitle(title);
-    wsRef.current?.send({
+    beginAttachment({
       type: 'hello',
       nodeId: live?.nodeId,
       provider: live?.provider,
       sessionId,
       lastEventId: cachedLastEventId(cacheRef.current, live ?? sessionId),
-    });
-  }, [commitState, liveSessions]);
+    }, identity, cached);
+  }, [beginAttachment, liveSessions]);
 
   const closeLiveSession = useCallback((sessionId: string) => {
-    wsRef.current?.send({ type: 'session_close', sessionId });
+    if (!wsRef.current?.send({ type: 'session_close', sessionId })) {
+      pushToast('Session was not closed. Reconnect and try again.', { level: 'error' });
+      return;
+    }
     const live = liveSessions.find((s) => s.sessionId === sessionId);
     forgetChatState(cacheRef.current, live ?? sessionId);
     setLiveSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
     if (activeSessionIdRef.current === sessionId) {
       activeSessionIdRef.current = null;
+      currentHelloRef.current = null;
+      replayStateRef.current = null;
       writeStoredActiveSession(null, null);
       commitState(initialState);
+      commitAttachment({
+        attachId: createAttachId(),
+        phase: 'ready',
+        displaySessionKey: 'session:pending',
+        hasCachedState: false,
+        replayAfterId: 0,
+        legacyReplay: false,
+      });
       setPendingEdits(new Map());
       setNonEditPermReq(null);
       setPlanProposed(null);
       setSessionTitle(undefined);
     }
-  }, [commitState, liveSessions]);
+  }, [commitAttachment, commitState, liveSessions, pushToast]);
 
   const sendUser = useCallback((text: string) => {
     if (!text.trim()) return;
+    if (!wsRef.current?.send({ type: 'user', text })) {
+      pushToast('Message not sent. Reconnect and try again.', { level: 'error' });
+      return;
+    }
     commitState((s) => (s.state ? addUserOptimistic(s, text) : s));
-    wsRef.current?.send({ type: 'user', text });
-  }, [commitState]);
+  }, [commitState, pushToast]);
 
   const onAcceptEdit = useCallback((reqId: string) => {
     setPendingEdits((prev) => {
       let targetTuid: string | undefined;
       for (const [k, v] of prev) if (v.reqId === reqId) { targetTuid = k; break; }
       if (!targetTuid) return prev;
-      wsRef.current?.send({ type: 'permission_response', reqId, decision: 'allow' });
+      if (!wsRef.current?.send({ type: 'permission_response', reqId, decision: 'allow' })) {
+        pushToast('Approval not sent. Reconnect and try again.', { level: 'error' });
+        return prev;
+      }
       const n = new Map(prev); n.delete(targetTuid); return n;
     });
-  }, []);
+  }, [pushToast]);
   const onRejectEdit = useCallback((reqId: string) => {
     setPendingEdits((prev) => {
       let targetTuid: string | undefined;
       for (const [k, v] of prev) if (v.reqId === reqId) { targetTuid = k; break; }
       if (!targetTuid) return prev;
-      wsRef.current?.send({ type: 'permission_response', reqId, decision: 'deny' });
+      if (!wsRef.current?.send({ type: 'permission_response', reqId, decision: 'deny' })) {
+        pushToast('Response not sent. Reconnect and try again.', { level: 'error' });
+        return prev;
+      }
       const n = new Map(prev); n.delete(targetTuid); return n;
     });
-  }, []);
+  }, [pushToast]);
 
   const onPlanApprove = useCallback(() => {
     if (!planProposed) return;
-    wsRef.current?.send({ type: 'plan_response', reqId: planProposed.reqId, decision: 'approve' });
+    if (!wsRef.current?.send({ type: 'plan_response', reqId: planProposed.reqId, decision: 'approve' })) {
+      pushToast('Plan approval not sent. Reconnect and try again.', { level: 'error' });
+      return;
+    }
     setPlanProposed(null);
-  }, [planProposed]);
+  }, [planProposed, pushToast]);
   const onPlanReject = useCallback(() => {
     if (!planProposed) return;
-    wsRef.current?.send({ type: 'plan_response', reqId: planProposed.reqId, decision: 'reject' });
+    if (!wsRef.current?.send({ type: 'plan_response', reqId: planProposed.reqId, decision: 'reject' })) {
+      pushToast('Plan response not sent. Reconnect and try again.', { level: 'error' });
+      return;
+    }
     setPlanProposed(null);
-  }, [planProposed]);
+  }, [planProposed, pushToast]);
 
   const setMode = useCallback((mode: PermissionMode) => {
-    // Optimistic: update UI immediately. Server will ACK via state_update
-    // shortly; on failure a red toast surfaces from the error handler.
+    if (!wsRef.current?.send({ type: 'set_permission_mode', mode })) {
+      pushToast('Mode not changed. Reconnect and try again.', { level: 'error' });
+      return;
+    }
     commitState((s) => applyStateDelta(s, { permissionMode: mode }));
-    wsRef.current?.send({ type: 'set_permission_mode', mode });
-    toast.push(`Mode: ${modeLabel(mode)}`, { level: 'success' });
-  }, [toast, commitState]);
+    pushToast(`Mode: ${modeLabel(mode)}`, { level: 'success' });
+  }, [pushToast, commitState]);
   const setModel = useCallback((model: string) => {
+    if (!wsRef.current?.send({ type: 'set_model', model })) {
+      pushToast('Model not changed. Reconnect and try again.', { level: 'error' });
+      return;
+    }
     commitState((s) => applyStateDelta(s, { model }));
-    wsRef.current?.send({ type: 'set_model', model });
-    toast.push(`Model: ${model}`, { level: 'success' });
-  }, [toast, commitState]);
+    pushToast(`Model: ${model}`, { level: 'success' });
+  }, [pushToast, commitState]);
   const setClaudeAuthMode = useCallback((mode: ClaudeAuthMode) => {
+    if (!wsRef.current?.send({ type: 'set_claude_auth_mode', mode })) {
+      pushToast('Billing mode not changed. Reconnect and try again.', { level: 'error' });
+      return;
+    }
     commitState((s) => applyStateDelta(s, { claudeAuthMode: mode }));
-    wsRef.current?.send({ type: 'set_claude_auth_mode', mode });
-    toast.push(mode === 'api' ? 'Claude API billing selected' : 'Claude account selected', { level: 'success' });
-  }, [toast, commitState]);
+    pushToast(mode === 'api' ? 'Claude API billing selected' : 'Claude account selected', { level: 'success' });
+  }, [pushToast, commitState]);
   const continueWithApi = useCallback(() => {
     const snap = stateRef.current.state;
     if (!snap || snap.provider !== 'claude') {
@@ -539,23 +757,23 @@ export function App() {
         title: sessionTitle,
         viewerMode: false,
       });
-      toast.push('Continuing this chat with Claude API billing', { level: 'success' });
+      pushToast('Continuing this chat with Claude API billing', { level: 'success' });
       return;
     }
     setClaudeAuthMode('api');
-  }, [newSession, sessionTitle, setClaudeAuthMode, toast]);
+  }, [newSession, sessionTitle, setClaudeAuthMode, pushToast]);
   const selectNodeProvider = useCallback((nodeId: string, provider: AgentProviderId) => {
     const node = nodes.find((n) => n.id === nodeId);
     selectNodeSilently(nodeId);
     selectProviderSilently(provider);
     newSession({ nodeId, provider, cwd: node?.defaultCwd ?? currentCwd });
-    toast.push(`${node?.label ?? nodeId}: ${provider === 'codex' ? 'Codex' : 'Claude Code'}`, { level: 'success' });
-  }, [currentCwd, newSession, nodes, selectNodeSilently, selectProviderSilently, toast]);
+    pushToast(`${node?.label ?? nodeId}: ${provider === 'codex' ? 'Codex' : 'Claude Code'}`, { level: 'success' });
+  }, [currentCwd, newSession, nodes, selectNodeSilently, selectProviderSilently, pushToast]);
   const setSkin = useCallback((next: SkinId) => {
     setSkinState(next);
     try { writeSkin(next); } catch { /* localStorage can be unavailable */ }
-    toast.push(`Skin: ${skinById(next).label}`, { level: 'success', icon: 'palette' });
-  }, [toast]);
+    pushToast(`Skin: ${skinById(next).label}`, { level: 'success', icon: 'palette' });
+  }, [pushToast]);
 
   const cycleMode = useCallback((next: PermissionMode) => setMode(next), [setMode]);
 
@@ -604,30 +822,36 @@ export function App() {
 
   const renameCurrent = useCallback(async (title: string) => {
     if (!state.state?.claudeSessionId) return;
+    const previousTitle = sessionTitle;
     setSessionTitle(title);
     try {
-      await apiFetch('/api/session/rename', {
+      const response = await apiFetch('/api/session/rename', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ claudeSessionId: state.state.claudeSessionId, title, cwd: state.state.cwd }),
       });
+      if (!response.ok) throw new Error(`rename failed (${response.status})`);
       refreshSessions(state.state.cwd);
-      toast.push('Session renamed', { level: 'success' });
-    } catch { toast.push('Rename failed', { level: 'error' }); }
-  }, [state.state?.claudeSessionId, state.state?.cwd, toast, refreshSessions]);
+      pushToast('Session renamed', { level: 'success' });
+    } catch {
+      setSessionTitle(previousTitle);
+      pushToast('Rename failed', { level: 'error' });
+    }
+  }, [state.state?.claudeSessionId, state.state?.cwd, sessionTitle, pushToast, refreshSessions]);
 
   const renameInList = useCallback(async (claudeSessionId: string, newTitle: string, cwd?: string) => {
     const targetCwd = cwd ?? state.state?.cwd;
     try {
-      await apiFetch('/api/session/rename', {
+      const response = await apiFetch('/api/session/rename', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ claudeSessionId, title: newTitle, cwd: targetCwd }),
       });
+      if (!response.ok) throw new Error(`rename failed (${response.status})`);
       refreshSessions(targetCwd);
-      toast.push('Session renamed', { level: 'success' });
-    } catch { toast.push('Rename failed', { level: 'error' }); }
-  }, [state.state?.cwd, toast, refreshSessions]);
+      pushToast('Session renamed', { level: 'success' });
+    } catch { pushToast('Rename failed', { level: 'error' }); }
+  }, [state.state?.cwd, pushToast, refreshSessions]);
 
   const pendingByToolUseId = useMemo(() => {
     const m = new Map<string, string>();
@@ -638,11 +862,11 @@ export function App() {
   const activitySessions = useMemo(
     () => deriveActivitySessions({
       liveSessions,
-      activeSessionId: state.state?.sessionId ?? null,
+      activeSessionId: attachment.requestedSessionId ?? state.state?.sessionId ?? null,
       cache: cacheRef.current,
       storedSessions: allKnownSessions,
     }),
-    [allKnownSessions, liveSessions, state.state?.sessionId, state.items, state.lastEventId]
+    [allKnownSessions, attachment.requestedSessionId, liveSessions, state.state?.sessionId, state.items, state.lastEventId]
   );
   const activitySummary = useMemo(() => deriveActivitySummary(activitySessions), [activitySessions]);
   const activeDraftTitle = useMemo(() => {
@@ -655,7 +879,8 @@ export function App() {
     setPinnedProjects(togglePinnedProject(path));
   }, []);
 
-  const showEmpty = state.items.length === 0 && !state.busy && !state.streamingText;
+  const showAttachmentPlaceholder = attachment.phase !== 'ready' && !attachment.hasCachedState;
+  const showEmpty = attachment.phase === 'ready' && state.items.length === 0 && !state.busy && !state.streamingText;
 
   const firstPendingEditToolUseId = useMemo(() => {
     for (const [tuid] of pendingEdits) return tuid;
@@ -670,8 +895,27 @@ export function App() {
   }, [firstPendingEditToolUseId]);
 
   const stopCurrent = useCallback(() => {
-    wsRef.current?.send({ type: 'interrupt' });
-  }, []);
+    if (!wsRef.current?.send({ type: 'interrupt' })) {
+      pushToast('Stop request not sent. Reconnect and try again.', { level: 'error' });
+    }
+  }, [pushToast]);
+
+  const retryAttachment = useCallback(() => {
+    const previous = currentHelloRef.current;
+    if (!previous) return;
+    const attachId = createAttachId();
+    const hello = withAttachId(previous, attachId);
+    currentHelloRef.current = hello;
+    replayStateRef.current = null;
+    commitAttachment((current) => ({ ...current, attachId, phase: 'connecting', legacyReplay: false }));
+    wsRef.current?.send(hello);
+  }, [commitAttachment]);
+
+  const refreshCurrentHistory = useCallback(() => {
+    if (!wsRef.current?.send({ type: 'refresh_history' })) {
+      pushToast('History refresh not sent. Reconnect and try again.', { level: 'error' });
+    }
+  }, [pushToast]);
 
   const dismissSetup = useCallback(() => {
     rememberSetupSeen();
@@ -711,7 +955,7 @@ export function App() {
           cwd={currentCwd}
           projects={projectEntries}
           projectSessions={projectSessions}
-          activeId={state.state?.claudeSessionId ?? null}
+          activeId={attachment.targetProviderSessionId ?? state.state?.claudeSessionId ?? null}
           activeSession={state.state}
           activeDraftTitle={activeDraftTitle}
           activitySummary={activitySummary}
@@ -773,28 +1017,50 @@ export function App() {
               })
             : undefined}
           onRefreshHistory={state.state?.viewerMode
-            ? () => wsRef.current?.send({ type: 'refresh_history' })
+            ? refreshCurrentHistory
             : undefined}
           sessionTitle={sessionTitle}
           connected={connected}
         />
-        {showEmpty ? (
+        {showAttachmentPlaceholder ? (
+          <AttachmentPlaceholder phase={attachment.phase} onRetry={retryAttachment} />
+        ) : showEmpty ? (
           <EmptyState skin={skin} cwd={currentCwd} onOpenProject={() => setProjectLauncherOpen(true)} />
         ) : (
-          <MessageList
-            token={token ?? ''}
-            cwd={currentCwd}
-            skin={skin}
-            items={state.items}
-            busy={state.busy}
-            streamingText={state.streamingText}
-            pendingByToolUseId={pendingByToolUseId}
-            secondsSinceLastEvent={secondsSinceLastEvent}
-            activeTool={state.state?.activeTool}
-            onAcceptEdit={onAcceptEdit}
-            onRejectEdit={onRejectEdit}
-            onStop={stopCurrent}
-          />
+          <div className="relative flex flex-1 min-h-0">
+            <MessageList
+              key={attachment.displaySessionKey}
+              sessionKey={attachment.displaySessionKey}
+              scrollPositions={scrollPositionsRef.current}
+              token={token ?? ''}
+              cwd={currentCwd}
+              skin={skin}
+              items={state.items}
+              busy={state.busy}
+              streamingText={state.streamingText}
+              pendingByToolUseId={pendingByToolUseId}
+              secondsSinceLastEvent={secondsSinceLastEvent}
+              activeTool={state.state?.activeTool}
+              onAcceptEdit={onAcceptEdit}
+              onRejectEdit={onRejectEdit}
+              onStop={stopCurrent}
+            />
+            {attachment.phase !== 'ready' && (
+              attachment.phase === 'error' ? (
+                <button
+                  type="button"
+                  onClick={retryAttachment}
+                  className="absolute right-4 top-3 rounded-full border border-danger/30 bg-bg-raised/95 px-2.5 py-1 text-[11px] text-danger shadow-pop"
+                >
+                  Sync failed · Retry
+                </button>
+              ) : (
+                <div className="pointer-events-none absolute right-4 top-3 rounded-full border border-border-subtle bg-bg-raised/95 px-2.5 py-1 text-[11px] text-text-secondary shadow-pop">
+                  Syncing…
+                </div>
+              )
+            )}
+          </div>
         )}
         <div className="px-4 pb-1 pt-0">
           <StatusBar
@@ -818,7 +1084,7 @@ export function App() {
           mode={state.state?.permissionMode ?? 'default'}
           provider={state.state?.provider ?? selectedProvider}
           busy={state.busy}
-          ready={connected && !!state.state && !state.state?.viewerMode}
+          ready={connected && attachment.phase === 'ready' && !!state.state && !state.state?.viewerMode}
           readOnly={!!state.state?.viewerMode}
           initialText={inputSeed}
           onSend={(t) => { sendUser(t); setInputSeed(undefined); }}
@@ -831,8 +1097,14 @@ export function App() {
       {nonEditPermReq && (
         <PermissionModal
           req={nonEditPermReq}
-          onAllow={(scope) => { wsRef.current?.send({ type: 'permission_response', reqId: nonEditPermReq.reqId, decision: 'allow', scope }); setNonEditPermReq(null); }}
-          onDeny={() => { wsRef.current?.send({ type: 'permission_response', reqId: nonEditPermReq.reqId, decision: 'deny' }); setNonEditPermReq(null); }}
+          onAllow={(scope) => {
+            if (wsRef.current?.send({ type: 'permission_response', reqId: nonEditPermReq.reqId, decision: 'allow', scope })) setNonEditPermReq(null);
+            else pushToast('Approval not sent. Reconnect and try again.', { level: 'error' });
+          }}
+          onDeny={() => {
+            if (wsRef.current?.send({ type: 'permission_response', reqId: nonEditPermReq.reqId, decision: 'deny' })) setNonEditPermReq(null);
+            else pushToast('Response not sent. Reconnect and try again.', { level: 'error' });
+          }}
         />
       )}
       {planProposed && <PlanApprovalModal plan={planProposed.plan} onApprove={onPlanApprove} onReject={onPlanReject} />}
@@ -865,6 +1137,30 @@ export function App() {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return <div className="h-full flex items-center justify-center text-text-secondary">{children}</div>;
+}
+
+function AttachmentPlaceholder({ phase, onRetry }: { phase: AttachmentViewState['phase']; onRetry: () => void }) {
+  if (phase === 'error') {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <div className="text-sm font-medium text-text-primary">Couldn’t open this session</div>
+        <div className="max-w-sm text-xs text-text-muted">The selected session is still in place. Retry when the connection is available.</div>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="rounded-md border border-border bg-bg-raised px-3 py-1.5 text-xs text-text-secondary hover:border-accent/50 hover:text-text-primary"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center" aria-live="polite">
+      <span className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-accent" />
+      <div className="text-xs text-text-muted">{phase === 'replaying' ? 'Loading conversation…' : 'Connecting to session…'}</div>
+    </div>
+  );
 }
 
 function buildProjectEntries(opts: { current?: string; home?: string; fallback?: string; recents: ProjectEntry[]; pinned: string[] }): ProjectEntry[] {

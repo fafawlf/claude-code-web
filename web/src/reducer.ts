@@ -184,6 +184,8 @@ export function addUserOptimistic(s: ChatState, text: string): ChatState {
 
 export function applyStateDelta(s: ChatState, delta: Partial<SessionStateSnapshot>): ChatState {
   if (!s.state) return s;
+  const entries = Object.entries(delta) as Array<[keyof SessionStateSnapshot, SessionStateSnapshot[keyof SessionStateSnapshot]]>;
+  if (entries.every(([key, value]) => s.state?.[key] === value)) return s;
   return { ...s, state: { ...s.state, ...delta } };
 }
 
