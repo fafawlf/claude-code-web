@@ -9,12 +9,12 @@ import {
 // Regression: QA-A11Y-001 — stacked dialogs let background shortcuts replace the active modal
 // Found by /qa on 2026-07-10
 test('blocking dialogs win the single top-level modal slot', () => {
-  assert.equal(resolveTopLevelModal({ setup: true, permission: true, plan: true, project: true, palette: true, admin: true }), 'setup');
-  assert.equal(resolveTopLevelModal({ setup: false, permission: true, plan: true, project: true, palette: true, admin: true }), 'permission');
-  assert.equal(resolveTopLevelModal({ setup: false, permission: false, plan: true, project: true, palette: true, admin: true }), 'plan');
-  assert.equal(resolveTopLevelModal({ setup: false, permission: false, plan: false, project: true, palette: true, admin: true }), 'project');
-  assert.equal(resolveTopLevelModal({ setup: false, permission: false, plan: false, project: false, palette: true, admin: true }), 'palette');
-  assert.equal(resolveTopLevelModal({ setup: false, permission: false, plan: false, project: false, palette: false, admin: true }), 'admin');
+  assert.equal(resolveTopLevelModal({ setup: true, permission: true, plan: true, project: true, palette: true }), 'setup');
+  assert.equal(resolveTopLevelModal({ setup: false, permission: true, plan: true, project: true, palette: true }), 'permission');
+  assert.equal(resolveTopLevelModal({ setup: false, permission: false, plan: true, project: true, palette: true }), 'plan');
+  assert.equal(resolveTopLevelModal({ setup: false, permission: false, plan: false, project: true, palette: true }), 'project');
+  assert.equal(resolveTopLevelModal({ setup: false, permission: false, plan: false, project: false, palette: true }), 'palette');
+  assert.equal(resolveTopLevelModal({ setup: false, permission: false, plan: false, project: false, palette: false }), null);
 });
 
 test('permission, plan, and setup dialogs block global app shortcuts', () => {
@@ -23,7 +23,6 @@ test('permission, plan, and setup dialogs block global app shortcuts', () => {
   assert.equal(blocksGlobalAppShortcuts('plan'), true);
   assert.equal(blocksGlobalAppShortcuts('palette'), true);
   assert.equal(blocksGlobalAppShortcuts('project'), true);
-  assert.equal(blocksGlobalAppShortcuts('admin'), true);
   assert.equal(blocksGlobalAppShortcuts(null), false);
 });
 

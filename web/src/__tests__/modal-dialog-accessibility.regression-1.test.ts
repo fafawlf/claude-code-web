@@ -8,7 +8,6 @@ import { PlanApprovalModal } from '../components/PlanApprovalModal';
 import { InitialSetup } from '../components/InitialSetup';
 import { CommandPalette } from '../components/CommandPalette';
 import { ProjectLauncher } from '../components/ProjectLauncher';
-import { AdminUsersModal } from '../components/AdminUsersModal';
 
 (globalThis as unknown as { React: typeof React }).React = React;
 
@@ -51,7 +50,6 @@ test('every top-level dialog has a programmatic title', () => {
       onPick: () => {},
       onTogglePin: () => {},
     })),
-    renderToStaticMarkup(createElement(AdminUsersModal, { onClose: () => {} })),
   ];
 
   for (const html of dialogs) {

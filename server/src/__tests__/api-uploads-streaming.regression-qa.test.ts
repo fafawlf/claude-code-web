@@ -1,14 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { registerApi } from '../api.js';
 import { SessionManager } from '../session/SessionManager.js';
-import { UserRegistry } from '../users/registry.js';
-import { signSession } from '../auth/cookie.js';
-import type { CcwConfig } from '../config.js';
 
 // QA regression: multipart uploads must preserve binary bytes without a Base64 JSON copy.
 test('[QA] POST /api/uploads streams multipart files into the scoped project', async () => {
@@ -134,64 +131,6 @@ test('[QA] multipart uploads reject a thirteenth file and remove the batch', asy
     await app.close();
     await sm.closeAll();
     rmSync(root, { recursive: true, force: true });
-  }
-});
-
-// QA regression: the streaming path must use the same Feishu identity and workspace scope as JSON uploads.
-test('[QA] multipart uploads keep Feishu cookie auth workspace-scoped', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'ccw-upload-stream-scope-'));
-  const usersRoot = join(dataDir, 'users');
-  const aliceRoot = join(usersRoot, 'alice');
-  const bobRoot = join(usersRoot, 'bob');
-  const secret = 'test-cookie-secret-test-cookie-secret';
-  const config: CcwConfig = {
-    authMode: 'feishu',
-    cookieSecret: secret,
-    cookieSecure: false,
-    adminEmails: ['boss@x.com'],
-    allowedEmailDomains: [],
-    trustAllFeishu: false,
-    feishu: { appId: 'app', appSecret: 'secret' },
-    dataDir,
-    usersRoot,
-    usersFile: join(dataDir, 'users.json'),
-    templateDir: join(dataDir, 'template'),
-    publicOrigin: 'https://claude.example.com',
-  };
-  const registry = new UserRegistry(config.usersFile, config.adminEmails);
-  registry.addToAllowlist('alice@x.com');
-  registry.upsertOnLogin({ openId: 'ou_alice', email: 'alice@x.com', name: 'Alice' });
-  mkdirSync(aliceRoot, { recursive: true });
-  mkdirSync(bobRoot, { recursive: true });
-
-  const now = Math.floor(Date.now() / 1000);
-  const cookie = `ccw_session=${encodeURIComponent(signSession({ sub: 'ou_alice', iat: now, exp: now + 3600 }, secret))}`;
-  const app = Fastify({ logger: false });
-  const sm = new SessionManager();
-  registerApi(app, 'legacy-token', dataDir, sm, undefined, {}, { config, registry });
-  const boundary = '----ccw-qa-cookie-scope';
-
-  try {
-    const own = await app.inject({
-      method: 'POST',
-      url: `/api/uploads?cwd=${encodeURIComponent(aliceRoot)}`,
-      headers: { cookie, 'content-type': `multipart/form-data; boundary=${boundary}` },
-      payload: multipartBody(boundary, [{ field: 'files', name: 'mine.txt', mime: 'text/plain', bytes: Buffer.from('mine') }]),
-    });
-    assert.equal(own.statusCode, 200, own.body);
-
-    const cross = await app.inject({
-      method: 'POST',
-      url: `/api/uploads?cwd=${encodeURIComponent(bobRoot)}`,
-      headers: { cookie, 'content-type': `multipart/form-data; boundary=${boundary}` },
-      payload: multipartBody(boundary, [{ field: 'files', name: 'stolen.txt', mime: 'text/plain', bytes: Buffer.from('nope') }]),
-    });
-    assert.equal(cross.statusCode, 403, cross.body);
-    assert.equal(countFiles(join(bobRoot, '.claudecode-web', 'uploads')), 0);
-  } finally {
-    await app.close();
-    await sm.closeAll();
-    rmSync(dataDir, { recursive: true, force: true });
   }
 });
 

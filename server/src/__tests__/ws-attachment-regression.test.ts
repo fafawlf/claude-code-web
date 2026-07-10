@@ -5,7 +5,6 @@ import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { AgentProvider, AgentSession, AgentSessionOptions } from '../agents/types.js';
-import { tokenModeConfig } from '../config.js';
 import { NodeRegistry } from '../nodes/NodeRegistry.js';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
@@ -192,7 +191,7 @@ async function setup(providers: AgentProvider[]): Promise<{
   const app = Fastify({ logger: false });
   const sm = new SessionManager(providers);
   await app.register(fastifyWebsocket);
-  registerWs(app, sm, 'test-token', '/tmp', new NodeRegistry('/tmp'), { config: tokenModeConfig() });
+  registerWs(app, sm, 'test-token', '/tmp', new NodeRegistry('/tmp'));
   await app.ready();
   const ws = await app.injectWS('/ws?t=test-token');
   return { app, sm, ws, inbox: inboxFor(ws) };
