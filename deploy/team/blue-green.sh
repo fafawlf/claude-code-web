@@ -379,24 +379,12 @@ enable_canary() {
   echo "Admin-only canary route enabled: https://$HOST/__ccw_canary?key=$CANDIDATE_COOKIE"
 }
 
-promote_candidate() {
-  if [ "${CONFIRM_IDLE:-}" != "1" ]; then
-    echo "Confirm there are no running tasks, then run: CONFIRM_IDLE=1 $0 promote" >&2
-    exit 1
-  fi
-  load_active
-  require_candidate
-  if [ "$CANDIDATE_PORT" = "$ACTIVE_PORT" ] || [ "$CANDIDATE_SERVICE" = "$ACTIVE_SERVICE" ]; then
-    echo "Candidate is already active." >&2
-    exit 1
-  fi
-  wait_for_health "$CANDIDATE_PORT" "$CANDIDATE_SHA" >/dev/null
-
+write_promotion_state() {
+  local phase=$1
   local state_tmp
-  render_nginx "$CANDIDATE_PORT" "$ACTIVE_PORT" "$CANDIDATE_ROLLBACK_COOKIE" "$CANDIDATE_PORT"
-
   state_tmp=$(mktemp "$DEPLOY_STATE_DIR/.promotion.XXXXXX")
   cat > "$state_tmp" <<EOF
+PROMOTION_PHASE=$phase
 PREVIOUS_PORT=$ACTIVE_PORT
 PREVIOUS_SERVICE=$ACTIVE_SERVICE
 PREVIOUS_SHA=$ACTIVE_SHA
@@ -413,7 +401,28 @@ PROMOTED_AT=$(date +%s)
 EOF
   chmod 0600 "$state_tmp"
   mv "$state_tmp" "$PROMOTION_STATE"
+}
+
+promote_candidate() {
+  if [ "${CONFIRM_IDLE:-}" != "1" ]; then
+    echo "Confirm there are no running tasks, then run: CONFIRM_IDLE=1 $0 promote" >&2
+    exit 1
+  fi
+  load_active
+  require_candidate
+  if [ "$CANDIDATE_PORT" = "$ACTIVE_PORT" ] || [ "$CANDIDATE_SERVICE" = "$ACTIVE_SERVICE" ]; then
+    echo "Candidate is already active." >&2
+    exit 1
+  fi
+  wait_for_health "$CANDIDATE_PORT" "$CANDIDATE_SHA" >/dev/null
+
+  # Record a recoverable transaction before changing live routing. If this
+  # process is interrupted at any later point, `rollback` has every value it
+  # needs to restore the previous upstream.
+  write_promotion_state prepared
+  render_nginx "$CANDIDATE_PORT" "$ACTIVE_PORT" "$CANDIDATE_ROLLBACK_COOKIE" "$CANDIDATE_PORT"
   write_active_state "$CANDIDATE_PORT" "$CANDIDATE_SERVICE" "$CANDIDATE_SHA" "$CANDIDATE_REF" "$CANDIDATE_RELEASE"
+  write_promotion_state complete
   echo "Candidate promoted for new connections. Old WebSockets remain on port $ACTIVE_PORT while they drain."
 }
 

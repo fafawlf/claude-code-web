@@ -31,6 +31,16 @@ test('blue-green deployment shell is valid and alternates inactive slots', () =>
   assert.match(source, /git -C "\$REPO_DIR" fetch origin "\$RELEASE_REF"/);
   assert.match(source, /render_nginx "\$CANDIDATE_PORT" "\$ACTIVE_PORT" "\$CANDIDATE_ROLLBACK_COOKIE"/);
   assert.match(source, /render_nginx "\$ACTIVE_PORT" "\$ACTIVE_PORT" "\$retired_cookie"/);
+  const promote = source.slice(
+    source.indexOf('promote_candidate()'),
+    source.indexOf('rollback_candidate()'),
+  );
+  const prepared = promote.indexOf('write_promotion_state prepared');
+  const route = promote.indexOf('render_nginx "$CANDIDATE_PORT"');
+  const active = promote.indexOf('write_active_state "$CANDIDATE_PORT"');
+  assert.ok(prepared >= 0 && prepared < route, 'promotion recovery state must precede Nginx routing');
+  assert.ok(route < active, 'active state is committed only after Nginx accepts the candidate route');
+  assert.match(promote, /write_promotion_state complete/);
 });
 
 test('rendered canary route requires admin auth and keeps websocket proxying', () => {
