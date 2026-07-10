@@ -1136,6 +1136,7 @@ export function App() {
         <InputBar
           token={token ?? ''}
           cwd={currentCwd}
+          sessionKey={attachment.displaySessionKey}
           mode={state.state?.permissionMode ?? 'default'}
           provider={state.state?.provider ?? selectedProvider}
           busy={state.busy}
