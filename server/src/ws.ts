@@ -1,123 +1,278 @@
 import type { FastifyInstance } from 'fastify';
-import type { WebSocket, RawData } from 'ws';
-import type { SessionManager } from './session/SessionManager.js';
+import type { RawData, WebSocket } from 'ws';
 import type { AgentSession } from './agents/types.js';
-import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, type ClientHello, type ClientMessage, type ServerMessage, type PermissionMode } from './protocol.js';
 import { timingSafeEqualStr } from './auth.js';
 import { NodeRegistry } from './nodes/NodeRegistry.js';
+import {
+  DEFAULT_AGENT_PROVIDER,
+  DEFAULT_NODE_ID,
+  defaultModelForProvider,
+  type ClientHello,
+  type ClientMessage,
+  type HistoryStatus,
+  type PendingControl,
+  type PermissionMode,
+  type ReplayMode,
+  type ServerAttachmentScope,
+  type ServerMessage,
+  type SessionStateSnapshot,
+} from './protocol.js';
+import type { SessionEvent } from './session/ClaudeSession.js';
+import type { SessionManager } from './session/SessionManager.js';
+import { buildReplayBatches, WsSendQueue } from './wsSendQueue.js';
 
-export function registerWs(app: FastifyInstance, sm: SessionManager, token: string, defaultCwd: string, nodes = new NodeRegistry(defaultCwd)) {
+type HelloResolution = {
+  session: AgentSession;
+  /** Kept as the requested cursor for compatibility with existing callers.
+   * Runtime attach MUST ignore it whenever replayMode is full. */
+  replayAfterId: number;
+  replayMode: ReplayMode;
+  recovered: boolean;
+};
+
+type AttachmentContext = {
+  generation: number;
+  attachId?: string;
+  session: AgentSession;
+  sessionId: string;
+  abort: AbortController;
+  unsubs: Array<() => void>;
+  counted: boolean;
+  detached: boolean;
+  replaying: boolean;
+  liveEvents: SessionEvent[];
+  readySent: boolean;
+  pendingState: Partial<SessionStateSnapshot>;
+  pendingControls: PendingControl[];
+  sentControls: Set<string>;
+};
+
+export function registerWs(
+  app: FastifyInstance,
+  sm: SessionManager,
+  token: string,
+  defaultCwd: string,
+  nodes = new NodeRegistry(defaultCwd)
+) {
   app.get('/ws', { websocket: true }, (socket: WebSocket, req) => {
+    const writer = new WsSendQueue(socket);
     const provided = (req.query as { t?: string } | undefined)?.t ?? '';
     if (!provided || !timingSafeEqualStr(provided, token)) {
-      send(socket, { type: 'error', message: 'Unauthorized' });
+      writer.send({ type: 'error', message: 'Unauthorized' });
       socket.close(1008, 'Unauthorized');
+      writer.close();
       return;
     }
+    const visibleSessions = (): SessionStateSnapshot[] => sm.listSnapshots();
 
-    let session: AgentSession | undefined;
-    let attachedId: string | undefined;
-    let unsubEvents: (() => void) | undefined;
-    let unsubState: (() => void) | undefined;
-    let unsubControls: (() => void) | undefined;
-    const unsubManager = sm.subscribe((sessions) => send(socket, { type: 'sessions_update', sessions }));
+    let attachment: AttachmentContext | undefined;
+    let generation = 0;
+    let socketClosed = false;
+
+    const scopeFor = (ctx: AttachmentContext): ServerAttachmentScope => ({
+      attachId: ctx.attachId,
+      sessionId: ctx.sessionId,
+    });
+    const isCurrent = (ctx: AttachmentContext): boolean =>
+      !socketClosed && !ctx.detached && attachment === ctx && generation === ctx.generation;
+    const scopedSend = (
+      ctx: AttachmentContext,
+      message: ServerMessage,
+      priority: 'control' | 'replay' = 'control'
+    ): boolean => {
+      if (!isCurrent(ctx)) return false;
+      return writer.send({ ...message, ...scopeFor(ctx) } as ServerMessage, priority, ctx.generation);
+    };
+
+    const detachContext = (ctx: AttachmentContext): void => {
+      if (ctx.detached) return;
+      ctx.detached = true;
+      ctx.abort.abort();
+      writer.cancelGeneration(ctx.generation);
+      for (const unsub of ctx.unsubs.splice(0)) {
+        try { unsub(); } catch { /* best effort */ }
+      }
+      if (ctx.counted) {
+        ctx.counted = false;
+        sm.detach(ctx.sessionId);
+      }
+      if (attachment === ctx) attachment = undefined;
+    };
+
+    const supersedeAttachment = (): number => {
+      if (attachment) detachContext(attachment);
+      // Also clears queued errors from a previous failed hello, which has no
+      // AttachmentContext to own it.
+      writer.cancelGeneration(generation);
+      generation += 1;
+      return generation;
+    };
+
+    const sendControl = (ctx: AttachmentContext, control: PendingControl): void => {
+      const key = `${control.kind}:${control.reqId}`;
+      if (ctx.sentControls.has(key) || !isCurrent(ctx)) return;
+      ctx.sentControls.add(key);
+      scopedSend(ctx, { type: 'pending_control', sessionId: ctx.sessionId, control });
+      if (control.kind === 'permission') {
+        const { kind: _kind, ...request } = control;
+        scopedSend(ctx, { type: 'permission_request', ...request });
+      } else {
+        scopedSend(ctx, { type: 'plan_proposed', reqId: control.reqId, plan: control.plan });
+      }
+    };
+
+    const attach = async (resolved: HelloResolution, attachId: string | undefined, ownGeneration: number) => {
+      if (socketClosed || generation !== ownGeneration) return;
+      const s = resolved.session;
+      const ctx: AttachmentContext = {
+        generation: ownGeneration,
+        attachId,
+        session: s,
+        sessionId: s.id,
+        abort: new AbortController(),
+        unsubs: [],
+        counted: true,
+        detached: false,
+        replaying: true,
+        liveEvents: [],
+        readySent: false,
+        pendingState: {},
+        pendingControls: [],
+        sentControls: new Set(),
+      };
+      attachment = ctx;
+      sm.attach(s.id);
+
+      // Subscribe before taking the replay snapshot. Events emitted while
+      // history is loading are buffered and merged with the ring by event id,
+      // closing the old replay-then-subscribe loss window.
+      ctx.unsubs.push(
+        s.subscribe((event) => {
+          if (!isCurrent(ctx)) return;
+          if (ctx.replaying) ctx.liveEvents.push(event);
+          else scopedSend(ctx, { type: 'sdk_event', id: event.id, event: event.event });
+        }),
+        s.subscribeState((state) => {
+          if (!isCurrent(ctx)) return;
+          if (!ctx.readySent) Object.assign(ctx.pendingState, state);
+          else scopedSend(ctx, { type: 'state_update', state });
+        }),
+        s.subscribeControls((control) => {
+          if (!isCurrent(ctx)) return;
+          if (!ctx.readySent) ctx.pendingControls.push(control);
+          else sendControl(ctx, control);
+        })
+      );
+
+      const initialHistoryStatus = await probeHistoryStatus(s.historyReady);
+      if (!isCurrent(ctx)) return;
+      const effectiveAfterId = resolved.replayMode === 'delta' ? resolved.replayAfterId : 0;
+      const initialReplay = initialHistoryStatus === 'ready' ? s.replay(effectiveAfterId) : [];
+      const historyTruncated = initialHistoryStatus === 'ready'
+        ? isReplayTruncated(initialReplay, effectiveAfterId, s.getState().lastEventId)
+        : undefined;
+
+      ctx.readySent = true;
+      scopedSend(ctx, {
+        type: 'ready',
+        state: sm.getSnapshot(s.id) ?? s.getState(),
+        replayMode: resolved.replayMode,
+        historyStatus: initialHistoryStatus,
+        historyTruncated: historyTruncated || undefined,
+      });
+      if (Object.keys(ctx.pendingState).length > 0) {
+        scopedSend(ctx, { type: 'state_update', state: ctx.pendingState });
+        ctx.pendingState = {};
+      }
+      for (const control of [...ctx.pendingControls, ...s.getPendingControls()]) sendControl(ctx, control);
+      ctx.pendingControls = [];
+
+      const historyStatus = initialHistoryStatus === 'loading'
+        ? await waitForHistoryReady(s, ctx.abort.signal)
+        : initialHistoryStatus;
+      if (!isCurrent(ctx) || historyStatus === 'aborted') return;
+      if (historyStatus === 'error') {
+        scopedSend(ctx, { type: 'error', message: 'History loading failed' });
+      }
+
+      // Runtime correctness is intentionally based on replayMode, not merely
+      // replayAfterId: a cursor from a reaped/new wrapper must never suppress
+      // its fresh history, even though resolveHelloSession keeps the legacy
+      // helper field for compatibility with older unit callers.
+      const replayAfterId = resolved.replayMode === 'delta' ? resolved.replayAfterId : 0;
+      const replay = dedupeEvents([...s.replay(replayAfterId), ...ctx.liveEvents], replayAfterId);
+      ctx.liveEvents = [];
+      ctx.replaying = false;
+
+      for (const batch of buildReplayBatches(replay, scopeFor(ctx))) {
+        if (!scopedSend(ctx, batch, 'replay')) break;
+      }
+    };
+
     const heartbeat = setInterval(() => {
       const now = Date.now();
-      const snapshot = attachedId ? sm.getSnapshot(attachedId) : undefined;
-      send(socket, {
+      const ctx = attachment;
+      const snapshot = ctx ? sm.getSnapshot(ctx.sessionId) : undefined;
+      const frame: ServerMessage = {
         type: 'heartbeat',
         now,
         session: snapshot,
         noActivityMs: snapshot ? Math.max(0, now - snapshot.lastEventAt) : undefined,
-      });
-      send(socket, { type: 'sessions_update', sessions: sm.listSnapshots() });
+      };
+      if (ctx && isCurrent(ctx)) scopedSend(ctx, frame);
+      else writer.send(frame);
     }, 5000);
-
-    const detach = () => {
-      unsubEvents?.(); unsubEvents = undefined;
-      unsubState?.(); unsubState = undefined;
-      unsubControls?.(); unsubControls = undefined;
-      if (attachedId) sm.detach(attachedId);
-      session = undefined;
-      attachedId = undefined;
-    };
-
-    const sendPending = (s: AgentSession) => {
-      for (const control of s.getPendingControls()) {
-        send(socket, { type: 'pending_control', sessionId: s.id, control });
-        if (control.kind === 'permission') {
-          const { kind, ...req } = control;
-          send(socket, { type: 'permission_request', ...req });
-        } else {
-          send(socket, { type: 'plan_proposed', reqId: control.reqId, plan: control.plan });
-        }
-      }
-    };
-
-    const attach = async (s: AgentSession, afterId: number) => {
-      session = s;
-      attachedId = s.id;
-      sm.attach(s.id);
-      // Deliver the ready frame FIRST so the client can reset its view.
-      send(socket, { type: 'ready', state: sm.getSnapshot(s.id) ?? s.getState() });
-      // Wait for the background history load (if any) to finish populating the
-      // ring, then flush the whole prior transcript as batched frames. This
-      // avoids subscribing early and dribbling 900 history events one by one.
-      await waitForHistoryReady(s);
-      if (socket.readyState !== socket.OPEN) { sm.detach(s.id); return; }
-      const replay = s.replay(afterId);
-      if (replay.length > 0) {
-        const CHUNK = 250;
-        for (let i = 0; i < replay.length; i += CHUNK) {
-          send(socket, {
-            type: 'sdk_events_batch',
-            events: replay.slice(i, i + CHUNK).map((e) => ({ id: e.id, event: e.event })),
-          });
-        }
-      }
-      // Only subscribe AFTER history is flushed so live events arrive in order
-      // after the batch on the wire.
-      unsubEvents = s.subscribe((ev) => send(socket, { type: 'sdk_event', id: ev.id, event: ev.event }));
-      unsubState = s.subscribeState((delta) => send(socket, { type: 'state_update', state: delta }));
-      unsubControls = s.subscribeControls((control) => {
-        send(socket, { type: 'pending_control', sessionId: s.id, control });
-        if (control.kind === 'permission') {
-          const { kind, ...req } = control;
-          send(socket, { type: 'permission_request', ...req });
-        } else {
-          send(socket, { type: 'plan_proposed', reqId: control.reqId, plan: control.plan });
-        }
-      });
-      sendPending(s);
-    };
+    heartbeat.unref?.();
 
     socket.on('message', async (raw: RawData) => {
       let msg: ClientMessage;
       try { msg = JSON.parse(raw.toString()) as ClientMessage; } catch {
-        return send(socket, { type: 'error', message: 'Invalid JSON' });
+        writer.send({ type: 'error', message: 'Invalid JSON' });
+        return;
       }
 
       if (msg.type === 'hello') {
         // Switching sessions only detaches this socket. The previous session
         // keeps running in the background until the user explicitly closes it.
-        detach();
-
+        const ownGeneration = supersedeAttachment();
         try {
           const resolved = resolveHelloSession(sm, msg, defaultCwd, nodes);
-          await attach(resolved.session, resolved.replayAfterId);
-        } catch (e) {
-          return send(socket, { type: 'error', message: (e as Error).message });
+          await attach(resolved, msg.attachId, ownGeneration);
+        } catch (error) {
+          if (!socketClosed && generation === ownGeneration) {
+            writer.send({
+              type: 'error',
+              message: (error as Error).message,
+              attachId: msg.attachId,
+              sessionId: msg.sessionId,
+            }, 'control', ownGeneration);
+          }
         }
         return;
       }
 
-      if (msg.type === 'session_close') {
-        if (msg.sessionId === attachedId) detach();
-        await sm.remove(msg.sessionId).catch((e) => send(socket, { type: 'error', message: (e as Error).message }));
+      // This command is explicitly valid before hello. Session lists are sent
+      // only on demand; manager updates and heartbeat no longer broadcast them.
+      if (msg.type === 'list_sessions') {
+        writer.send({ type: 'sessions_update', sessions: visibleSessions() });
         return;
       }
 
-      if (!session) return send(socket, { type: 'error', message: 'Say hello first' });
+      if (msg.type === 'session_close') {
+        const ctx = attachment;
+        if (ctx?.sessionId === msg.sessionId) detachContext(ctx);
+        await sm.remove(msg.sessionId).catch((error) => {
+          writer.send({ type: 'error', message: (error as Error).message, sessionId: msg.sessionId });
+        });
+        return;
+      }
+
+      const ctx = attachment;
+      if (!ctx || !isCurrent(ctx)) {
+        writer.send({ type: 'error', message: 'Say hello first' });
+        return;
+      }
+      const session = ctx.session;
 
       switch (msg.type) {
         case 'user':
@@ -134,34 +289,107 @@ export function registerWs(app: FastifyInstance, sm: SessionManager, token: stri
           break;
         case 'set_model':
           try { await session.setModel(msg.model); }
-          catch (e) { send(socket, { type: 'error', message: `setModel failed: ${(e as Error).message}` }); }
+          catch (error) { scopedSend(ctx, { type: 'error', message: `setModel failed: ${(error as Error).message}` }); }
           break;
         case 'set_permission_mode':
           try { await session.setPermissionMode(msg.mode as PermissionMode); }
-          catch (e) { send(socket, { type: 'error', message: `setPermissionMode failed: ${(e as Error).message}` }); }
+          catch (error) { scopedSend(ctx, { type: 'error', message: `setPermissionMode failed: ${(error as Error).message}` }); }
           break;
         case 'refresh_history':
-          await session.refreshHistory();
+          try { await session.refreshHistory(); }
+          catch (error) { scopedSend(ctx, { type: 'error', message: `refreshHistory failed: ${(error as Error).message}` }); }
           break;
       }
     });
 
-    socket.on('close', () => { clearInterval(heartbeat); detach(); unsubManager(); });
+    socket.on('close', () => {
+      if (socketClosed) return;
+      socketClosed = true;
+      clearInterval(heartbeat);
+      if (attachment) detachContext(attachment);
+      writer.close();
+    });
   });
 }
 
-async function waitForHistoryReady(session: AgentSession): Promise<void> {
-  // History replay should usually resolve quickly, but the Claude SDK can
-  // occasionally stall while reading an old transcript. In that case, do not
-  // leave the browser in a blank read-only state: flush whatever is already in
-  // the in-memory ring and subscribe to future events.
-  await Promise.race([
-    session.historyReady,
-    new Promise<void>((resolve) => setTimeout(resolve, 3000)),
-  ]);
+async function probeHistoryStatus(historyReady: Promise<void>): Promise<HistoryStatus> {
+  let status: HistoryStatus = 'loading';
+  void historyReady.then(
+    () => { status = 'ready'; },
+    () => { status = 'error'; }
+  );
+  // A single microtask detects already-settled promises without delaying the
+  // initial ready frame behind disk I/O.
+  await Promise.resolve();
+  return status;
 }
 
-export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaultCwd: string, nodes = new NodeRegistry(defaultCwd)): { session: AgentSession; replayAfterId: number; recovered: boolean } {
+async function waitForHistoryReady(
+  session: AgentSession,
+  signal: AbortSignal,
+  timeoutMs = 3000
+): Promise<HistoryStatus | 'aborted'> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (status: HistoryStatus | 'aborted') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      resolve(status);
+    };
+    const onAbort = () => finish('aborted');
+    const timer = setTimeout(() => finish('loading'), timeoutMs);
+    timer.unref?.();
+    signal.addEventListener('abort', onAbort, { once: true });
+    void session.historyReady.then(() => finish('ready'), () => finish('error'));
+    if (signal.aborted) finish('aborted');
+  });
+}
+
+function dedupeEvents(events: SessionEvent[], afterId: number): SessionEvent[] {
+  const byId = new Map<number, SessionEvent>();
+  for (const event of events) {
+    if (event.id > afterId) byId.set(event.id, event);
+  }
+  return [...byId.values()].sort((a, b) => a.id - b.id);
+}
+
+function isReplayTruncated(events: SessionEvent[], afterId: number, lastEventId: number): boolean {
+  if (lastEventId <= afterId) return false;
+  if (events.length === 0) return true;
+  return events[0]!.id > afterId + 1;
+}
+
+export function resolveHelloSession(
+  sm: SessionManager,
+  msg: ClientHello,
+  defaultCwd: string,
+  nodes = new NodeRegistry(defaultCwd)
+): HelloResolution {
+  // A live runtime id is the source of truth. Look it up before applying the
+  // hello defaults so Mobile and older clients can attach to Codex sessions
+  // without redundantly sending provider/node on every switch.
+  if (msg.sessionId) {
+    const existing = sm.get(msg.sessionId);
+    if (existing) {
+      const state = existing.getState();
+      if (msg.nodeId !== undefined && state.nodeId !== msg.nodeId) {
+        throw new Error(`Session belongs to ${state.nodeId}/${state.provider}, not ${msg.nodeId}/${msg.provider ?? state.provider}`);
+      }
+      if (msg.provider !== undefined && state.provider !== msg.provider) {
+        throw new Error(`Session belongs to ${state.nodeId}/${state.provider}, not ${msg.nodeId ?? state.nodeId}/${msg.provider}`);
+      }
+      const requestedCursor = validCursor(msg.lastEventId) ? msg.lastEventId! : 0;
+      let replayMode: ReplayMode = requestedCursor > 0 && requestedCursor <= state.lastEventId ? 'delta' : 'full';
+      if (replayMode === 'delta') {
+        const available = existing.replay(requestedCursor);
+        if (isReplayTruncated(available, requestedCursor, state.lastEventId)) replayMode = 'full';
+      }
+      return { session: existing, replayAfterId: requestedCursor, replayMode, recovered: false };
+    }
+  }
+
   const requestedNodeId = msg.nodeId ?? DEFAULT_NODE_ID;
   const requestedProvider = msg.provider ?? DEFAULT_AGENT_PROVIDER;
   const node = nodes.get(requestedNodeId);
@@ -172,16 +400,7 @@ export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaul
   if (node.kind !== 'local') {
     throw new Error(`SSH node ${node.label} is configured, but remote execution is not wired in this build yet`);
   }
-  if (msg.sessionId) {
-    const existing = sm.get(msg.sessionId);
-    if (existing) {
-      const state = existing.getState();
-      if (state.nodeId !== requestedNodeId || state.provider !== requestedProvider) {
-        throw new Error(`Session belongs to ${state.nodeId}/${state.provider}, not ${requestedNodeId}/${requestedProvider}`);
-      }
-      return { session: existing, replayAfterId: msg.lastEventId ?? 0, recovered: false };
-    }
-  }
+
   const cwd = msg.cwd ?? node.defaultCwd ?? defaultCwd;
   const reusable = sm.findReusableResume({
     nodeId: requestedNodeId,
@@ -191,7 +410,14 @@ export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaul
     viewerMode: msg.viewerMode,
   });
   if (reusable) {
-    return { session: reusable, replayAfterId: msg.lastEventId ?? 0, recovered: !!msg.sessionId };
+    return {
+      session: reusable,
+      // Compatibility only. attach() deliberately ignores this cursor because
+      // the requested runtime wrapper was not the exact live wrapper found.
+      replayAfterId: validCursor(msg.lastEventId) ? msg.lastEventId! : 0,
+      replayMode: 'full',
+      recovered: !!msg.sessionId,
+    };
   }
   const session = sm.create({
     nodeId: requestedNodeId,
@@ -203,15 +429,15 @@ export function resolveHelloSession(sm: SessionManager, msg: ClientHello, defaul
     permissionMode: msg.permissionMode,
     viewerMode: msg.viewerMode,
   });
-  return { session, replayAfterId: msg.lastEventId ?? 0, recovered: !!msg.sessionId };
+  return {
+    session,
+    // Compatibility only; runtime full replay starts from zero.
+    replayAfterId: validCursor(msg.lastEventId) ? msg.lastEventId! : 0,
+    replayMode: 'full',
+    recovered: !!msg.sessionId,
+  };
 }
 
-function send(socket: WebSocket, m: ServerMessage): boolean {
-  try {
-    if (socket.readyState !== socket.OPEN) return false;
-    socket.send(JSON.stringify(m));
-    return true;
-  } catch {
-    return false;
-  }
+function validCursor(value: number | undefined): boolean {
+  return Number.isSafeInteger(value) && value! >= 0;
 }

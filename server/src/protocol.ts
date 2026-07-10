@@ -23,6 +23,9 @@ export type ActiveToolInfo = {
 
 export type ClientHello = {
   type: 'hello';
+  /** Client-generated id for this attachment attempt. Echoed on all
+   * session-scoped server frames so stale frames can be ignored safely. */
+  attachId?: string;
   nodeId?: string;
   provider?: AgentProviderId;
   sessionId?: string;
@@ -93,10 +96,30 @@ export type SessionStateSnapshot = {
   viewerMode?: boolean;
 };
 
-export type ServerReady = { type: 'ready'; state: SessionStateSnapshot };
-export type ServerSdkEvent = { type: 'sdk_event'; id: number; event: unknown };
-export type ServerSdkEventBatch = { type: 'sdk_events_batch'; events: Array<{ id: number; event: unknown }> };
-export type ServerPermissionRequest = {
+export type ReplayMode = 'full' | 'delta';
+export type HistoryStatus = 'loading' | 'ready' | 'error';
+
+/** Optional for backwards compatibility with older clients. New clients use
+ * these fields to reject frames from an attachment that has been superseded. */
+export type ServerAttachmentScope = {
+  attachId?: string;
+  sessionId?: string;
+};
+
+export type ServerReady = ServerAttachmentScope & {
+  type: 'ready';
+  state: SessionStateSnapshot;
+  replayMode?: ReplayMode;
+  historyStatus?: HistoryStatus;
+  historyTruncated?: boolean;
+};
+export type ServerSdkEvent = ServerAttachmentScope & { type: 'sdk_event'; id: number; event: unknown };
+export type ServerSdkEventBatch = ServerAttachmentScope & {
+  type: 'sdk_events_batch';
+  events: Array<{ id: number; event: unknown }>;
+  replayComplete?: boolean;
+};
+export type ServerPermissionRequest = ServerAttachmentScope & {
   type: 'permission_request';
   reqId: string;
   toolName: string;
@@ -106,15 +129,15 @@ export type ServerPermissionRequest = {
   displayName?: string;
   description?: string;
 };
-export type ServerPlanProposed = {
+export type ServerPlanProposed = ServerAttachmentScope & {
   type: 'plan_proposed';
   reqId: string;
   plan: string;
 };
 export type PendingControl =
-  | ({ kind: 'permission' } & Omit<ServerPermissionRequest, 'type'>)
-  | ({ kind: 'plan' } & Omit<ServerPlanProposed, 'type'>);
-export type ServerPendingControl = {
+  | ({ kind: 'permission' } & Omit<ServerPermissionRequest, 'type' | 'attachId' | 'sessionId'>)
+  | ({ kind: 'plan' } & Omit<ServerPlanProposed, 'type' | 'attachId' | 'sessionId'>);
+export type ServerPendingControl = ServerAttachmentScope & {
   type: 'pending_control';
   sessionId: string;
   control: PendingControl;
@@ -123,17 +146,17 @@ export type ServerSessionsUpdate = {
   type: 'sessions_update';
   sessions: SessionStateSnapshot[];
 };
-export type ServerStateUpdate = {
+export type ServerStateUpdate = ServerAttachmentScope & {
   type: 'state_update';
   state: Partial<SessionStateSnapshot>;
 };
-export type ServerHeartbeat = {
+export type ServerHeartbeat = ServerAttachmentScope & {
   type: 'heartbeat';
   now: number;
   session?: SessionStateSnapshot;
   noActivityMs?: number;
 };
-export type ServerError = { type: 'error'; message: string };
+export type ServerError = ServerAttachmentScope & { type: 'error'; message: string };
 
 export type ServerMessage =
   | ServerReady
