@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { ComposerScopeStore, composerDraftStorageKey, composerScopeKey } from '../composerScope';
 
 type Attachment = { id: string; name: string };
@@ -33,4 +34,10 @@ test('[QA] composer state is partitioned by cwd and stable session key', () => {
 test('[QA] composer session key remains backward-compatible when omitted', () => {
   assert.equal(composerScopeKey('/workspace'), '/workspace');
   assert.equal(composerDraftStorageKey('/workspace'), '/workspace');
+});
+
+test('[QA] App scopes the composer with the stable display-session identity', () => {
+  const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /sessionKey=\{attachment\.displaySessionKey\}/);
+  assert.doesNotMatch(app, /<InputBar[\s\S]*?sessionKey=\{activeSessionIdRef\.current\}/);
 });
