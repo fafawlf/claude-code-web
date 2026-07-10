@@ -72,6 +72,7 @@ export function registerWs(
   };
 
   app.get('/ws', { websocket: true }, (socket: WebSocket, req) => {
+    const connectedAt = Date.now();
     const writer = new WsSendQueue(socket);
     const user = resolveUser(req, idCtx);
     if (!user) {
@@ -92,6 +93,7 @@ export function registerWs(
         return;
       }
     }
+    req.log.info({ event: 'ws_connected', userId: user.openId, via: user.via }, 'websocket connected');
 
     const visibleSessions = (): SessionStateSnapshot[] =>
       user.via === 'token' || user.isAdmin ? sm.listSnapshots() : sm.listSnapshotsForOwner(user.openId);
@@ -154,6 +156,7 @@ export function registerWs(
 
     const attach = async (resolved: HelloResolution, attachId: string | undefined, ownGeneration: number) => {
       if (socketClosed || generation !== ownGeneration) return;
+      const attachStartedAt = performance.now();
       const s = resolved.session;
       const ctx: AttachmentContext = {
         generation: ownGeneration,
@@ -219,6 +222,7 @@ export function registerWs(
       const history = initialHistory.status === 'loading'
         ? await waitForHistoryReady(s, ctx.abort.signal)
         : initialHistory;
+      const historyLoadMs = performance.now() - attachStartedAt;
       if (!isCurrent(ctx) || history === 'aborted') return;
       if (history.status === 'error') {
         scopedSend(ctx, { type: 'error', message: history.error ? `History loading failed: ${history.error}` : 'History loading failed' });
@@ -260,6 +264,19 @@ export function registerWs(
       ctx.replaying = false;
       for (const control of [...ctx.pendingControls, ...s.getPendingControls()]) sendControl(ctx, control);
       ctx.pendingControls = [];
+      req.log.info({
+        event: 'ws_attach_complete',
+        attachId: ctx.attachId,
+        sessionId: ctx.sessionId,
+        provider: s.getState().provider,
+        replayMode: resolved.replayMode,
+        replayEvents: replay.length,
+        trailingLiveEvents: trailingLive.length,
+        historyStatus: history.status,
+        historyTruncated: finalHistoryTruncated,
+        historyLoadMs: Math.round(historyLoadMs * 10) / 10,
+        attachTotalMs: Math.round((performance.now() - attachStartedAt) * 10) / 10,
+      }, 'websocket attachment ready');
     };
 
     const heartbeat = setInterval(() => {
@@ -292,6 +309,12 @@ export function registerWs(
           const resolved = resolveHelloSession(sm, msg, defaultCwd, nodes, user);
           await attach(resolved, msg.attachId, ownGeneration);
         } catch (error) {
+          req.log.warn({
+            event: 'ws_attach_failed',
+            err: error,
+            attachId: msg.attachId,
+            requestedSessionId: msg.sessionId,
+          }, 'websocket attachment failed');
           if (!socketClosed && generation === ownGeneration) {
             writer.send({
               type: 'error',
@@ -391,6 +414,10 @@ export function registerWs(
       clearInterval(heartbeat);
       if (attachment) detachContext(attachment);
       writer.close();
+      req.log.info({
+        event: 'ws_disconnected',
+        connectedMs: Date.now() - connectedAt,
+      }, 'websocket disconnected');
     });
   });
 }
