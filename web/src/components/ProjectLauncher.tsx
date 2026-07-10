@@ -323,18 +323,31 @@ function Breadcrumb({ path, onPick }: { path: string; onPick: (path: string) => 
   );
 }
 
-function FolderRow({ label, path, selected, muted, emphasized, onSelect, onOpen }: { label: string; path: string; selected: boolean; muted?: boolean; emphasized?: boolean; onSelect: (path: string) => void; onOpen: (path: string) => void }) {
+export function FolderRow({ label, path, selected, muted, emphasized, onSelect, onOpen }: { label: string; path: string; selected: boolean; muted?: boolean; emphasized?: boolean; onSelect: (path: string) => void; onOpen: (path: string) => void }) {
+  const action = emphasized ? 'Choose' : 'Open';
+  const actionLabel = emphasized ? 'Choose this folder' : `Open ${label}`;
   return (
-    <button
-      onClick={() => onSelect(path)}
-      onDoubleClick={() => onOpen(path)}
-      className={`w-full grid grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-2 px-4 py-2 text-left transition-colors duration-hover ${selected ? 'bg-bg-hover text-text-primary' : muted ? 'text-text-muted hover:bg-bg-hover' : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'}`}
-      title={path}
-    >
-      <Icon name={muted ? 'chev-right' : 'folder'} size={14} className={muted ? 'rotate-180 text-text-muted' : emphasized ? 'text-accent' : 'text-text-muted'} />
-      <span className={`truncate text-sm ${emphasized ? 'font-medium' : ''}`}>{label}</span>
-      <span className="folder-row-path truncate font-mono text-[11px] text-text-muted">{path}</span>
-    </button>
+    <div className={`group flex w-full items-stretch transition-colors duration-hover ${selected ? 'bg-bg-hover text-text-primary' : muted ? 'text-text-muted hover:bg-bg-hover' : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'}`}>
+      <button
+        onClick={() => onSelect(path)}
+        onDoubleClick={() => onOpen(path)}
+        className="min-w-0 flex-1 grid grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-2 px-4 py-2 text-left"
+        title={path}
+      >
+        <Icon name={muted ? 'chev-right' : 'folder'} size={14} className={muted ? 'rotate-180 text-text-muted' : emphasized ? 'text-accent' : 'text-text-muted'} />
+        <span className={`truncate text-sm ${emphasized ? 'font-medium' : ''}`}>{label}</span>
+        <span className="folder-row-path truncate font-mono text-[11px] text-text-muted">{path}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onOpen(path)}
+        className="mx-1 my-1 min-h-9 min-w-11 shrink-0 rounded-sm px-2 text-[11px] font-medium text-text-muted opacity-100 hover:bg-bg-base hover:text-text-primary sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-hover"
+        aria-label={actionLabel}
+        title={`${action} ${path}`}
+      >
+        {action}
+      </button>
+    </div>
   );
 }
 
