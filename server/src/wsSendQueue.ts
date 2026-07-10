@@ -93,6 +93,10 @@ export class WsSendQueue {
   }
 
   private sendNow(item: QueueItem): boolean {
+    if (item.bytes + this.socket.bufferedAmount >= WS_BUFFER_HARD_BYTES) {
+      this.failOverloaded();
+      return false;
+    }
     try {
       this.socket.send(item.payload);
       return true;
