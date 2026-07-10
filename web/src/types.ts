@@ -151,7 +151,7 @@ export type AdminUsersResponse = {
 };
 
 // Client → server
-export type ClientHello = { type: 'hello'; nodeId?: string; provider?: AgentProviderId; sessionId?: string; resumeClaudeId?: string; cwd?: string; model?: string; claudeAuthMode?: ClaudeAuthMode; permissionMode?: PermissionMode; lastEventId?: number; viewerMode?: boolean };
+export type ClientHello = { type: 'hello'; attachId?: string; nodeId?: string; provider?: AgentProviderId; sessionId?: string; resumeClaudeId?: string; cwd?: string; model?: string; claudeAuthMode?: ClaudeAuthMode; permissionMode?: PermissionMode; lastEventId?: number; viewerMode?: boolean };
 export type ClientUserMessage = { type: 'user'; text: string };
 export type ClientPermissionResponse = { type: 'permission_response'; reqId: string; decision: 'allow' | 'deny'; scope?: 'once' | 'session' };
 export type ClientPlanResponse = { type: 'plan_response'; reqId: string; decision: 'approve' | 'reject' };
@@ -164,20 +164,25 @@ export type ClientSessionClose = { type: 'session_close'; sessionId: string };
 export type ClientListSessions = { type: 'list_sessions' };
 export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientSetModel | ClientSetClaudeAuthMode | ClientSetMode | ClientRefreshHistory | ClientSessionClose | ClientListSessions;
 
-// Server → client
-export type ServerReady = { type: 'ready'; state: SessionStateSnapshot };
-export type ServerSdkEvent = { type: 'sdk_event'; id: number; event: SdkEvent };
-export type ServerSdkEventBatch = { type: 'sdk_events_batch'; events: Array<{ id: number; event: SdkEvent }> };
-export type ServerPermissionRequest = { type: 'permission_request'; reqId: string; toolName: string; toolUseId?: string; input: Record<string, unknown>; title?: string; displayName?: string; description?: string };
-export type ServerPlanProposed = { type: 'plan_proposed'; reqId: string; plan: string };
+// Server → client. Attachment scope is optional so a new web bundle can still
+// talk to an older server during a rolling deploy. When present, the client
+// must reject frames from an attachment/session it is no longer displaying.
+export type ServerAttachmentScope = { attachId?: string; sessionId?: string };
+export type ReplayMode = 'full' | 'delta';
+export type HistoryStatus = 'loading' | 'ready' | 'error';
+export type ServerReady = ServerAttachmentScope & { type: 'ready'; state: SessionStateSnapshot; replayMode?: ReplayMode; historyStatus?: HistoryStatus; historyTruncated?: boolean };
+export type ServerSdkEvent = ServerAttachmentScope & { type: 'sdk_event'; id: number; event: SdkEvent };
+export type ServerSdkEventBatch = ServerAttachmentScope & { type: 'sdk_events_batch'; events: Array<{ id: number; event: SdkEvent }>; replayComplete?: boolean };
+export type ServerPermissionRequest = ServerAttachmentScope & { type: 'permission_request'; reqId: string; toolName: string; toolUseId?: string; input: Record<string, unknown>; title?: string; displayName?: string; description?: string };
+export type ServerPlanProposed = ServerAttachmentScope & { type: 'plan_proposed'; reqId: string; plan: string };
 export type PendingControl =
   | ({ kind: 'permission' } & Omit<ServerPermissionRequest, 'type'>)
   | ({ kind: 'plan' } & Omit<ServerPlanProposed, 'type'>);
-export type ServerPendingControl = { type: 'pending_control'; sessionId: string; control: PendingControl };
+export type ServerPendingControl = ServerAttachmentScope & { type: 'pending_control'; sessionId: string; control: PendingControl };
 export type ServerSessionsUpdate = { type: 'sessions_update'; sessions: SessionStateSnapshot[] };
-export type ServerStateUpdate = { type: 'state_update'; state: Partial<SessionStateSnapshot> };
-export type ServerHeartbeat = { type: 'heartbeat'; now: number; session?: SessionStateSnapshot; noActivityMs?: number };
-export type ServerError = { type: 'error'; message: string };
+export type ServerStateUpdate = ServerAttachmentScope & { type: 'state_update'; state: Partial<SessionStateSnapshot> };
+export type ServerHeartbeat = ServerAttachmentScope & { type: 'heartbeat'; now: number; session?: SessionStateSnapshot; noActivityMs?: number };
+export type ServerError = ServerAttachmentScope & { type: 'error'; message: string };
 export type ServerMessage = ServerReady | ServerSdkEvent | ServerSdkEventBatch | ServerPermissionRequest | ServerPlanProposed | ServerPendingControl | ServerSessionsUpdate | ServerStateUpdate | ServerHeartbeat | ServerError;
 
 export type SdkEvent = {
