@@ -45,6 +45,11 @@ void main() {
       final msg = ServerMessage.fromJson(
         jsonDecode(jsonEncode({
           'type': 'ready',
+          'attachId': 'attach-1',
+          'sessionId': 's1',
+          'replayMode': 'delta',
+          'historyStatus': 'loading',
+          'historyTruncated': true,
           'state': {
             'sessionId': 's1',
             'cwd': '/tmp',
@@ -59,13 +64,21 @@ void main() {
         })) as Map<String, dynamic>,
       );
       expect(msg, isA<ServerReady>());
-      expect((msg as ServerReady).state.sessionId, 's1');
+      final ready = msg as ServerReady;
+      expect(ready.state.sessionId, 's1');
+      expect(ready.attachId, 'attach-1');
+      expect(ready.sessionId, 's1');
+      expect(ready.replayMode, ReplayMode.delta);
+      expect(ready.historyStatus, HistoryStatus.loading);
+      expect(ready.historyTruncated, isTrue);
     });
 
     test('sdk_event preserves raw event', () {
       final msg = ServerMessage.fromJson(
         jsonDecode(jsonEncode({
           'type': 'sdk_event',
+          'attachId': 'attach-1',
+          'sessionId': 's1',
           'id': 5,
           'event': {'type': 'assistant', 'message': {'content': []}},
         })) as Map<String, dynamic>,
@@ -74,12 +87,17 @@ void main() {
       final e = msg as ServerSdkEvent;
       expect(e.id, 5);
       expect(e.event, isA<Map<dynamic, dynamic>>());
+      expect(e.attachId, 'attach-1');
+      expect(e.sessionId, 's1');
     });
 
     test('sdk_events_batch', () {
       final msg = ServerMessage.fromJson(
         jsonDecode(jsonEncode({
           'type': 'sdk_events_batch',
+          'attachId': 'attach-1',
+          'sessionId': 's1',
+          'replayComplete': true,
           'events': [
             {'id': 1, 'event': {'type': 'assistant'}},
             {'id': 2, 'event': {'type': 'result'}},
@@ -89,12 +107,17 @@ void main() {
       expect(msg, isA<ServerSdkEventBatch>());
       expect((msg as ServerSdkEventBatch).events.length, 2);
       expect(msg.events[0].id, 1);
+      expect(msg.attachId, 'attach-1');
+      expect(msg.sessionId, 's1');
+      expect(msg.replayComplete, isTrue);
     });
 
     test('permission_request', () {
       final msg = ServerMessage.fromJson(
         jsonDecode(jsonEncode({
           'type': 'permission_request',
+          'attachId': 'attach-1',
+          'sessionId': 's1',
           'reqId': 'r1',
           'toolName': 'Bash',
           'toolUseId': 'u1',
@@ -106,14 +129,24 @@ void main() {
       final p = msg as ServerPermissionRequest;
       expect(p.toolName, 'Bash');
       expect(p.input['cmd'], 'ls');
+      expect(p.attachId, 'attach-1');
+      expect(p.sessionId, 's1');
     });
 
     test('heartbeat', () {
       final msg = ServerMessage.fromJson(
-        jsonDecode(jsonEncode({'type': 'heartbeat', 'now': 123})) as Map<String, dynamic>,
+        jsonDecode(jsonEncode({
+          'type': 'heartbeat',
+          'now': 123,
+          'attachId': 'attach-1',
+          'sessionId': 's1',
+        })) as Map<String, dynamic>,
       );
       expect(msg, isA<ServerHeartbeat>());
-      expect((msg as ServerHeartbeat).now, 123);
+      final heartbeat = msg as ServerHeartbeat;
+      expect(heartbeat.now, 123);
+      expect(heartbeat.attachId, 'attach-1');
+      expect(heartbeat.sessionId, 's1');
     });
 
     test('unknown type throws', () {
@@ -163,26 +196,56 @@ void main() {
       final msg = ServerMessage.fromJson(
         jsonDecode(jsonEncode({
           'type': 'pending_control',
+          'attachId': 'attach-1',
           'sessionId': 's1',
           'control': {'kind': 'plan', 'reqId': 'r9', 'plan': 'do the thing'},
         })) as Map<String, dynamic>,
       );
       final pc = msg as ServerPendingControl;
       expect(pc.sessionId, 's1');
+      expect(pc.attachId, 'attach-1');
       expect(pc.control, isA<PendingPlan>());
       expect((pc.control as PendingPlan).plan, 'do the thing');
+    });
+
+    test('plan_proposed and error retain attachment scope', () {
+      final plan = ServerMessage.fromJson({
+        'type': 'plan_proposed',
+        'attachId': 'attach-1',
+        'sessionId': 's1',
+        'reqId': 'p1',
+        'plan': 'ship it',
+      }) as ServerPlanProposed;
+      final error = ServerMessage.fromJson({
+        'type': 'error',
+        'attachId': 'attach-1',
+        'sessionId': 's1',
+        'message': 'failed',
+      }) as ServerError;
+
+      expect(plan.attachId, 'attach-1');
+      expect(plan.sessionId, 's1');
+      expect(error.attachId, 'attach-1');
+      expect(error.sessionId, 's1');
     });
   });
 
   test('ServerStateUpdate round-trips typed SessionStatePatch with only runtimeStatus set', () {
     final frame = jsonDecode(
-      jsonEncode({'type': 'state_update', 'state': {'runtimeStatus': 'running'}}),
+      jsonEncode({
+        'type': 'state_update',
+        'attachId': 'attach-1',
+        'sessionId': 's1',
+        'state': {'runtimeStatus': 'running'},
+      }),
     ) as Map<String, dynamic>;
     final decoded = ServerMessage.fromJson(frame);
     expect(decoded, isA<ServerStateUpdate>());
     final update = decoded as ServerStateUpdate;
     expect(update.state.runtimeStatus, SessionRuntimeStatus.running);
     expect(update.state.sessionId, isNull);
+    expect(update.attachId, 'attach-1');
+    expect(update.sessionId, 's1');
     final roundTripped = ServerMessage.fromJson(
       jsonDecode(jsonEncode(update.toJson())) as Map<String, dynamic>,
     ) as ServerStateUpdate;

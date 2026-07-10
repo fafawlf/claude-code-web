@@ -2,6 +2,39 @@ import 'package:flutter/foundation.dart';
 
 import 'session_state.dart';
 
+enum ReplayMode {
+  full,
+  delta;
+
+  static ReplayMode? fromJson(Object? value) => switch (value) {
+        'full' => ReplayMode.full,
+        'delta' => ReplayMode.delta,
+        null => null,
+        _ => throw FormatException('Unknown ReplayMode: $value'),
+      };
+}
+
+enum HistoryStatus {
+  loading,
+  ready,
+  error;
+
+  static HistoryStatus? fromJson(Object? value) => switch (value) {
+        'loading' => HistoryStatus.loading,
+        'ready' => HistoryStatus.ready,
+        'error' => HistoryStatus.error,
+        null => null,
+        _ => throw FormatException('Unknown HistoryStatus: $value'),
+      };
+}
+
+/// Implemented by frames that belong to one WebSocket attachment generation.
+/// `sessions_update` is intentionally global and does not implement this type.
+abstract interface class AttachmentScopedServerMessage {
+  String? get attachId;
+  String? get sessionId;
+}
+
 sealed class ServerMessage {
   const ServerMessage();
 
@@ -11,11 +44,18 @@ sealed class ServerMessage {
       case 'ready':
         return ServerReady(
           state: SessionStateSnapshot.fromJson(json['state'] as Map<String, dynamic>),
+          attachId: json['attachId'] as String?,
+          sessionId: json['sessionId'] as String?,
+          replayMode: ReplayMode.fromJson(json['replayMode']),
+          historyStatus: HistoryStatus.fromJson(json['historyStatus']),
+          historyTruncated: json['historyTruncated'] as bool?,
         );
       case 'sdk_event':
         return ServerSdkEvent(
           id: (json['id'] as num).toInt(),
           event: json['event'],
+          attachId: json['attachId'] as String?,
+          sessionId: json['sessionId'] as String?,
         );
       case 'sdk_events_batch':
         final list = (json['events'] as List)
@@ -25,6 +65,9 @@ sealed class ServerMessage {
           events: list
               .map((e) => SdkEventEntry(id: (e['id'] as num).toInt(), event: e['event']))
               .toList(growable: false),
+          attachId: json['attachId'] as String?,
+          sessionId: json['sessionId'] as String?,
+          replayComplete: json['replayComplete'] as bool?,
         );
       case 'permission_request':
         return ServerPermissionRequest(
@@ -35,11 +78,15 @@ sealed class ServerMessage {
           title: json['title'] as String?,
           displayName: json['displayName'] as String?,
           description: json['description'] as String?,
+          attachId: json['attachId'] as String?,
+          sessionId: json['sessionId'] as String?,
         );
       case 'plan_proposed':
         return ServerPlanProposed(
           reqId: json['reqId'] as String,
           plan: json['plan'] as String,
+          attachId: json['attachId'] as String?,
+          sessionId: json['sessionId'] as String?,
         );
       case 'pending_control':
         return ServerPendingControl.fromJson(json);
@@ -53,6 +100,8 @@ sealed class ServerMessage {
       case 'state_update':
         return ServerStateUpdate(
           state: SessionStatePatch.fromJson(Map<String, dynamic>.from(json['state'] as Map)),
+          attachId: json['attachId'] as String?,
+          sessionId: json['sessionId'] as String?,
         );
       case 'heartbeat':
         return ServerHeartbeat(
@@ -61,9 +110,15 @@ sealed class ServerMessage {
               ? null
               : SessionStateSnapshot.fromJson(json['session'] as Map<String, dynamic>),
           noActivityMs: (json['noActivityMs'] as num?)?.toInt(),
+          attachId: json['attachId'] as String?,
+          sessionId: json['sessionId'] as String?,
         );
       case 'error':
-        return ServerError(message: json['message'] as String);
+        return ServerError(
+          message: json['message'] as String,
+          attachId: json['attachId'] as String?,
+          sessionId: json['sessionId'] as String?,
+        );
       default:
         throw FormatException('Unknown ServerMessage type: $type');
     }
@@ -87,23 +142,60 @@ class SdkEventEntry {
   int get hashCode => Object.hash(id, event);
 }
 
-class ServerReady extends ServerMessage {
-  const ServerReady({required this.state});
+class ServerReady extends ServerMessage implements AttachmentScopedServerMessage {
+  const ServerReady({
+    required this.state,
+    this.attachId,
+    this.sessionId,
+    this.replayMode,
+    this.historyStatus,
+    this.historyTruncated,
+  });
   final SessionStateSnapshot state;
+  @override
+  final String? attachId;
+  @override
+  final String? sessionId;
+  final ReplayMode? replayMode;
+  final HistoryStatus? historyStatus;
+  final bool? historyTruncated;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ServerReady && runtimeType == other.runtimeType && state == other.state;
+      other is ServerReady &&
+          runtimeType == other.runtimeType &&
+          state == other.state &&
+          attachId == other.attachId &&
+          sessionId == other.sessionId &&
+          replayMode == other.replayMode &&
+          historyStatus == other.historyStatus &&
+          historyTruncated == other.historyTruncated;
 
   @override
-  int get hashCode => state.hashCode;
+  int get hashCode => Object.hash(
+        state,
+        attachId,
+        sessionId,
+        replayMode,
+        historyStatus,
+        historyTruncated,
+      );
 }
 
-class ServerSdkEvent extends ServerMessage {
-  const ServerSdkEvent({required this.id, required this.event});
+class ServerSdkEvent extends ServerMessage implements AttachmentScopedServerMessage {
+  const ServerSdkEvent({
+    required this.id,
+    required this.event,
+    this.attachId,
+    this.sessionId,
+  });
   final int id;
   final Object? event;
+  @override
+  final String? attachId;
+  @override
+  final String? sessionId;
 
   @override
   bool operator ==(Object other) =>
@@ -111,28 +203,44 @@ class ServerSdkEvent extends ServerMessage {
       other is ServerSdkEvent &&
           runtimeType == other.runtimeType &&
           id == other.id &&
-          event == other.event;
+          event == other.event &&
+          attachId == other.attachId &&
+          sessionId == other.sessionId;
 
   @override
-  int get hashCode => Object.hash(id, event);
+  int get hashCode => Object.hash(id, event, attachId, sessionId);
 }
 
-class ServerSdkEventBatch extends ServerMessage {
-  const ServerSdkEventBatch({required this.events});
+class ServerSdkEventBatch extends ServerMessage implements AttachmentScopedServerMessage {
+  const ServerSdkEventBatch({
+    required this.events,
+    this.attachId,
+    this.sessionId,
+    this.replayComplete,
+  });
   final List<SdkEventEntry> events;
+  @override
+  final String? attachId;
+  @override
+  final String? sessionId;
+  final bool? replayComplete;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ServerSdkEventBatch &&
           runtimeType == other.runtimeType &&
-          listEquals(events, other.events);
+          listEquals(events, other.events) &&
+          attachId == other.attachId &&
+          sessionId == other.sessionId &&
+          replayComplete == other.replayComplete;
 
   @override
-  int get hashCode => Object.hashAll(events);
+  int get hashCode => Object.hash(Object.hashAll(events), attachId, sessionId, replayComplete);
 }
 
-class ServerPermissionRequest extends ServerMessage {
+class ServerPermissionRequest extends ServerMessage
+    implements AttachmentScopedServerMessage {
   const ServerPermissionRequest({
     required this.reqId,
     required this.toolName,
@@ -141,6 +249,8 @@ class ServerPermissionRequest extends ServerMessage {
     this.title,
     this.displayName,
     this.description,
+    this.attachId,
+    this.sessionId,
   });
   final String reqId;
   final String toolName;
@@ -149,6 +259,10 @@ class ServerPermissionRequest extends ServerMessage {
   final String? title;
   final String? displayName;
   final String? description;
+  @override
+  final String? attachId;
+  @override
+  final String? sessionId;
 
   @override
   bool operator ==(Object other) =>
@@ -161,7 +275,9 @@ class ServerPermissionRequest extends ServerMessage {
           mapEquals(input, other.input) &&
           title == other.title &&
           displayName == other.displayName &&
-          description == other.description;
+          description == other.description &&
+          attachId == other.attachId &&
+          sessionId == other.sessionId;
 
   @override
   int get hashCode => Object.hash(
@@ -172,13 +288,24 @@ class ServerPermissionRequest extends ServerMessage {
         title,
         displayName,
         description,
+        attachId,
+        sessionId,
       );
 }
 
-class ServerPlanProposed extends ServerMessage {
-  const ServerPlanProposed({required this.reqId, required this.plan});
+class ServerPlanProposed extends ServerMessage implements AttachmentScopedServerMessage {
+  const ServerPlanProposed({
+    required this.reqId,
+    required this.plan,
+    this.attachId,
+    this.sessionId,
+  });
   final String reqId;
   final String plan;
+  @override
+  final String? attachId;
+  @override
+  final String? sessionId;
 
   @override
   bool operator ==(Object other) =>
@@ -186,10 +313,12 @@ class ServerPlanProposed extends ServerMessage {
       other is ServerPlanProposed &&
           runtimeType == other.runtimeType &&
           reqId == other.reqId &&
-          plan == other.plan;
+          plan == other.plan &&
+          attachId == other.attachId &&
+          sessionId == other.sessionId;
 
   @override
-  int get hashCode => Object.hash(reqId, plan);
+  int get hashCode => Object.hash(reqId, plan, attachId, sessionId);
 }
 
 sealed class PendingControl {
@@ -256,10 +385,17 @@ class PendingPlan extends PendingControl {
   int get hashCode => Object.hash(reqId, plan);
 }
 
-class ServerPendingControl extends ServerMessage {
-  const ServerPendingControl({required this.sessionId, required this.control});
+class ServerPendingControl extends ServerMessage implements AttachmentScopedServerMessage {
+  const ServerPendingControl({
+    required this.sessionId,
+    required this.control,
+    this.attachId,
+  });
+  @override
   final String sessionId;
   final PendingControl control;
+  @override
+  final String? attachId;
 
   factory ServerPendingControl.fromJson(Map<String, dynamic> json) {
     final ctrl = Map<String, dynamic>.from(json['control'] as Map);
@@ -283,6 +419,7 @@ class ServerPendingControl extends ServerMessage {
     return ServerPendingControl(
       sessionId: json['sessionId'] as String,
       control: control,
+      attachId: json['attachId'] as String?,
     );
   }
 
@@ -292,10 +429,11 @@ class ServerPendingControl extends ServerMessage {
       other is ServerPendingControl &&
           runtimeType == other.runtimeType &&
           sessionId == other.sessionId &&
-          control == other.control;
+          control == other.control &&
+          attachId == other.attachId;
 
   @override
-  int get hashCode => Object.hash(sessionId, control);
+  int get hashCode => Object.hash(sessionId, control, attachId);
 }
 
 class ServerSessionsUpdate extends ServerMessage {
@@ -313,26 +451,53 @@ class ServerSessionsUpdate extends ServerMessage {
   int get hashCode => Object.hashAll(sessions);
 }
 
-class ServerStateUpdate extends ServerMessage {
-  const ServerStateUpdate({required this.state});
+class ServerStateUpdate extends ServerMessage implements AttachmentScopedServerMessage {
+  const ServerStateUpdate({
+    required this.state,
+    this.attachId,
+    this.sessionId,
+  });
   final SessionStatePatch state;
+  @override
+  final String? attachId;
+  @override
+  final String? sessionId;
 
-  Map<String, dynamic> toJson() => {'type': 'state_update', 'state': state.toJson()};
+  Map<String, dynamic> toJson() => {
+        'type': 'state_update',
+        if (attachId != null) 'attachId': attachId,
+        if (sessionId != null) 'sessionId': sessionId,
+        'state': state.toJson(),
+      };
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ServerStateUpdate && runtimeType == other.runtimeType && state == other.state;
+      other is ServerStateUpdate &&
+          runtimeType == other.runtimeType &&
+          state == other.state &&
+          attachId == other.attachId &&
+          sessionId == other.sessionId;
 
   @override
-  int get hashCode => state.hashCode;
+  int get hashCode => Object.hash(state, attachId, sessionId);
 }
 
-class ServerHeartbeat extends ServerMessage {
-  const ServerHeartbeat({required this.now, this.session, this.noActivityMs});
+class ServerHeartbeat extends ServerMessage implements AttachmentScopedServerMessage {
+  const ServerHeartbeat({
+    required this.now,
+    this.session,
+    this.noActivityMs,
+    this.attachId,
+    this.sessionId,
+  });
   final int now;
   final SessionStateSnapshot? session;
   final int? noActivityMs;
+  @override
+  final String? attachId;
+  @override
+  final String? sessionId;
 
   @override
   bool operator ==(Object other) =>
@@ -341,21 +506,31 @@ class ServerHeartbeat extends ServerMessage {
           runtimeType == other.runtimeType &&
           now == other.now &&
           session == other.session &&
-          noActivityMs == other.noActivityMs;
+          noActivityMs == other.noActivityMs &&
+          attachId == other.attachId &&
+          sessionId == other.sessionId;
 
   @override
-  int get hashCode => Object.hash(now, session, noActivityMs);
+  int get hashCode => Object.hash(now, session, noActivityMs, attachId, sessionId);
 }
 
-class ServerError extends ServerMessage {
-  const ServerError({required this.message});
+class ServerError extends ServerMessage implements AttachmentScopedServerMessage {
+  const ServerError({required this.message, this.attachId, this.sessionId});
   final String message;
+  @override
+  final String? attachId;
+  @override
+  final String? sessionId;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ServerError && runtimeType == other.runtimeType && message == other.message;
+      other is ServerError &&
+          runtimeType == other.runtimeType &&
+          message == other.message &&
+          attachId == other.attachId &&
+          sessionId == other.sessionId;
 
   @override
-  int get hashCode => message.hashCode;
+  int get hashCode => Object.hash(message, attachId, sessionId);
 }
