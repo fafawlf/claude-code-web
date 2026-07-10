@@ -134,6 +134,21 @@ void main() {
       final s1 = applyEvent(s0, {'type': 'result'}, 5);
       expect(s1.lastEventId, 100);
     });
+
+    test('duplicate event ids are ignored without appending messages', () {
+      final event = {
+        'type': 'assistant',
+        'message': {
+          'content': [
+            {'type': 'text', 'text': 'once'},
+          ],
+        },
+      };
+      final s1 = applyEvent(ChatState.initial, event, 5);
+      final s2 = applyEvent(s1, event, 5);
+      expect(s2.items, hasLength(1));
+      expect(s2.lastEventId, 5);
+    });
   });
 
   group('helpers', () {

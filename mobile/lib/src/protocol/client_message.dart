@@ -91,6 +91,42 @@ class ClientHello extends ClientMessage {
       );
 }
 
+/// Adds the current attachment generation to a session-scoped command.
+///
+/// Keeping this as an envelope means command payload classes stay simple while
+/// every transport frame still carries the two fields the server needs to
+/// reject a delayed command after a rapid session switch.
+class ClientAttachmentCommand extends ClientMessage {
+  ClientAttachmentCommand({
+    required this.command,
+    required this.attachId,
+    required this.sessionId,
+  }) : assert(command is! ClientHello && command is! ClientListSessions);
+
+  final ClientMessage command;
+  final String attachId;
+  final String sessionId;
+
+  @override
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        ...command.toJson(),
+        'attachId': attachId,
+        'sessionId': sessionId,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ClientAttachmentCommand &&
+          runtimeType == other.runtimeType &&
+          command == other.command &&
+          attachId == other.attachId &&
+          sessionId == other.sessionId;
+
+  @override
+  int get hashCode => Object.hash(command, attachId, sessionId);
+}
+
 class ClientUserMessage extends ClientMessage {
   const ClientUserMessage({required this.text});
   final String text;

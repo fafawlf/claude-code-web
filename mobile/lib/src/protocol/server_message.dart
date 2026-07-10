@@ -68,6 +68,8 @@ sealed class ServerMessage {
           attachId: json['attachId'] as String?,
           sessionId: json['sessionId'] as String?,
           replayComplete: json['replayComplete'] as bool?,
+          historyStatus: HistoryStatus.fromJson(json['historyStatus']),
+          historyTruncated: json['historyTruncated'] as bool?,
         );
       case 'permission_request':
         return ServerPermissionRequest(
@@ -217,6 +219,8 @@ class ServerSdkEventBatch extends ServerMessage implements AttachmentScopedServe
     this.attachId,
     this.sessionId,
     this.replayComplete,
+    this.historyStatus,
+    this.historyTruncated,
   });
   final List<SdkEventEntry> events;
   @override
@@ -224,6 +228,8 @@ class ServerSdkEventBatch extends ServerMessage implements AttachmentScopedServe
   @override
   final String? sessionId;
   final bool? replayComplete;
+  final HistoryStatus? historyStatus;
+  final bool? historyTruncated;
 
   @override
   bool operator ==(Object other) =>
@@ -233,10 +239,19 @@ class ServerSdkEventBatch extends ServerMessage implements AttachmentScopedServe
           listEquals(events, other.events) &&
           attachId == other.attachId &&
           sessionId == other.sessionId &&
-          replayComplete == other.replayComplete;
+          replayComplete == other.replayComplete &&
+          historyStatus == other.historyStatus &&
+          historyTruncated == other.historyTruncated;
 
   @override
-  int get hashCode => Object.hash(Object.hashAll(events), attachId, sessionId, replayComplete);
+  int get hashCode => Object.hash(
+        Object.hashAll(events),
+        attachId,
+        sessionId,
+        replayComplete,
+        historyStatus,
+        historyTruncated,
+      );
 }
 
 class ServerPermissionRequest extends ServerMessage

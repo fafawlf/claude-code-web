@@ -111,7 +111,13 @@ void main() {
     expect(tester.widget<TextField>(textField).controller?.text, 'keep this draft');
     await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
     await tester.pump();
-    expect(sent.whereType<ClientUserMessage>(), isEmpty);
+    expect(
+      sent.whereType<ClientAttachmentCommand>().where(
+            (ClientAttachmentCommand message) =>
+                message.command is ClientUserMessage,
+          ),
+      isEmpty,
+    );
     expect(tester.widget<TextField>(textField).controller?.text, 'keep this draft');
 
     _finishAttachment(messages, helloB);
@@ -121,9 +127,70 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
     await tester.pump();
-    final user = sent.whereType<ClientUserMessage>().single;
+    final scoped = sent.whereType<ClientAttachmentCommand>().singleWhere(
+          (ClientAttachmentCommand message) =>
+              message.command is ClientUserMessage,
+        );
+    final user = scoped.command as ClientUserMessage;
     expect(user.text, 'keep this draft');
     expect(tester.widget<TextField>(textField).controller?.text, isEmpty);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await messages.close();
+    store.dispose();
+    connectController.dispose();
+  });
+
+  testWidgets('history failure keeps composer disabled and offers retry',
+      (WidgetTester tester) async {
+    final messages = StreamController<ServerMessage>();
+    final sent = <ClientMessage>[];
+    final store = SessionsStore.forTest(
+      messages: messages.stream,
+      send: sent.add,
+    );
+    final connectController = _ReadyConnectController(_snapshot('A'));
+
+    store.switchTo('A');
+    final hello = sent.last as ClientHello;
+    messages.add(ServerReady(
+      state: _snapshot('A'),
+      attachId: hello.attachId,
+      sessionId: 'A',
+      replayMode: ReplayMode.full,
+      historyStatus: HistoryStatus.loading,
+    ));
+    messages.add(ServerSdkEventBatch(
+      events: const <SdkEventEntry>[],
+      attachId: hello.attachId,
+      sessionId: 'A',
+      replayComplete: true,
+      historyStatus: HistoryStatus.error,
+    ));
+    await Future<void>.delayed(Duration.zero);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        connectControllerProvider.overrideWithValue(connectController),
+        sessionsStoreProvider.overrideWithValue(store),
+        palettePrvider.overrideWithValue(paletteFor(SkinId.warm)),
+      ],
+      child: const MaterialApp(
+        home: Scaffold(body: ChatScreen()),
+      ),
+    ));
+    await tester.pump();
+
+    expect(find.text('History could not be loaded.'), findsOneWidget);
+    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
+
+    sent.clear();
+    await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+    await tester.pump();
+    final retry = sent.single as ClientHello;
+    expect(retry.sessionId, 'A');
+    expect(retry.lastEventId, 0);
+    expect(retry.attachId, isNot(hello.attachId));
 
     await tester.pumpWidget(const SizedBox.shrink());
     await messages.close();
