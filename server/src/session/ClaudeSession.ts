@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveClaudePath } from './resolveClaudePath.js';
-import { loadClaudeTranscriptMessages } from './claudeTranscript.js';
+import { streamClaudeTranscriptMessages } from './claudeTranscript.js';
 import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type AgentProviderId, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
-import { ReplayBuffer, boundReplayValue } from './ReplayBuffer.js';
+import { ReplayBuffer, boundReplayValue, type HistoryLoadMetadata } from './ReplayBuffer.js';
 
 export type SessionEvent = { id: number; event: SDKMessage };
 export type EventListener = (ev: SessionEvent) => void;
@@ -84,6 +84,11 @@ export class ClaudeSession {
   readonly planBroker: PlanBroker;
   readonly historyReady: Promise<void>;
   private historyReadyResolve!: () => void;
+  private historySettled = false;
+  private historyMetadata: HistoryLoadMetadata = { status: 'ready', truncated: false };
+  private historySourceTruncated = false;
+  private historyAbortCtl = new AbortController();
+  private deferredHistoryPrompts: string[] = [];
 
   private readonly viewerMode: boolean;
   private readonly cwd: string;
@@ -136,6 +141,10 @@ export class ClaudeSession {
       this.setRuntimeStatus('waiting_plan');
       this.emitControl({ kind: 'plan', ...req });
     });
+    this.historyMetadata = {
+      status: opts.resume ? 'loading' : 'ready',
+      truncated: false,
+    };
     this.historyReady = new Promise<void>((resolve) => { this.historyReadyResolve = resolve; });
 
     if (this.viewerMode && opts.resume) {
@@ -151,26 +160,34 @@ export class ClaudeSession {
       // Fresh chats are lazy: do not spawn a Claude Code subprocess until the
       // first user prompt. This keeps empty project clicks out of Claude's
       // session store and avoids "lost empty chat" noise in the UI.
-      this.historyReadyResolve();
+      this.settleHistory('ready');
     }
   }
 
   private async loadHistoryViewer(resumeId: string, cwd: string): Promise<void> {
+    let failure: string | undefined;
+    let cancelled = false;
     try {
-      const prior = await loadClaudeTranscriptMessages(resumeId, cwd);
-      for (const m of prior) {
-        if (this.closed) return;
-        await this.pushTranscriptMessage(m);
+      for await (const message of streamClaudeTranscriptMessages(resumeId, cwd, {
+        signal: this.historyAbortCtl.signal,
+        onTruncated: (truncated) => { this.historySourceTruncated ||= truncated; },
+      })) {
+        if (this.closed) break;
+        await this.pushTranscriptMessage(message);
       }
     } catch (err) {
-      const msg = (err as Error).message ?? 'failed to load history';
-      this.pushEvent({
-        type: 'system',
-        subtype: 'error' as unknown as 'status',
-        message: `Could not load transcript: ${msg}`,
-      } as unknown as SDKMessage);
+      cancelled = this.closed || isAbortError(err);
+      if (!cancelled) {
+        failure = (err as Error).message ?? 'failed to load history';
+        this.pushEvent({
+          type: 'system',
+          subtype: 'error' as unknown as 'status',
+          message: `Could not load transcript: ${failure}`,
+        } as unknown as SDKMessage);
+      }
+    } finally {
+      this.settleHistory(failure ? 'error' : 'ready', failure, cancelled);
     }
-    this.historyReadyResolve();
     // Viewer mode never starts a live SDK query. Calls to setUser are silently
     // ignored; refreshHistory() can be used to pull new messages appended by
     // whoever owns the session.
@@ -184,11 +201,13 @@ export class ClaudeSession {
     if (!claudeId) return 0;
     let added = 0;
     try {
-      const prior = await loadClaudeTranscriptMessages(claudeId, this.cwd);
-      for (const m of prior) {
-        const uuid = (m as any).uuid;
+      for await (const message of streamClaudeTranscriptMessages(claudeId, this.cwd, {
+        signal: this.historyAbortCtl.signal,
+        onTruncated: (truncated) => { this.historySourceTruncated ||= truncated; },
+      })) {
+        const uuid = (message as any).uuid;
         if (uuid && this.seenUuids.has(uuid)) continue;
-        added += await this.pushTranscriptMessage(m);
+        added += await this.pushTranscriptMessage(message);
       }
     } catch {
       // Best effort — errors surface as they do on initial load only if fatal.
@@ -197,25 +216,50 @@ export class ClaudeSession {
   }
 
   private async loadHistoryThenStart(resumeId: string, cwd: string): Promise<void> {
+    let failure: string | undefined;
+    let cancelled = false;
     try {
-      const prior = await loadClaudeTranscriptMessages(resumeId, cwd);
-      for (const m of prior) {
-        await this.pushTranscriptMessage(m);
-        if (this.closed) return;
+      for await (const message of streamClaudeTranscriptMessages(resumeId, cwd, {
+        signal: this.historyAbortCtl.signal,
+        onTruncated: (truncated) => { this.historySourceTruncated ||= truncated; },
+      })) {
+        if (this.closed) break;
+        await this.pushTranscriptMessage(message);
       }
     } catch (err) {
-      const msg = (err as Error).message ?? 'failed to load history';
-      this.pushEvent({
-        type: 'system',
-        subtype: 'error' as unknown as 'status',
-        message: `Could not load prior transcript: ${msg}`,
-      } as unknown as SDKMessage);
+      cancelled = this.closed || isAbortError(err);
+      if (!cancelled) {
+        failure = (err as Error).message ?? 'failed to load history';
+        this.pushEvent({
+          type: 'system',
+          subtype: 'error' as unknown as 'status',
+          message: `Could not load prior transcript: ${failure}`,
+        } as unknown as SDKMessage);
+      }
+    } finally {
+      // Signal history ready so WS can flush the transcript batch. Do not start
+      // the live pump until an explicitly queued user prompt is flushed.
+      this.settleHistory(failure ? 'error' : 'ready', failure, cancelled);
     }
-    // Signal history ready so WS can flush the transcript batch. Do not start
-    // the live pump here: history open/reconnect should be passive, and
-    // sendUser() already starts query() with the known resume id when the user
-    // explicitly continues writing.
+  }
+
+  getHistoryMetadata(): HistoryLoadMetadata {
+    return { ...this.historyMetadata, truncated: this.historySourceTruncated || this.ring.truncated };
+  }
+
+  private settleHistory(status: 'ready' | 'error', error?: string, cancelled = false): void {
+    if (this.historySettled) return;
+    this.historySettled = true;
+    this.historyMetadata = {
+      status,
+      truncated: this.historySourceTruncated || this.ring.truncated,
+      ...(error ? { error } : {}),
+      ...(cancelled ? { cancelled: true } : {}),
+    };
     this.historyReadyResolve();
+    if (this.closed || this.viewerMode || this.deferredHistoryPrompts.length === 0) return;
+    const prompts = this.deferredHistoryPrompts.splice(0);
+    for (const prompt of prompts) this.sendUserAfterHistory(prompt);
   }
 
   private pushEvent(event: SDKMessage): void {
@@ -229,7 +273,7 @@ export class ClaudeSession {
 
     // Bound every retained string before the event enters replay storage. The
     // original SDK object can be released as soon as this callback returns.
-    const slim = boundReplayValue(event);
+    const slim = boundReplayValue(event, undefined, true);
     const se: SessionEvent = { id, event: slim };
 
     // 2. Partial stream events are ephemeral: they drive the live streaming
@@ -501,6 +545,16 @@ export class ClaudeSession {
 
   sendUser(text: string): void {
     if (this.closed || this.viewerMode) return;
+    if (this.historyMetadata.status === 'loading') {
+      this.deferredHistoryPrompts.push(text);
+      this.setRuntimeStatus('running');
+      return;
+    }
+    this.sendUserAfterHistory(text);
+  }
+
+  private sendUserAfterHistory(text: string): void {
+    if (this.closed || this.viewerMode) return;
     this.setRuntimeStatus('running');
     this.prompts.push(text);
     this.startQuery(this.state.claudeSessionId);
@@ -565,12 +619,18 @@ export class ClaudeSession {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.deferredHistoryPrompts = [];
     this.updateState({ runtimeStatus: 'closed', activeTool: undefined });
     this.prompts.close();
+    try { this.historyAbortCtl.abort(); } catch { /* */ }
     try { this.abortCtl.abort(); } catch { /* */ }
     this.permissionBroker.drainDeny();
     this.planBroker.drainReject();
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 function summarizeToolInput(name: string, input: unknown): string | undefined {
