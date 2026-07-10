@@ -871,6 +871,13 @@
   -webkit-overflow-scrolling: touch;
 }
 
+.setup-body > *,
+.setup-body button,
+.setup-body code {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .setup-footer {
   position: sticky;
   bottom: 0;
@@ -1233,12 +1240,16 @@
   .setup-body {
     min-height: 0;
     flex: 1 1 auto;
+    width: 100%;
+    overflow-x: hidden;
     overflow-y: auto;
     padding: 14px;
     -webkit-overflow-scrolling: touch;
   }
 
   .setup-body code {
+    display: block;
+    width: 100%;
     white-space: nowrap;
   }
 
