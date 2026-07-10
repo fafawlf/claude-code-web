@@ -8,7 +8,6 @@ export type ClaudeTranscriptMessage = SDKMessage | Record<string, unknown>;
 
 export type ClaudeTranscriptStreamOptions = {
   home?: string;
-  searchRoot?: string;
   signal?: AbortSignal;
   onTruncated?: (truncated: boolean) => void;
 };
@@ -24,7 +23,7 @@ export async function* streamClaudeTranscriptMessages(
   options: ClaudeTranscriptStreamOptions = {},
 ): AsyncGenerator<ClaudeTranscriptMessage> {
   const home = options.home ?? homedir();
-  const file = await findClaudeTranscriptFile(sessionId, cwd, home, options.searchRoot, options.signal);
+  const file = await findClaudeTranscriptFile(sessionId, cwd, home, options.signal);
   if (file) {
     yield* streamClaudeTranscriptFile(file, options.signal, options.onTruncated);
     return;
@@ -44,14 +43,14 @@ export async function* streamClaudeTranscriptMessages(
 }
 
 /** Backward-compatible collecting API for small callers and tests. */
-export async function loadClaudeTranscriptMessages(sessionId: string, cwd: string, searchRoot?: string): Promise<ClaudeTranscriptMessage[]> {
+export async function loadClaudeTranscriptMessages(sessionId: string, cwd: string): Promise<ClaudeTranscriptMessage[]> {
   const messages: ClaudeTranscriptMessage[] = [];
-  for await (const message of streamClaudeTranscriptMessages(sessionId, cwd, { searchRoot })) messages.push(message);
+  for await (const message of streamClaudeTranscriptMessages(sessionId, cwd)) messages.push(message);
   return messages;
 }
 
-export async function loadClaudeTranscriptFast(sessionId: string, cwd: string, home = homedir(), searchRoot?: string): Promise<ClaudeTranscriptMessage[] | undefined> {
-  const file = await findClaudeTranscriptFile(sessionId, cwd, home, searchRoot);
+export async function loadClaudeTranscriptFast(sessionId: string, cwd: string, home = homedir()): Promise<ClaudeTranscriptMessage[] | undefined> {
+  const file = await findClaudeTranscriptFile(sessionId, cwd, home);
   if (!file) return undefined;
   const messages: ClaudeTranscriptMessage[] = [];
   for await (const message of streamClaudeTranscriptFile(file)) messages.push(message);
@@ -62,16 +61,12 @@ export async function findClaudeTranscriptFile(
   sessionId: string,
   cwd: string,
   home: string,
-  searchRoot?: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
   throwIfAborted(signal);
   const projects = join(home, '.claude', 'projects');
   const direct = join(projects, encodeClaudeProjectPath(cwd), `${sessionId}.jsonl`);
-  // When a searchRoot is given (multi-user mode), only transcripts whose
-  // recorded cwd lives under that root may be opened — even by exact UUID.
-  const allowedPrefix = searchRoot ? encodeClaudeProjectPath(searchRoot) : undefined;
-  const cacheKey = [projects, allowedPrefix ?? '', sessionId].join('\0');
+  const cacheKey = [projects, sessionId].join('\0');
   const cached = transcriptPathCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     try {
@@ -85,12 +80,10 @@ export async function findClaudeTranscriptFile(
   }
 
   try {
-    if (!allowedPrefix || isEncodedPathInside(encodeClaudeProjectPath(cwd), allowedPrefix)) {
-      await access(direct);
-      cacheTranscriptPath(cacheKey, direct);
-      throwIfAborted(signal);
-      return direct;
-    }
+    await access(direct);
+    cacheTranscriptPath(cacheKey, direct);
+    throwIfAborted(signal);
+    return direct;
   } catch (error) {
     if (isAbortError(error)) throw error;
     // Fall through to a one-level search. This keeps old sessions openable even
@@ -102,7 +95,6 @@ export async function findClaudeTranscriptFile(
     for (const dir of dirs) {
       throwIfAborted(signal);
       if (!dir.isDirectory()) continue;
-      if (allowedPrefix && !isEncodedPathInside(dir.name, allowedPrefix)) continue;
       const candidate = join(projects, dir.name, `${sessionId}.jsonl`);
       try {
         await access(candidate);
@@ -141,10 +133,6 @@ function cacheTranscriptPath(key: string, path: string): void {
     if (oldest === undefined) break;
     transcriptPathCache.delete(oldest);
   }
-}
-
-function isEncodedPathInside(encoded: string, encodedRoot: string): boolean {
-  return encoded === encodedRoot || encoded.startsWith(`${encodedRoot}-`);
 }
 
 export function encodeClaudeProjectPath(cwd: string): string {
