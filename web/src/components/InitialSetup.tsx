@@ -16,6 +16,7 @@ type Mode = 'local' | 'remote';
 
 export function InitialSetup({ cwd, home, auth, claude, server, onDone, onOpenProject }: Props) {
   const [mode, setMode] = useState<Mode>(() => readPreferredMode());
+  const canContinue = !!auth && !!claude && auth.source !== 'none' && claude.source !== 'missing';
 
   return (
     <div className="setup-overlay fixed inset-0 z-[70] flex items-center justify-center bg-bg-base/72 px-4 backdrop-blur-[10px]" role="dialog" aria-modal="true" aria-label="Initial setup">
@@ -66,9 +67,16 @@ export function InitialSetup({ cwd, home, auth, claude, server, onDone, onOpenPr
         </div>
 
         <div className="setup-footer flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle bg-bg-raised/40 px-5 py-4">
-          <p className="max-w-[460px] text-xs leading-5 text-text-muted">
-            You can use the same UI for local Claude Code or a remote Claude Code host. The only difference is where this server process is running.
-          </p>
+          <div className="min-w-0 flex-1">
+            <p className="max-w-[460px] text-xs leading-5 text-text-muted">
+              You can use the same UI for local Claude Code or a remote Claude Code host. The only difference is where this server process is running.
+            </p>
+            {!canContinue && auth && claude && (
+              <p id="setup-blocked-reason" className="mt-1 text-xs leading-5 text-danger" role="status">
+                Resolve the Claude Code installation and authentication shown above, then reload detection.
+              </p>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -81,7 +89,10 @@ export function InitialSetup({ cwd, home, auth, claude, server, onDone, onOpenPr
             <button
               type="button"
               onClick={onDone}
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3.5 text-sm font-medium text-text-inverse transition-colors duration-hover hover:bg-accent-hi"
+              disabled={!canContinue}
+              aria-describedby={!canContinue ? 'setup-blocked-reason' : undefined}
+              title={!canContinue ? 'Claude Code and authentication are required' : undefined}
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-3.5 text-sm font-medium text-text-inverse transition-colors duration-hover hover:bg-accent-hi disabled:cursor-not-allowed disabled:opacity-45"
             >
               <Icon name="check" size={14} />
               Continue
