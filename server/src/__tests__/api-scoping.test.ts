@@ -88,6 +88,30 @@ test('unauthenticated /api requests are rejected in feishu mode', async () => {
   }
 });
 
+test('only admins can authorize a canary routing cookie', async () => {
+  const s = await setup();
+  try {
+    const anonymous = await s.app.inject({ method: 'GET', url: '/api/admin/canary-check' });
+    assert.equal(anonymous.statusCode, 401);
+
+    const member = await s.app.inject({
+      method: 'GET',
+      url: '/api/admin/canary-check',
+      headers: { cookie: s.cookies.alice },
+    });
+    assert.equal(member.statusCode, 403);
+
+    const admin = await s.app.inject({
+      method: 'GET',
+      url: '/api/admin/canary-check',
+      headers: { cookie: s.cookies.boss },
+    });
+    assert.equal(admin.statusCode, 204);
+  } finally {
+    await s.cleanup();
+  }
+});
+
 test('directory browsing is confined to the user workspace', async () => {
   const s = await setup();
   try {

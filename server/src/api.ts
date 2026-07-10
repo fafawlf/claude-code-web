@@ -119,6 +119,14 @@ export function registerApi(
     };
   });
 
+  // Nginx uses this internal-only authorization subrequest before setting a
+  // canary cookie. The cookie route itself is unreachable to regular members.
+  app.get('/api/admin/canary-check', async (req, reply) => {
+    const user = userOf(req);
+    if (!user.isAdmin) return reply.code(403).send({ error: 'Admin required' });
+    return reply.code(204).send();
+  });
+
   app.get('/api/sessions', async (req, reply) => {
     const user = userOf(req);
     const q = req.query as { cwd?: string; limit?: string } | undefined;
