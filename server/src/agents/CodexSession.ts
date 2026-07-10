@@ -9,8 +9,7 @@ import { resolveCodexPath } from './resolveCodexPath.js';
 import { DEFAULT_NODE_ID, type ActiveToolInfo, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
 import type { AgentSessionOptions } from './types.js';
 import type { ControlListener, EventListener, SessionEvent, StateListener } from '../session/ClaudeSession.js';
-
-const RING_CAPACITY = 5000;
+import { ReplayBuffer, boundReplayValue } from '../session/ReplayBuffer.js';
 
 type CodexJsonEvent = {
   type?: string;
@@ -56,7 +55,7 @@ export class CodexSession {
   private running = false;
   private pendingPrompts: string[] = [];
   private nextEventId = 1;
-  private ring: SessionEvent[] = [];
+  private ring = new ReplayBuffer<SessionEvent>();
   private listeners = new Set<EventListener>();
   private stateListeners = new Set<StateListener>();
   private controlListeners = new Set<ControlListener>();
@@ -421,9 +420,8 @@ export class CodexSession {
   private pushEvent(event: any): void {
     const id = this.nextEventId++;
     this.state = { ...this.state, lastEventId: id, lastEventAt: Date.now() };
-    const se: SessionEvent = { id, event };
+    const se: SessionEvent = { id, event: boundReplayValue(event) };
     this.ring.push(se);
-    if (this.ring.length > RING_CAPACITY) this.ring.shift();
     for (const listener of this.listeners) { try { listener(se); } catch { /* noop */ } }
   }
 
