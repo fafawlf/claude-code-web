@@ -186,6 +186,21 @@
     mix-blend-mode: overlay;
   }
 
+  .message-scroller {
+    overflow-x: hidden;
+  }
+
+  .markdown-message {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .markdown-message a,
+  .markdown-message code:not(pre code) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 6px; }
   ::-webkit-scrollbar-thumb:hover { background: #4a4238; }
