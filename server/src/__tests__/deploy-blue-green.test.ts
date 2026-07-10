@@ -61,6 +61,8 @@ test('rendered canary route requires admin auth and keeps websocket proxying', (
     assert.match(config, /proxy_pass http:\/\/127\.0\.0\.1:8085\/api\/admin\/canary-check/);
     assert.match(config, /if \(\$cookie_ccw_canary = "randomsecret"\)/);
     assert.match(config, /proxy_set_header Upgrade \$http_upgrade/);
+    assert.match(config, /location = \/auth\/callback \{\s*proxy_pass http:\/\/127\.0\.0\.1:8084/s);
+    assert.match(config, /location \^~ \/api\/admin\/ \{\s*proxy_pass http:\/\/127\.0\.0\.1:8084/s);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
