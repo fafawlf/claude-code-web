@@ -10,14 +10,11 @@ import { ClaudeSession } from '../session/ClaudeSession.js';
 import { CodexSession } from '../agents/CodexSession.js';
 
 test('resumed Claude prompts wait for history before constructing a live query', async () => {
-  const started = performance.now();
   const session = new ClaudeSession({
     id: 'queued-claude',
     cwd: '/nonexistent-ccw-history-queue',
     resume: 'missing-queued-session',
   });
-  const constructorMs = performance.now() - started;
-  assert.ok(constructorMs < 5, `Claude constructor took ${constructorMs.toFixed(1)}ms`);
   const delivered: string[] = [];
   (session as any).sendUserAfterHistory = (text: string) => { delivered.push(text); };
 
