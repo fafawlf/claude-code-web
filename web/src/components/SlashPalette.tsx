@@ -15,11 +15,12 @@ type Props = {
   provider?: AgentProviderId;
   onPick: (a: SlashAction) => void;
   onClose: () => void;
+  onEmptySubmit: () => void;
 };
 
 type Cmd = { label: string; hint: string; action: SlashAction; match: string[] };
 
-export function SlashPalette({ query, provider, onPick, onClose }: Props) {
+export function SlashPalette({ query, provider, onPick, onClose, onEmptySubmit }: Props) {
   const [i, setI] = useState(0);
 
   const cmds: Cmd[] = [
@@ -47,21 +48,24 @@ export function SlashPalette({ query, provider, onPick, onClose }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setI((v) => Math.min(v + 1, filtered.length - 1)); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); setI((v) => Math.max(v - 1, 0)); }
-      else if (e.key === 'Enter') { e.preventDefault(); if (filtered[i]) onPick(filtered[i].action); }
+      if (e.key === 'ArrowDown' && filtered.length > 0) { e.preventDefault(); setI((v) => Math.min(v + 1, filtered.length - 1)); }
+      else if (e.key === 'ArrowUp' && filtered.length > 0) { e.preventDefault(); setI((v) => Math.max(v - 1, 0)); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (filtered[i]) onPick(filtered[i].action); else onEmptySubmit(); }
       else if (e.key === 'Escape') { e.preventDefault(); onClose(); }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [filtered, i, onPick, onClose]);
-
-  if (filtered.length === 0) return null;
+  }, [filtered, i, onPick, onClose, onEmptySubmit]);
 
   return (
     <div className="absolute bottom-full mb-2 left-0 right-0 max-w-md bg-bg-surface border border-border rounded-md shadow-pop overflow-hidden animate-modal-in origin-bottom-left">
       <div className="px-3.5 py-1.5 text-[10px] uppercase tracking-[.06em] font-semibold text-text-muted border-b border-border-subtle">Slash commands</div>
       <div className="max-h-64 overflow-y-auto">
+        {filtered.length === 0 && (
+          <div className="px-3.5 py-3 text-xs text-text-muted" role="status">
+            No matching command. Press Enter to send it as text.
+          </div>
+        )}
         {filtered.map((c, idx) => (
           <button
             key={c.label}

@@ -110,12 +110,14 @@ function InputBarImpl(p: Props) {
     return () => clearInterval(t);
   }, [text, focused]);
 
-  const submit = () => {
+  const submit = (allowSlashText = false) => {
     const t = text.trim();
     const readyFiles = attachments.flatMap((a) => (a.status === 'ready' && a.uploaded ? [a.uploaded] : []));
     const uploading = attachments.some((a) => a.status === 'uploading');
-    if ((!t && readyFiles.length === 0) || !p.ready || uploading) return;
-    if (t.startsWith('/') && readyFiles.length === 0) return;
+    if (!t && readyFiles.length === 0) return;
+    if (uploading) { setSendHint('Files are still uploading.'); return; }
+    if (!p.ready) { setSendHint(p.readOnly ? 'Press Continue writing to take over this chat.' : 'Still connecting. Try again in a moment.'); return; }
+    if (t.startsWith('/') && readyFiles.length === 0 && !allowSlashText) { setSendHint('Pick a slash command, or press Enter in the empty command list to send as text.'); return; }
     const prompt = buildAttachmentPrompt(t, readyFiles);
     setHistory((prev) => recordPrompt(prev, prompt));
     setHistoryCursor(null);
@@ -350,7 +352,16 @@ function InputBarImpl(p: Props) {
         </div>
 
         {slashQuery !== null && (
-          <SlashPalette query={slashQuery} provider={p.provider} onPick={pickSlash} onClose={() => setSlashQuery(null)} />
+          <SlashPalette
+            query={slashQuery}
+            provider={p.provider}
+            onPick={pickSlash}
+            onClose={() => setSlashQuery(null)}
+            onEmptySubmit={() => {
+              setSlashQuery(null);
+              queueMicrotask(() => submit(true));
+            }}
+          />
         )}
         {mentionQuery !== null && slashQuery === null && (
           <MentionPopup
