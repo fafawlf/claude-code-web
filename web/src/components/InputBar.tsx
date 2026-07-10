@@ -5,13 +5,24 @@ import { SlashPalette, type SlashAction } from './SlashPalette';
 import { MentionPopup } from './MentionPopup';
 import { Icon } from './Icon';
 import { navigatePromptHistory, recordPrompt, shouldHandlePromptHistoryKey } from '../promptHistory';
-import { buildAttachmentPrompt, formatFileSize, type UploadedFileRef } from '../uploads';
+import {
+  buildAttachmentPrompt,
+  formatFileSize,
+  MAX_UPLOAD_FILES,
+  planUploadSelection,
+  uploadFileMultipart,
+  UploadPool,
+  type UploadHandle,
+  type UploadedFileRef,
+} from '../uploads';
 import { clearPromptDraft, readPromptDraft, writePromptDraft } from '../promptDraft';
-import { apiFetch } from '../api';
+import { ComposerScopeStore, composerDraftStorageKey, composerScopeKey } from '../composerScope';
 
 type Props = {
   token: string;
   cwd: string;
+  /** Stable display-session identity. Omit to retain legacy cwd-only composer state. */
+  sessionKey?: string;
   mode: PermissionMode;
   provider?: AgentProviderId;
   busy: boolean;
@@ -29,7 +40,6 @@ const PLACEHOLDERS = [
   'Ask Claude anything about this project…',
 ];
 
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 type Attachment = {
@@ -41,10 +51,16 @@ type Attachment = {
   error?: string;
   uploaded?: UploadedFileRef;
   previewUrl?: string;
+  file?: File;
+  progress?: number;
+  retryable?: boolean;
+  countsTowardTotal?: boolean;
 };
 
 function InputBarImpl(p: Props) {
-  const [text, setText] = useState(() => p.initialText ?? safeReadPromptDraft(p.cwd));
+  const scopeKey = composerScopeKey(p.cwd, p.sessionKey);
+  const draftStorageKey = composerDraftStorageKey(p.cwd, p.sessionKey);
+  const [text, setText] = useState(() => p.initialText ?? safeReadScopedPromptDraft(p.cwd, draftStorageKey, !!p.sessionKey));
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
@@ -58,11 +74,17 @@ function InputBarImpl(p: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const previewUrlsRef = useRef<Set<string>>(new Set());
-  const lastCwdRef = useRef(p.cwd);
+  const currentScopeRef = useRef(scopeKey);
+  const currentDraftStorageRef = useRef(draftStorageKey);
+  const scopeStoreRef = useRef(new ComposerScopeStore<Attachment>());
+  const uploadPoolRef = useRef(new UploadPool(2));
+  const uploadHandlesRef = useRef(new Map<string, { scopeKey: string; handle: UploadHandle<UploadedFileRef> }>());
   const skipDraftWriteRef = useRef(false);
 
   useEffect(() => { ref.current?.focus(); }, []);
   useEffect(() => () => {
+    currentScopeRef.current = '__unmounted__';
+    uploadPoolRef.current.cancelAll();
     for (const url of previewUrlsRef.current) URL.revokeObjectURL(url);
     previewUrlsRef.current.clear();
   }, []);
@@ -71,22 +93,41 @@ function InputBarImpl(p: Props) {
   useEffect(() => { if (p.initialText !== undefined && p.initialText !== text) setText(p.initialText); }, [p.initialText]);
 
   useEffect(() => {
-    if (lastCwdRef.current === p.cwd) return;
-    safeWritePromptDraft(lastCwdRef.current, text);
-    lastCwdRef.current = p.cwd;
+    if (currentScopeRef.current === scopeKey) return;
+    const previousScope = currentScopeRef.current;
+    const canceledAttachments = attachments.map((attachment) => attachment.status === 'uploading'
+      ? { ...attachment, status: 'error' as const, progress: undefined, retryable: true, error: 'Upload canceled after switching chats. Retry to upload here.' }
+      : attachment);
+    safeWritePromptDraft(currentDraftStorageRef.current, text);
+    uploadPoolRef.current.cancelScope(previousScope);
+    scopeStoreRef.current.save(previousScope, {
+      text,
+      history,
+      historyCursor,
+      historyDraft,
+      attachments: canceledAttachments,
+    });
+    currentScopeRef.current = scopeKey;
+    currentDraftStorageRef.current = draftStorageKey;
+    const next = scopeStoreRef.current.read(scopeKey);
     skipDraftWriteRef.current = true;
-    setText(p.initialText ?? safeReadPromptDraft(p.cwd));
-    setHistoryCursor(null);
-    setHistoryDraft('');
-  }, [p.cwd]);
+    setText(p.initialText ?? next?.text ?? safeReadScopedPromptDraft(p.cwd, draftStorageKey, !!p.sessionKey));
+    setHistory(next?.history ?? []);
+    setHistoryCursor(next?.historyCursor ?? null);
+    setHistoryDraft(next?.historyDraft ?? '');
+    setAttachments(next?.attachments ?? []);
+    setSlashQuery(null);
+    setMentionQuery(null);
+    setSendHint(null);
+  }, [scopeKey]);
 
   useEffect(() => {
     if (skipDraftWriteRef.current) {
       skipDraftWriteRef.current = false;
       return;
     }
-    safeWritePromptDraft(p.cwd, text);
-  }, [p.cwd, text]);
+    safeWritePromptDraft(draftStorageKey, text);
+  }, [draftStorageKey, text]);
 
   useIsoLayoutEffect(() => {
     const el = ref.current;
@@ -131,7 +172,7 @@ function InputBarImpl(p: Props) {
     setHistoryDraft('');
     p.onSend(prompt);
     setText('');
-    safeClearPromptDraft(p.cwd);
+    safeClearPromptDraft(draftStorageKey);
     clearAttachments();
   };
 
@@ -184,7 +225,7 @@ function InputBarImpl(p: Props) {
     if (e.key === 'Escape' && text.length > 0) {
       e.preventDefault();
       setText('');
-      safeClearPromptDraft(p.cwd);
+      safeClearPromptDraft(draftStorageKey);
       setHistoryCursor(null);
       setHistoryDraft('');
       return;
@@ -213,54 +254,99 @@ function InputBarImpl(p: Props) {
     }
   };
 
-  const uploadFiles = async (filesLike: FileList | File[]) => {
-    const files = Array.from(filesLike).filter((f) => f.size > 0);
+  const updateAttachmentsForScope = (targetScope: string, update: (items: Attachment[]) => Attachment[]) => {
+    if (currentScopeRef.current === targetScope) {
+      setAttachments(update);
+      return;
+    }
+    scopeStoreRef.current.updateAttachments(targetScope, update);
+  };
+
+  const startUpload = (attachment: Attachment, targetScope: string, targetCwd: string) => {
+    const file = attachment.file;
+    if (!file) return;
+    updateAttachmentsForScope(targetScope, (items) => items.map((item) => item.id === attachment.id
+      ? { ...item, status: 'uploading', error: undefined, retryable: false, progress: 0 }
+      : item));
+    const handle = uploadPoolRef.current.enqueue(targetScope, (signal) => uploadFileMultipart(file, targetCwd, {
+      signal,
+      onProgress: (progress) => updateAttachmentsForScope(targetScope, (items) => items.map((item) => item.id === attachment.id
+        ? { ...item, progress }
+        : item)),
+    }));
+    uploadHandlesRef.current.set(attachment.id, { scopeKey: targetScope, handle });
+    void handle.promise
+      .then((uploaded) => updateAttachmentsForScope(targetScope, (items) => items.map((item) => item.id === attachment.id
+        ? {
+            ...item,
+            status: 'ready',
+            progress: undefined,
+            uploaded,
+            name: uploaded.name,
+            size: uploaded.size,
+            mime: uploaded.mime ?? item.mime,
+          }
+        : item)))
+      .catch((error: Error) => {
+        const switched = error.name === 'AbortError' && currentScopeRef.current !== targetScope;
+        updateAttachmentsForScope(targetScope, (items) => items.map((item) => item.id === attachment.id
+          ? {
+              ...item,
+              status: 'error',
+              progress: undefined,
+              retryable: true,
+              error: switched
+                ? 'Upload canceled after switching chats. Retry to upload here.'
+                : error.name === 'AbortError' ? 'Upload canceled.' : String(error.message || error),
+            }
+          : item));
+      })
+      .finally(() => {
+        if (uploadHandlesRef.current.get(attachment.id)?.handle === handle) {
+          uploadHandlesRef.current.delete(attachment.id);
+        }
+      });
+  };
+
+  const uploadFiles = (filesLike: FileList | File[]) => {
+    const files = Array.from(filesLike);
     if (!files.length || p.readOnly) return;
-    const next: Attachment[] = files.map((file) => {
+    const planned = planUploadSelection({
+      fileCount: attachments.length,
+      totalBytes: attachments.reduce((sum, attachment) => sum + (attachment.countsTowardTotal ? attachment.size : 0), 0),
+    }, files);
+    const remainingSlots = Math.max(0, MAX_UPLOAD_FILES - attachments.length);
+    const displayedFiles = files.slice(0, remainingSlots);
+    const accepted = new Set(planned.accepted.map((entry) => entry.file));
+    const next: Attachment[] = displayedFiles.map((file) => {
       const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
       if (previewUrl) previewUrlsRef.current.add(previewUrl);
+      const rejection = planned.rejected.find((entry) => entry.file === file);
+      const canUpload = accepted.has(file);
       return {
         id: makeId(),
         name: file.name || 'upload',
         size: file.size,
         mime: file.type,
-        status: file.size > MAX_UPLOAD_BYTES ? 'error' : 'uploading',
-        error: file.size > MAX_UPLOAD_BYTES ? 'File is larger than 25 MB' : undefined,
+        file,
+        status: canUpload ? 'uploading' : 'error',
+        error: rejection?.error,
+        progress: canUpload ? 0 : undefined,
+        retryable: false,
+        countsTowardTotal: canUpload,
         previewUrl,
       };
     });
     setAttachments((prev) => [...prev, ...next]);
-
-    const pending = next.map((item, index) => ({ item, file: files[index] })).filter(({ item }) => item.status === 'uploading');
-    if (!pending.length) return;
-
-    try {
-      const encoded = await Promise.all(pending.map(async ({ file }) => ({
-        name: file.name || 'upload',
-        mime: file.type,
-        dataBase64: await fileToBase64(file),
-      })));
-      const r = await apiFetch('/api/uploads', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cwd: p.cwd, files: encoded }),
-      });
-      if (!r.ok) throw new Error(await readUploadError(r));
-      const json = await r.json() as { files?: UploadedFileRef[] };
-      const uploaded = json.files ?? [];
-      setAttachments((prev) => prev.map((a) => {
-        const index = pending.findIndex(({ item }) => item.id === a.id);
-        if (index < 0) return a;
-        const file = uploaded[index];
-        return file ? { ...a, status: 'ready', uploaded: file, name: file.name, size: file.size, mime: file.mime ?? a.mime } : { ...a, status: 'error', error: 'Upload missing from response' };
-      }));
-    } catch (e) {
-      const message = String((e as Error).message || e);
-      setAttachments((prev) => prev.map((a) => pending.some(({ item }) => item.id === a.id) ? { ...a, status: 'error', error: message } : a));
+    if (planned.rejected.length > 0) setSendHint(planned.rejected[0].error);
+    for (const attachment of next) {
+      if (attachment.status === 'uploading') startUpload(attachment, scopeKey, p.cwd);
     }
   };
 
   const removeAttachment = (id: string) => {
+    uploadHandlesRef.current.get(id)?.handle.cancel();
+    uploadHandlesRef.current.delete(id);
     setAttachments((prev) => {
       const target = prev.find((a) => a.id === id);
       if (target?.previewUrl) {
@@ -271,7 +357,13 @@ function InputBarImpl(p: Props) {
     });
   };
 
+  const retryAttachment = (attachment: Attachment) => {
+    if (!attachment.file || !attachment.retryable) return;
+    startUpload(attachment, scopeKey, p.cwd);
+  };
+
   const clearAttachments = () => {
+    uploadPoolRef.current.cancelScope(scopeKey);
     for (const a of attachments) {
       if (a.previewUrl) {
         URL.revokeObjectURL(a.previewUrl);
@@ -308,7 +400,14 @@ function InputBarImpl(p: Props) {
       >
         {attachments.length > 0 && (
           <div className="mb-2 flex max-h-28 flex-wrap gap-2 overflow-y-auto pr-1">
-            {attachments.map((a) => <AttachmentChip key={a.id} attachment={a} onRemove={() => removeAttachment(a.id)} />)}
+            {attachments.map((a) => (
+              <AttachmentChip
+                key={a.id}
+                attachment={a}
+                onRetry={a.retryable ? () => retryAttachment(a) : undefined}
+                onRemove={() => removeAttachment(a.id)}
+              />
+            ))}
           </div>
         )}
         <textarea
@@ -477,9 +576,9 @@ function PermissionMenu({ mode, disabled, onSetMode }: { mode: PermissionMode; d
   );
 }
 
-function AttachmentChip({ attachment, onRemove }: { attachment: Attachment; onRemove: () => void }) {
+function AttachmentChip({ attachment, onRetry, onRemove }: { attachment: Attachment; onRetry?: () => void; onRemove: () => void }) {
   const statusText = attachment.status === 'uploading'
-    ? 'Uploading'
+    ? `Uploading ${attachment.progress ?? 0}%`
     : attachment.status === 'error'
       ? attachment.error ?? 'Upload failed'
       : attachment.uploaded?.relativePath ?? 'Ready';
@@ -503,12 +602,23 @@ function AttachmentChip({ attachment, onRemove }: { attachment: Attachment; onRe
           {attachment.status === 'ready' ? formatFileSize(attachment.size) : statusText}
         </span>
       </span>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="shrink-0 rounded-sm px-1.5 py-1 text-[10px] font-medium text-danger transition-colors duration-hover hover:bg-danger/10"
+          aria-label={`Retry ${attachment.name}`}
+          title="Retry upload"
+        >
+          Retry
+        </button>
+      )}
       <button
         type="button"
         onClick={onRemove}
         className="grid h-6 w-6 shrink-0 place-items-center rounded-sm text-text-muted opacity-70 transition-colors duration-hover hover:bg-bg-hover hover:text-text-primary group-hover:opacity-100"
         aria-label={`Remove ${attachment.name}`}
-        title="Remove"
+        title={attachment.status === 'uploading' ? 'Cancel upload' : 'Remove'}
       >
         <Icon name="x" size={12} />
       </button>
@@ -556,29 +666,18 @@ function makeId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Could not read file'));
-    reader.onload = () => {
-      const result = String(reader.result ?? '');
-      resolve(result.includes(',') ? result.slice(result.indexOf(',') + 1) : result);
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-async function readUploadError(r: Response): Promise<string> {
-  try {
-    const parsed = await r.json() as { error?: string };
-    return parsed.error ?? r.statusText;
-  } catch {
-    return r.statusText || 'Upload failed';
-  }
-}
-
 function safeReadPromptDraft(cwd: string): string {
   try { return readPromptDraft(cwd); } catch { return ''; }
+}
+
+function safeReadScopedPromptDraft(cwd: string, draftStorageKey: string, scoped: boolean): string {
+  const value = safeReadPromptDraft(draftStorageKey);
+  if (value || !scoped || draftStorageKey === cwd) return value;
+  const legacy = safeReadPromptDraft(cwd);
+  if (!legacy) return '';
+  safeWritePromptDraft(draftStorageKey, legacy);
+  safeClearPromptDraft(cwd);
+  return legacy;
 }
 
 function safeWritePromptDraft(cwd: string, value: string): void {
