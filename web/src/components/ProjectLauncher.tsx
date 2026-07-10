@@ -298,7 +298,7 @@ function FinderShortcut({ label, path, active, pinned, onPick, onTogglePin }: { 
       {onTogglePin && (
         <button
           onClick={() => onTogglePin(path)}
-          className={`mr-1 px-1.5 py-0.5 rounded text-[10px] transition-colors duration-hover ${pinned ? 'text-warning' : 'text-text-muted opacity-0 group-hover:opacity-100 hover:text-text-primary'}`}
+          className={`mr-1 min-h-11 min-w-11 px-1.5 py-0.5 rounded text-[10px] transition-colors duration-hover sm:min-h-0 sm:min-w-0 ${pinned ? 'text-warning' : 'text-text-muted opacity-100 hover:text-text-primary sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100'}`}
           title={pinned ? 'Unpin project' : 'Pin project'}
         >
           {pinned ? 'Pinned' : 'Pin'}
@@ -346,7 +346,7 @@ export function FolderRow({ label, path, selected, muted, emphasized, onSelect, 
       <button
         type="button"
         onClick={() => onOpen(path)}
-        className="mx-1 my-1 min-h-9 min-w-11 shrink-0 rounded-sm px-2 text-[11px] font-medium text-text-muted opacity-100 hover:bg-bg-base hover:text-text-primary sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-hover"
+        className="mx-1 my-1 min-h-11 min-w-11 shrink-0 rounded-sm px-2 text-[11px] font-medium text-text-muted opacity-100 hover:bg-bg-base hover:text-text-primary sm:min-h-9 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-all duration-hover"
         aria-label={actionLabel}
         title={`${action} ${path}`}
       >
