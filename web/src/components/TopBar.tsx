@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AgentProviderId, ClaudeAuthInfo, CodexAuthInfo, NodeInfo, SessionStateSnapshot } from '../types';
 import type { SkinId } from '../skins';
 import { AgentMenu } from './AgentMenu';
@@ -20,6 +20,7 @@ type Props = {
   skin: SkinId;
   onSelectSkin: (skin: SkinId) => void;
   onRename: (title: string) => void;
+  renameRequest?: number;
   onContinueWriting?: () => void;
   onRefreshHistory?: () => void;
   sessionTitle?: string;
@@ -30,6 +31,12 @@ export function TopBar(p: Props) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(p.sessionTitle ?? '');
   const s = p.state;
+
+  useEffect(() => {
+    if (!p.renameRequest) return;
+    setDraft(p.sessionTitle ?? '');
+    setRenaming(true);
+  }, [p.renameRequest]);
 
   const cwdShort = p.cwd ? shortPath(p.cwd) : '…';
   const currentProvider = s?.provider ?? p.selectedProvider;
@@ -117,6 +124,7 @@ export function TopBar(p: Props) {
               }}
               className="bg-bg-surface border border-border rounded-sm px-2 py-1 text-text-primary text-[11px] w-48 outline-none focus:border-accent"
               placeholder="Session title…"
+              aria-label="Rename current session"
             />
           ) : p.sessionTitle ? (
             <button onClick={() => { setRenaming(true); setDraft(p.sessionTitle ?? ''); }} className="topbar-session-title px-2 py-1 rounded text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors duration-hover max-w-[220px] truncate" title="rename" aria-label={`Rename session ${p.sessionTitle}`}>
