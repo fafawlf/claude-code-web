@@ -6,6 +6,22 @@ export type BuildInfo = {
   builtAt: string;
 };
 
+export type RuntimeHealth = {
+  uptimeSeconds: number;
+  rssBytes: number;
+  heapUsedBytes: number;
+  eventLoopLagMs: number;
+};
+
+let lastLoopTick = performance.now();
+let currentLoopLagMs = 0;
+const loopLagTimer = setInterval(() => {
+  const now = performance.now();
+  currentLoopLagMs = Math.max(0, now - lastLoopTick - 1_000);
+  lastLoopTick = now;
+}, 1_000);
+loopLagTimer.unref?.();
+
 export function buildInfoFromEnv(env: NodeJS.ProcessEnv = process.env): BuildInfo {
   return {
     commit: cleanBuildValue(env.CCW_BUILD_SHA, 'unknown'),
@@ -14,8 +30,22 @@ export function buildInfoFromEnv(env: NodeJS.ProcessEnv = process.env): BuildInf
   };
 }
 
-export function registerHealthRoute(app: FastifyInstance, build = buildInfoFromEnv()): void {
-  app.get('/healthz', async () => ({ ok: true, build }));
+export function runtimeHealthSnapshot(): RuntimeHealth {
+  const memory = process.memoryUsage();
+  return {
+    uptimeSeconds: Math.round(process.uptime()),
+    rssBytes: memory.rss,
+    heapUsedBytes: memory.heapUsed,
+    eventLoopLagMs: Math.round(currentLoopLagMs * 10) / 10,
+  };
+}
+
+export function registerHealthRoute(
+  app: FastifyInstance,
+  build = buildInfoFromEnv(),
+  runtime = runtimeHealthSnapshot,
+): void {
+  app.get('/healthz', async () => ({ ok: true, build, runtime: runtime() }));
 }
 
 function cleanBuildValue(value: string | undefined, fallback: string): string {

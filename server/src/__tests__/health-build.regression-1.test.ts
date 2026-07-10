@@ -8,11 +8,15 @@ import { buildInfoFromEnv, registerHealthRoute } from '../buildInfo.js';
 // Report: .gstack/qa-reports/qa-report-claude-fa-fa-ai-2026-07-10.md
 test('healthz exposes deterministic build provenance', async () => {
   const app = Fastify({ logger: false });
-  registerHealthRoute(app, {
-    commit: 'abc1234',
-    branch: 'multi-user',
-    builtAt: '2026-07-10T03:30:00Z',
-  });
+  registerHealthRoute(
+    app,
+    {
+      commit: 'abc1234',
+      branch: 'multi-user',
+      builtAt: '2026-07-10T03:30:00Z',
+    },
+    () => ({ uptimeSeconds: 42, rssBytes: 100, heapUsedBytes: 50, eventLoopLagMs: 1.5 }),
+  );
 
   try {
     const response = await app.inject({ method: 'GET', url: '/healthz' });
@@ -20,6 +24,7 @@ test('healthz exposes deterministic build provenance', async () => {
     assert.deepEqual(JSON.parse(response.body), {
       ok: true,
       build: { commit: 'abc1234', branch: 'multi-user', builtAt: '2026-07-10T03:30:00Z' },
+      runtime: { uptimeSeconds: 42, rssBytes: 100, heapUsedBytes: 50, eventLoopLagMs: 1.5 },
     });
   } finally {
     await app.close();
