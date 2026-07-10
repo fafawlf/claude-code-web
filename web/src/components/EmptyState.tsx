@@ -1,13 +1,15 @@
 import type { SkinId } from '../skins';
 import { contentForSkin } from '../skinContent';
+import { abbreviateHome } from '../pathDisplay';
 
 type Props = {
   cwd: string;
   skin: SkinId;
+  home?: string;
   onOpenProject: () => void;
 };
 
-export function EmptyState({ cwd, skin, onOpenProject }: Props) {
+export function EmptyState({ cwd, home, skin, onOpenProject }: Props) {
   const content = contentForSkin(skin);
   return (
     <div className={`skin-empty ${content.decor.emptyClass} flex-1 flex flex-col items-center justify-center px-6 pb-48`}>
@@ -27,7 +29,7 @@ export function EmptyState({ cwd, skin, onOpenProject }: Props) {
       <p className="text-text-secondary mb-9 text-center">
         {content.empty.beforeCwd}
         <button onClick={onOpenProject} className="font-mono text-sm text-accent-hi hover:underline underline-offset-2">
-          {compact(cwd)}
+          {compact(cwd, home)}
         </button>
         {content.empty.afterCwd}
       </p>
@@ -41,10 +43,8 @@ export function EmptyState({ cwd, skin, onOpenProject }: Props) {
   );
 }
 
-function compact(p: string): string {
-  const home = '/root';
-  let s = p;
-  if (s.startsWith(home)) s = '~' + s.slice(home.length);
+function compact(p: string, home?: string): string {
+  const s = abbreviateHome(p, home);
   const parts = s.split('/').filter(Boolean);
   if (parts.length <= 4) return s;
   return (s.startsWith('~') ? '~/' : '/') + '…/' + parts.slice(-3).join('/');

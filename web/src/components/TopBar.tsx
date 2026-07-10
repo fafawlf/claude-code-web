@@ -5,6 +5,7 @@ import { AgentMenu } from './AgentMenu';
 import { Icon } from './Icon';
 import { UserChip } from './UserChip';
 import { UsageWidget } from './UsageWidget';
+import { abbreviateHome } from '../pathDisplay';
 
 type Props = {
   state: SessionStateSnapshot | null;
@@ -156,9 +157,7 @@ export function TopBar(p: Props) {
 }
 
 function shortPath(p: string, home?: string): string {
-  let s = p;
-  const homePrefix = home || '/root'; // display-only heuristic when the server has not told us
-  if (s.startsWith(homePrefix)) s = '~' + s.slice(homePrefix.length);
+  const s = abbreviateHome(p, home);
   const parts = s.split('/').filter(Boolean);
   if (parts.length <= 3) return s;
   return (s.startsWith('~') ? '~/' : '/') + '…/' + parts.slice(-2).join('/');

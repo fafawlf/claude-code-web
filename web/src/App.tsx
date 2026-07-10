@@ -924,8 +924,9 @@ export function App() {
       activeSessionId: attachment.requestedSessionId ?? state.state?.sessionId ?? null,
       cache: cacheRef.current,
       storedSessions: allKnownSessions,
+      home: serverInfo?.home,
     }),
-    [allKnownSessions, attachment.requestedSessionId, liveSessions, state.state?.sessionId, state.items, state.lastEventId]
+    [allKnownSessions, attachment.requestedSessionId, liveSessions, serverInfo?.home, state.state?.sessionId, state.items, state.lastEventId]
   );
   const activitySummary = useMemo(() => deriveActivitySummary(activitySessions), [activitySessions]);
   const activeDraftTitle = useMemo(() => {
@@ -1079,7 +1080,7 @@ export function App() {
         {showAttachmentPlaceholder ? (
           <AttachmentPlaceholder phase={attachment.phase} onRetry={retryAttachment} />
         ) : showEmpty ? (
-          <EmptyState skin={skin} cwd={currentCwd} onOpenProject={openProjectLauncher} />
+          <EmptyState skin={skin} cwd={currentCwd} home={serverInfo?.home} onOpenProject={openProjectLauncher} />
         ) : (
           <div className="relative flex flex-1 min-h-0">
             <MessageList
