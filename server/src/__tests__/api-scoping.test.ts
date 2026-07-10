@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { registerApi } from '../api.js';
@@ -192,10 +192,12 @@ test('directory browsing is confined to the user workspace', async () => {
   const s = await setup();
   try {
     const own = await s.app.inject({ method: 'GET', url: '/api/dirs', headers: { cookie: s.cookies.alice } });
-    assert.equal(own.statusCode, 200);
-    const ownBody = JSON.parse(own.body) as { path: string; parent: string | null };
-    assert.equal(ownBody.path, s.aliceRoot);
-    assert.equal(ownBody.parent, null); // cannot navigate above the workspace
+    assert.equal(own.statusCode, process.platform === 'linux' ? 200 : 403);
+    if (process.platform === 'linux') {
+      const ownBody = JSON.parse(own.body) as { path: string; parent: string | null };
+      assert.equal(ownBody.path, s.aliceRoot);
+      assert.equal(ownBody.parent, null); // cannot navigate above the workspace
+    }
 
     const cross = await s.app.inject({
       method: 'GET',
@@ -231,8 +233,8 @@ test('file reads cannot escape the workspace — including credential files', as
       url: `/api/file?cwd=${encodeURIComponent(s.aliceRoot)}&path=mine.md`,
       headers: { cookie: s.cookies.alice },
     });
-    assert.equal(own.statusCode, 200);
-    assert.match(own.body, /alice notes/);
+    assert.equal(own.statusCode, process.platform === 'linux' ? 200 : 403);
+    if (process.platform === 'linux') assert.match(own.body, /alice notes/);
 
     // The exact attack that used to leak the shared Max subscription token.
     const creds = await s.app.inject({
@@ -302,6 +304,100 @@ test('uploads, file search and session listings are workspace-scoped', async () 
   }
 });
 
+test('member APIs reject symlinks into another workspace while admin remains data-dir scoped', async () => {
+  const s = await setup();
+  const crossLink = join(s.aliceRoot, 'cross-member');
+  symlinkSync(s.bobRoot, crossLink);
+  try {
+    const requests = [
+      s.app.inject({
+        method: 'GET',
+        url: `/api/dirs?path=${encodeURIComponent(crossLink)}`,
+        headers: { cookie: s.cookies.alice },
+      }),
+      s.app.inject({
+        method: 'GET',
+        url: `/api/file?cwd=${encodeURIComponent(s.aliceRoot)}&path=${encodeURIComponent('cross-member/secret.md')}`,
+        headers: { cookie: s.cookies.alice },
+      }),
+      s.app.inject({
+        method: 'GET',
+        url: `/api/files?cwd=${encodeURIComponent(crossLink)}&q=secret`,
+        headers: { cookie: s.cookies.alice },
+      }),
+      s.app.inject({
+        method: 'GET',
+        url: `/api/sessions?cwd=${encodeURIComponent(join(crossLink, 'not-created-yet'))}`,
+        headers: { cookie: s.cookies.alice },
+      }),
+      s.app.inject({
+        method: 'POST',
+        url: '/api/dirs',
+        headers: { cookie: s.cookies.alice },
+        payload: { parentPath: crossLink, name: 'intruder' },
+      }),
+    ];
+    for (const response of await Promise.all(requests)) {
+      assert.equal(response.statusCode, 403, response.body);
+    }
+
+    const boundary = 'ccw-symlink-scope';
+    const upload = await s.app.inject({
+      method: 'POST',
+      url: `/api/uploads?cwd=${encodeURIComponent(crossLink)}`,
+      headers: {
+        cookie: s.cookies.alice,
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+      },
+      payload: Buffer.from(
+        `--${boundary}\r\n`
+        + 'Content-Disposition: form-data; name="files"; filename="escape.txt"\r\n'
+        + 'Content-Type: text/plain\r\n\r\nnope\r\n'
+        + `--${boundary}--\r\n`,
+      ),
+    });
+    assert.equal(upload.statusCode, 403, upload.body);
+    assert.equal(existsSync(join(s.bobRoot, 'intruder')), false);
+
+    // The same canonical destination is inside an admin's dataDir boundary.
+    const adminRead = await s.app.inject({
+      method: 'GET',
+      url: `/api/file?cwd=${encodeURIComponent(s.aliceRoot)}&path=${encodeURIComponent('cross-member/secret.md')}`,
+      headers: { cookie: s.cookies.boss },
+    });
+    assert.equal(adminRead.statusCode, process.platform === 'linux' ? 200 : 403, adminRead.body);
+    if (process.platform === 'linux') assert.match(adminRead.body, /bob secrets/);
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test('member APIs reject symlinks from a workspace to an external directory', async () => {
+  const s = await setup();
+  const outside = mkdtempSync(join(tmpdir(), 'ccw-scope-external-'));
+  writeFileSync(join(outside, 'outside.md'), 'must stay private');
+  symlinkSync(outside, join(s.aliceRoot, 'external'));
+  try {
+    const read = await s.app.inject({
+      method: 'GET',
+      url: `/api/file?cwd=${encodeURIComponent(s.aliceRoot)}&path=external/outside.md`,
+      headers: { cookie: s.cookies.alice },
+    });
+    assert.equal(read.statusCode, 403, read.body);
+
+    const future = await s.app.inject({
+      method: 'POST',
+      url: '/api/dirs',
+      headers: { cookie: s.cookies.alice },
+      payload: { parentPath: join(s.aliceRoot, 'external', 'future'), name: 'escape' },
+    });
+    assert.equal(future.statusCode, 403, future.body);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+    await s.cleanup();
+  }
+});
+
 test('live sessions are filtered by owner and protected from cross-user close', async () => {
   const s = await setup();
   try {
@@ -366,7 +462,7 @@ test('admins are scoped to the data dir, not the whole filesystem', async () => 
       url: `/api/dirs?path=${encodeURIComponent(s.usersRoot)}`,
       headers: { cookie: s.cookies.boss },
     });
-    assert.equal(users.statusCode, 200);
+    assert.equal(users.statusCode, process.platform === 'linux' ? 200 : 403);
 
     const outside = await s.app.inject({
       method: 'GET',

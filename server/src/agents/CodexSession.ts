@@ -9,6 +9,8 @@ import { envWithGitIdentity, type GitIdentity } from '../git/identity.js';
 import type { ControlListener, EventListener, SessionEvent, StateListener } from '../session/ClaudeSession.js';
 import { ReplayBuffer, boundReplayValue, type HistoryLoadMetadata } from '../session/ReplayBuffer.js';
 import { streamCodexTranscriptEvents } from './codexTranscript.js';
+import type { WorkspaceLease } from '../workspace/ExecutionWorkspace.js';
+import type { FsRootIdentity } from '../users/identity.js';
 
 type CodexJsonEvent = {
   type?: string;
@@ -73,11 +75,13 @@ export class CodexSession {
   private resultPushedForTurn = false;
   private readonly gitIdentity?: GitIdentity;
   private readonly searchRoot?: string;
+  private readonly workspaceLease?: WorkspaceLease;
 
   constructor(opts: AgentSessionOptions) {
     this.id = opts.id;
     this.gitIdentity = opts.gitIdentity;
     this.searchRoot = opts.searchRoot;
+    this.workspaceLease = opts.workspaceLease;
     this.state = {
       sessionId: opts.id,
       nodeId: opts.nodeId ?? DEFAULT_NODE_ID,
@@ -171,6 +175,7 @@ export class CodexSession {
     this.deferredHistoryPrompts = [];
     try { this.historyAbortCtl.abort(); } catch { /* best effort */ }
     try { this.child?.kill('SIGTERM'); } catch { /* best effort */ }
+    this.workspaceLease?.close();
     this.permissionBroker.drainDeny();
     this.planBroker.drainReject();
     this.updateState({ runtimeStatus: 'closed', activeTool: undefined });
@@ -178,6 +183,14 @@ export class CodexSession {
 
   getState(): SessionStateSnapshot {
     return { ...this.state };
+  }
+
+  assertWorkspaceLease(allowedCanonicalFsRoot?: string, allowedRootIdentity?: FsRootIdentity): void {
+    if (!this.workspaceLease) {
+      if (allowedCanonicalFsRoot) throw new Error('Scoped session is missing its execution workspace lease');
+      return;
+    }
+    this.workspaceLease.assertWithin(allowedCanonicalFsRoot, allowedRootIdentity);
   }
 
   getHistoryMetadata(): HistoryLoadMetadata {
@@ -218,6 +231,18 @@ export class CodexSession {
       return;
     }
 
+    let executionCwd = this.state.cwd;
+    try {
+      if (this.workspaceLease) {
+        this.workspaceLease.assertWithin();
+        executionCwd = this.workspaceLease.spawnCwd;
+      }
+    } catch {
+      this.pushEvent({ type: 'system', subtype: 'error', message: 'Execution workspace is no longer safe. Start a new chat.' });
+      this.updateState({ runtimeStatus: 'error', activeTool: undefined });
+      return;
+    }
+
     this.running = true;
     this.stderrTail = '';
     this.resultPushedForTurn = false;
@@ -232,7 +257,7 @@ export class CodexSession {
     const args = this.buildArgs(prompt);
     const directNodeScript = /\.(?:cjs|mjs|js)$/.test(codexPath);
     const child = spawn(directNodeScript ? process.execPath : codexPath, directNodeScript ? [codexPath, ...args] : args, {
-      cwd: this.state.cwd,
+      cwd: executionCwd,
       env: envWithGitIdentity(process.env, this.gitIdentity),
       stdio: ['ignore', 'pipe', 'pipe'],
     });

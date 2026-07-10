@@ -178,7 +178,10 @@ test('[QA] multipart uploads keep Feishu cookie auth workspace-scoped', async ()
       headers: { cookie, 'content-type': `multipart/form-data; boundary=${boundary}` },
       payload: multipartBody(boundary, [{ field: 'files', name: 'mine.txt', mime: 'text/plain', bytes: Buffer.from('mine') }]),
     });
-    assert.equal(own.statusCode, 200, own.body);
+    assert.equal(own.statusCode, process.platform === 'linux' ? 200 : 400, own.body);
+    if (process.platform !== 'linux') {
+      assert.match(own.body, /Linux \/proc fd paths/);
+    }
 
     const cross = await app.inject({
       method: 'POST',

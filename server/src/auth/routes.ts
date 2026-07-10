@@ -3,6 +3,12 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { timingSafeEqualStr } from '../auth.js';
 import type { CcwConfig } from '../config.js';
 import type { UserRegistry } from '../users/registry.js';
+import {
+  boundUserRootIdentity,
+  bindNewlyDiscoveredUserRoot,
+  bindUserRootIdentity,
+  type IdentityContext,
+} from '../users/identity.js';
 import { provisionWorkspace } from '../users/provision.js';
 import { FeishuClient } from './feishu.js';
 import {
@@ -19,6 +25,7 @@ export type AuthContext = {
   config: CcwConfig;
   registry: UserRegistry;
   feishu: FeishuClient;
+  identityContext?: IdentityContext;
 };
 
 /**
@@ -66,9 +73,20 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AuthContext): void
       );
     }
 
+    const existingBeforeLogin = registry.getByOpenId(info.openId);
     const user = registry.upsertOnLogin(info);
     try {
-      await provisionWorkspace(`${config.usersRoot}/${user.slug}`, config.templateDir);
+      if (!ctx.identityContext?.canonicalUsersRootIdentity) {
+        throw new Error('Missing pinned users-root identity');
+      }
+      const expectedWorkspaceIdentity = boundUserRootIdentity(ctx.identityContext, user.openId)
+        ?? (existingBeforeLogin ? bindNewlyDiscoveredUserRoot(ctx.identityContext, user) : undefined);
+      await provisionWorkspace(user.slug, config.templateDir, {
+        canonicalUsersRoot: ctx.identityContext.canonicalUsersRoot,
+        canonicalUsersRootIdentity: ctx.identityContext.canonicalUsersRootIdentity,
+        expectedWorkspaceIdentity,
+        onPinnedIdentity: (identity) => bindUserRootIdentity(ctx.identityContext!, user, identity),
+      });
     } catch (e) {
       req.log.error({ err: e, slug: user.slug }, 'workspace provisioning failed');
       return failPage(reply, 500, 'Could not prepare your workspace. Contact the admin.');

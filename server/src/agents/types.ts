@@ -4,6 +4,8 @@ import type { ClaudeSession, EventListener, StateListener, ControlListener, Sess
 import type { AgentProviderId, ClaudeAuthMode, PendingControl, PermissionMode, SessionStateSnapshot } from '../protocol.js';
 import type { GitIdentity } from '../git/identity.js';
 import type { HistoryLoadMetadata } from '../session/ReplayBuffer.js';
+import type { WorkspaceLease } from '../workspace/ExecutionWorkspace.js';
+import type { FsRootIdentity } from '../users/identity.js';
 
 export type AgentSession = Pick<
   ClaudeSession,
@@ -30,6 +32,8 @@ export type AgentSession = Pick<
   subscribeState(listener: StateListener): () => void;
   subscribeControls(listener: ControlListener): () => void;
   getPendingControls(): PendingControl[];
+  /** Fail closed if a scoped session's pinned execution directory is stale. */
+  assertWorkspaceLease(allowedCanonicalFsRoot?: string, allowedRootIdentity?: FsRootIdentity): void;
 };
 
 export type AgentSessionOptions = {
@@ -46,6 +50,8 @@ export type AgentSessionOptions = {
   searchRoot?: string;
   /** Attribute git commits to this identity instead of the shared server owner. */
   gitIdentity?: GitIdentity;
+  /** Linux directory-fd capability used for scoped child-process execution. */
+  workspaceLease?: WorkspaceLease;
   onPermission?: PermissionListener;
   onPlan?: PlanListener;
 };

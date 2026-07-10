@@ -13,7 +13,7 @@ import { UserRegistry } from './users/registry.js';
 import { FeishuClient } from './auth/feishu.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import { registerUsageRoutes } from './usage/routes.js';
-import { resolveUser, type IdentityContext } from './users/identity.js';
+import { createIdentityContext, resolveUser } from './users/identity.js';
 import { registerHealthRoute } from './buildInfo.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,8 +36,13 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
     registry = new UserRegistry(config.usersFile, config.adminEmails, config.allowedEmailDomains, config.trustAllFeishu);
     registry.load();
   }
-  const identity = { config, registry };
-  const idCtx: IdentityContext = { token: opts.token, defaultCwd: opts.defaultCwd, config, registry };
+  const idCtx = createIdentityContext({
+    token: opts.token,
+    defaultCwd: opts.defaultCwd,
+    config,
+    registry,
+  });
+  const identity = { config, registry, context: idCtx };
 
   // A shared Max subscription serves the whole team in feishu mode, so allow
   // more parallel sessions overall but keep any one person from hogging them.
@@ -49,7 +54,12 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
   await app.register(fastifyWebsocket);
 
   if (feishuMode) {
-    registerAuthRoutes(app, { config, registry: registry!, feishu: new FeishuClient(config.feishu!) });
+    registerAuthRoutes(app, {
+      config,
+      registry: registry!,
+      feishu: new FeishuClient(config.feishu!),
+      identityContext: idCtx,
+    });
   }
 
   // Find the web bundle: ../../../web/dist from server/dist/src, or ../../web/dist when running built CLI.

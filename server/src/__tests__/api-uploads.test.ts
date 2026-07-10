@@ -103,6 +103,34 @@ test('GET /api/file opens or downloads project files', async () => {
   }
 });
 
+test('GET /api/file never renders member-controlled active content in the app origin', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccw-file-active-'));
+  const app = Fastify({ logger: false });
+  const sm = new SessionManager();
+  registerApi(app, 'tok', root, sm);
+
+  try {
+    writeFileSync(join(root, 'attack.html'), '<script>fetch("/api/admin/users")</script>');
+    writeFileSync(join(root, 'attack.svg'), '<svg onload="alert(document.domain)"/>');
+
+    for (const name of ['attack.html', 'attack.svg']) {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/file?t=tok&cwd=${encodeURIComponent(root)}&path=${encodeURIComponent(name)}`,
+      });
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.headers['content-type'], 'application/octet-stream');
+      assert.equal(res.headers['x-content-type-options'], 'nosniff');
+      assert.equal(res.headers['content-security-policy'], "sandbox; default-src 'none'");
+      assert.match(String(res.headers['content-disposition']), new RegExp(`^attachment; filename="${name}"`));
+    }
+  } finally {
+    await app.close();
+    await sm.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/file opens absolute files inside a project with spaces', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ccw-file-'));
   const project = join(root, 'random shit');

@@ -19,14 +19,16 @@ import {
 } from './protocol.js';
 import type { SessionEvent } from './session/ClaudeSession.js';
 import type { SessionManager } from './session/SessionManager.js';
-import { resolveScoped, resolveUser, tokenAdmin, type CcwUser, type IdentityContext } from './users/identity.js';
+import { createIdentityContext, resolveScoped, resolveUser, tokenAdmin, type CcwUser, type IdentityContext } from './users/identity.js';
 import type { UserRegistry } from './users/registry.js';
 import { buildReplayBatches, WsSendQueue } from './wsSendQueue.js';
 import type { HistoryLoadMetadata } from './session/ReplayBuffer.js';
+import { ExecutionWorkspace } from './workspace/ExecutionWorkspace.js';
 
 export type WsIdentityOptions = {
   config: CcwConfig;
   registry?: UserRegistry;
+  context?: IdentityContext;
 };
 
 type HelloResolution = {
@@ -64,12 +66,12 @@ export function registerWs(
   nodes = new NodeRegistry(defaultCwd),
   identity: WsIdentityOptions = { config: tokenModeConfig() }
 ) {
-  const idCtx: IdentityContext = {
+  const idCtx = identity.context ?? createIdentityContext({
     token,
     defaultCwd,
     config: identity.config,
     registry: identity.registry,
-  };
+  });
 
   app.get('/ws', { websocket: true }, (socket: WebSocket, req) => {
     const connectedAt = Date.now();
@@ -503,6 +505,10 @@ export function resolveHelloSession(
     const visible = existing && (!scoped || user.isAdmin || sm.ownerOf(existing.id) === user.openId);
     if (existing && visible) {
       const state = existing.getState();
+      // Revalidate the pinned inode rather than the mutable public pathname.
+      // If the original path was replaced by a symlink, the existing session
+      // remains attached to its authorized directory capability.
+      if (scoped) existing.assertWorkspaceLease(user.canonicalFsRoot, user.canonicalFsRootIdentity!);
       if (msg.nodeId !== undefined && state.nodeId !== msg.nodeId) {
         throw new Error(`Session belongs to ${state.nodeId}/${state.provider}, not ${msg.nodeId}/${msg.provider ?? state.provider}`);
       }
@@ -542,6 +548,7 @@ export function resolveHelloSession(
     owner: scoped ? user.openId : undefined,
   });
   if (reusable) {
+    if (scoped) reusable.assertWorkspaceLease(user.canonicalFsRoot, user.canonicalFsRootIdentity!);
     return {
       session: reusable,
       // Compatibility only. attach() deliberately ignores this cursor because
@@ -563,6 +570,9 @@ export function resolveHelloSession(
     viewerMode: msg.viewerMode,
     searchRoot: user.fsRoot || undefined,
     gitIdentity: gitIdentityFor(user),
+    workspaceLease: scoped
+      ? ExecutionWorkspace.pin(cwd, user.canonicalFsRoot, user.canonicalFsRootIdentity)
+      : undefined,
     owner: scoped ? user.openId : undefined,
   });
   return {

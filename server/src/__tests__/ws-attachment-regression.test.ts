@@ -92,6 +92,7 @@ class FakeSession implements AgentSession {
   }
 
   sendUser(text: string): void { this.userMessages.push(text); }
+  assertWorkspaceLease(): void { /* token-mode fake has no scoped lease */ }
   async setModel(model: string): Promise<void> { this.updateState({ model }); }
   async setClaudeAuthMode(): Promise<void> {}
   async setPermissionMode(permissionMode: PermissionMode): Promise<void> { this.updateState({ permissionMode }); }

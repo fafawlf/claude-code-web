@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionManager } from '../session/SessionManager.js';
 import { resolveHelloSession } from '../ws.js';
-import type { CcwUser } from '../users/identity.js';
+import { captureFsRootIdentity, type CcwUser } from '../users/identity.js';
 import { findClaudeTranscriptFile } from '../session/claudeTranscript.js';
 
 function userFor(slug: string, root: string, role: 'admin' | 'user' = 'user'): CcwUser {
@@ -19,10 +19,14 @@ function userFor(slug: string, root: string, role: 'admin' | 'user' = 'user'): C
     via: 'cookie',
     workspaceRoot: root,
     fsRoot: root,
+    canonicalFsRoot: realpathSync(root),
+    canonicalFsRootIdentity: captureFsRootIdentity(realpathSync(root)),
   };
 }
 
-test('hello: new sessions default to the user workspace and reject escapes', async () => {
+test('hello: new sessions default to the user workspace and reject escapes', {
+  skip: process.platform !== 'linux',
+}, async () => {
   const base = mkdtempSync(join(tmpdir(), 'ccw-ws-'));
   const aliceRoot = join(base, 'users', 'alice');
   mkdirSync(aliceRoot, { recursive: true });
@@ -46,7 +50,40 @@ test('hello: new sessions default to the user workspace and reject escapes', asy
   }
 });
 
-test('hello: attaching someone else\'s live session looks like a missing session', async () => {
+test('hello: canonical cwd validation rejects cross-workspace and future paths below symlinks', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'ccw-ws-link-'));
+  const aliceRoot = join(base, 'users', 'alice');
+  const bobRoot = join(base, 'users', 'bob');
+  mkdirSync(aliceRoot, { recursive: true });
+  mkdirSync(bobRoot, { recursive: true });
+  symlinkSync(bobRoot, join(aliceRoot, 'linked'));
+  const alice = userFor('alice', aliceRoot);
+  const sm = new SessionManager();
+  try {
+    assert.throws(
+      () => resolveHelloSession(sm, { type: 'hello', cwd: join(aliceRoot, 'linked') }, base, undefined, alice),
+      /outside your workspace/i,
+    );
+    assert.throws(
+      () => resolveHelloSession(
+        sm,
+        { type: 'hello', cwd: join(aliceRoot, 'linked', 'not-created-yet') },
+        base,
+        undefined,
+        alice,
+      ),
+      /outside your workspace/i,
+    );
+    assert.equal(sm.listSnapshots().length, 0);
+  } finally {
+    await sm.closeAll();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('hello: attaching someone else\'s live session looks like a missing session', {
+  skip: process.platform !== 'linux',
+}, async () => {
   const base = mkdtempSync(join(tmpdir(), 'ccw-ws-'));
   const aliceRoot = join(base, 'users', 'alice');
   const bobRoot = join(base, 'users', 'bob');
@@ -75,7 +112,9 @@ test('hello: attaching someone else\'s live session looks like a missing session
   }
 });
 
-test('resume reuse never crosses owners even with the same claude session id', async () => {
+test('resume reuse never crosses owners even with the same claude session id', {
+  skip: process.platform !== 'linux',
+}, async () => {
   const base = mkdtempSync(join(tmpdir(), 'ccw-ws-'));
   const aliceRoot = join(base, 'users', 'alice');
   const bobRoot = join(base, 'users', 'bob');

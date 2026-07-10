@@ -1,4 +1,12 @@
-import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { spawn } from 'node:child_process';
+import {
+  query,
+  type Options,
+  type Query,
+  type SDKMessage,
+  type SDKUserMessage,
+  type SpawnedProcess,
+} from '@anthropic-ai/claude-agent-sdk';
 import { readFile } from 'node:fs/promises';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
@@ -8,6 +16,8 @@ import { envWithGitIdentity, type GitIdentity } from '../git/identity.js';
 import { defaultClaudeAuthMode, envWithClaudeAuth, hasClaudeApiKey } from '../authInfo.js';
 import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type AgentProviderId, type ClaudeAuthMode, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
 import { ReplayBuffer, boundReplayValue, type HistoryLoadMetadata } from './ReplayBuffer.js';
+import type { WorkspaceLease } from '../workspace/ExecutionWorkspace.js';
+import type { FsRootIdentity } from '../users/identity.js';
 
 export type SessionEvent = { id: number; event: SDKMessage };
 export type EventListener = (ev: SessionEvent) => void;
@@ -96,6 +106,7 @@ export class ClaudeSession {
   private readonly cwd: string;
   private readonly searchRoot?: string;
   private readonly gitIdentity?: GitIdentity;
+  private readonly workspaceLease?: WorkspaceLease;
   private seenUuids = new Set<string>();
 
   constructor(opts: {
@@ -111,6 +122,7 @@ export class ClaudeSession {
     viewerMode?: boolean;
     searchRoot?: string;
     gitIdentity?: GitIdentity;
+    workspaceLease?: WorkspaceLease;
     onPermission?: PermissionListener;
     onPlan?: PlanListener;
   }) {
@@ -118,6 +130,7 @@ export class ClaudeSession {
     this.cwd = opts.cwd;
     this.searchRoot = opts.searchRoot;
     this.gitIdentity = opts.gitIdentity;
+    this.workspaceLease = opts.workspaceLease;
     this.viewerMode = !!opts.viewerMode;
     this.state = {
       sessionId: opts.id,
@@ -482,6 +495,7 @@ export class ClaudeSession {
       // the server's process.env and every teammate commits as the box owner.
       env: envWithClaudeAuth(baseEnv, this.state.claudeAuthMode ?? defaultClaudeAuthMode()),
       canUseTool: this.canUseToolImpl,
+      ...(this.workspaceLease ? { spawnClaudeCodeProcess: pinnedClaudeSpawn(this.workspaceLease) } : {}),
     };
   }
 
@@ -572,12 +586,31 @@ export class ClaudeSession {
 
   private sendUserAfterHistory(text: string): void {
     if (this.closed || this.viewerMode) return;
+    try {
+      this.workspaceLease?.assertWithin();
+    } catch {
+      this.pushEvent({
+        type: 'system',
+        subtype: 'error' as unknown as 'status',
+        message: 'Execution workspace is no longer safe. Start a new chat.',
+      } as unknown as SDKMessage);
+      this.setRuntimeStatus('error');
+      return;
+    }
     this.setRuntimeStatus('running');
     this.prompts.push(text);
     this.startQuery(this.state.claudeSessionId);
   }
 
   isViewer(): boolean { return this.viewerMode; }
+
+  assertWorkspaceLease(allowedCanonicalFsRoot?: string, allowedRootIdentity?: FsRootIdentity): void {
+    if (!this.workspaceLease) {
+      if (allowedCanonicalFsRoot) throw new Error('Scoped session is missing its execution workspace lease');
+      return;
+    }
+    this.workspaceLease.assertWithin(allowedCanonicalFsRoot, allowedRootIdentity);
+  }
 
   async setModel(model: string): Promise<void> {
     // Always reflect the user's intent in session state — it'll be honored as
@@ -656,9 +689,24 @@ export class ClaudeSession {
     this.prompts.close();
     try { this.historyAbortCtl.abort(); } catch { /* */ }
     try { this.abortCtl.abort(); } catch { /* */ }
+    this.workspaceLease?.close();
     this.permissionBroker.drainDeny();
     this.planBroker.drainReject();
   }
+}
+
+/** SDK custom spawn hook that substitutes only the kernel-pinned cwd. */
+export function pinnedClaudeSpawn(lease: WorkspaceLease): NonNullable<Options['spawnClaudeCodeProcess']> {
+  return ({ command, args, env, signal }) => {
+    lease.assertWithin();
+    return spawn(command, args, {
+      cwd: lease.spawnCwd,
+      env,
+      signal,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    }) as SpawnedProcess;
+  };
 }
 
 function isAbortError(error: unknown): boolean {

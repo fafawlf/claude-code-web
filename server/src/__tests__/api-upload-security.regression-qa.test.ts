@@ -1,15 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { registerApi } from '../api.js';
 import { signSession } from '../auth/cookie.js';
 import type { CcwConfig } from '../config.js';
 import { SessionManager } from '../session/SessionManager.js';
-import { ensureSafeUploadDirectory, UploadAdmissionController } from '../uploadSecurity.js';
+import { ensureSafeUploadDirectory, openSafeUploadDirectory, UploadAdmissionController } from '../uploadSecurity.js';
 import { UserRegistry } from '../users/registry.js';
+import { captureFsRootIdentity } from '../users/identity.js';
 
 test('[QA] upload admission keeps only two requests active for one user and cwd', async () => {
   const gate = new UploadAdmissionController({ maxFiles: 12, maxBytes: 50, concurrency: 2 });
@@ -101,6 +102,90 @@ test('[QA] upload rejects a symbolic-link component between the workspace root a
     assert.equal(readdirSync(join(outside, 'project')).length, 0);
   } finally {
     rmSync(scope, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('[QA] upload fails closed if its validated destination is swapped to a symlink mid-upload', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ccw-upload-swap-'));
+  const outside = mkdtempSync(join(tmpdir(), 'ccw-upload-swap-outside-'));
+  try {
+    const uploadDir = await ensureSafeUploadDirectory(root, '2026-07-10', root);
+    const original = `${uploadDir}-original`;
+    renameSync(uploadDir, original);
+    symlinkSync(outside, uploadDir);
+
+    await assert.rejects(
+      openSafeUploadDirectory(root, uploadDir, root),
+      /symbolic links|changed while uploading/,
+    );
+    assert.equal(readdirSync(outside).length, 0);
+    assert.equal(readdirSync(original).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('[QA] cookie uploads fail closed when Linux /proc fd paths are unavailable', async (t) => {
+  if (process.platform === 'linux') return t.skip('non-Linux fail-closed regression');
+  const root = mkdtempSync(join(tmpdir(), 'ccw-upload-cookie-fd-'));
+  try {
+    await assert.rejects(
+      ensureSafeUploadDirectory(
+        root,
+        '2026-07-10',
+        realpathSync(root),
+        'cookie',
+        captureFsRootIdentity(realpathSync(root)),
+      ),
+      /Linux \/proc fd paths/,
+    );
+    assert.equal(readdirSync(root).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('[QA] Linux cookie uploads create and reopen the tree only through pinned directory fds', async (t) => {
+  if (process.platform !== 'linux') return t.skip('requires Linux /proc fd paths');
+  const root = mkdtempSync(join(tmpdir(), 'ccw-upload-cookie-linux-'));
+  try {
+    const canonicalRoot = realpathSync(root);
+    const rootIdentity = captureFsRootIdentity(canonicalRoot);
+    const uploadDir = await ensureSafeUploadDirectory(root, '2026-07-10', canonicalRoot, 'cookie', rootIdentity);
+    const opened = await openSafeUploadDirectory(root, uploadDir, canonicalRoot, 'cookie', rootIdentity);
+    try {
+      assert.match(opened.accessPath, new RegExp(`^/proc/${process.pid}/fd/\\d+$`));
+      assert.equal(opened.canonicalPath, realpathSync(uploadDir));
+    } finally {
+      await opened.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('[QA] Linux cookie uploads reject root-self and ancestor swaps before mkdir', async (t) => {
+  if (process.platform !== 'linux') return t.skip('requires Linux /proc fd paths');
+  const base = mkdtempSync(join(tmpdir(), 'ccw-upload-root-swap-'));
+  const outside = mkdtempSync(join(tmpdir(), 'ccw-upload-root-outside-'));
+  const parent = join(base, 'users');
+  const root = join(parent, 'alice');
+  mkdirSync(root, { recursive: true });
+  mkdirSync(join(outside, 'alice'), { recursive: true });
+  const canonicalRoot = realpathSync(root);
+
+  try {
+    renameSync(parent, join(base, 'users-original'));
+    symlinkSync(outside, parent);
+    await assert.rejects(
+      ensureSafeUploadDirectory(root, '2026-07-10', canonicalRoot, 'cookie', captureFsRootIdentity(canonicalRoot)),
+      /outside the workspace|changed while uploading/,
+    );
+    assert.equal(readdirSync(join(outside, 'alice')).length, 0);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
   }
 });

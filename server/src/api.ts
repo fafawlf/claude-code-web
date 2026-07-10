@@ -1,9 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fastifyMultipart, { type MultipartFile } from '@fastify/multipart';
 import { listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
-import { createReadStream } from 'node:fs';
-import { mkdir, open, readdir, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
-import { basename, extname, join, relative, resolve, isAbsolute, sep } from 'node:path';
+import { mkdir, open, readdir, realpath, stat, unlink, type FileHandle } from 'node:fs/promises';
+import { basename, dirname, extname, join, relative, resolve, isAbsolute, sep } from 'node:path';
 import { arch, homedir, platform } from 'node:os';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -13,7 +12,7 @@ import { detectClaudeExecutable } from './session/resolveClaudePath.js';
 import { detectCodexExecutable } from './agents/resolveCodexPath.js';
 import { NodeRegistry, type NodeConfig, type PublicNode } from './nodes/NodeRegistry.js';
 import { tokenModeConfig, type CcwConfig } from './config.js';
-import { resolveUser, fsAnchor, assertInScope, isPathInside, resolveScoped, ScopeError, type CcwUser, type IdentityContext } from './users/identity.js';
+import { createIdentityContext, resolveUser, fsAnchor, assertInScope, isPathInside, openScopedDirectory, openScopedFile, resolveScoped, ScopeError, type CcwUser, type IdentityContext, type ScopedOpenFile } from './users/identity.js';
 import type { UserRegistry } from './users/registry.js';
 import { findClaudeTranscriptFile } from './session/claudeTranscript.js';
 import { timingSafeEqualStr } from './auth.js';
@@ -21,7 +20,9 @@ import { serializeCookie } from './auth/cookie.js';
 import {
   assertSafeUploadDirectory,
   ensureSafeUploadDirectory,
+  openSafeUploadDirectory,
   UploadAdmissionController,
+  type SafeUploadDirectoryHandle,
   type UploadLease,
 } from './uploadSecurity.js';
 
@@ -45,6 +46,7 @@ const DOWNLOADABLE_OUTSIDE_PROJECT_EXTENSIONS = new Set([
 export type IdentityOptions = {
   config: CcwConfig;
   registry?: UserRegistry;
+  context?: IdentityContext;
 };
 
 type RequestWithUser = FastifyRequest & { ccwUser?: CcwUser };
@@ -73,12 +75,12 @@ export function registerApi(
     },
   });
 
-  const idCtx: IdentityContext = {
+  const idCtx = identity.context ?? createIdentityContext({
     token,
     defaultCwd,
     config: identity.config,
     registry: identity.registry,
-  };
+  });
   const uploadAdmission = runtime.uploadAdmission ?? new UploadAdmissionController({
     maxFiles: MAX_UPLOAD_FILES,
     maxBytes: MAX_UPLOAD_TOTAL_BYTES,
@@ -228,31 +230,35 @@ export function registerApi(
     const q = req.query as { path?: string } | undefined;
     try {
       const target = resolveSafe(q?.path ?? fsAnchor(user), user);
-      const entries = await readdir(target, { withFileTypes: true });
-      const names = entries
-        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-        .map((e) => e.name)
-        .sort((a, b) => a.localeCompare(b))
-        .slice(0, 500);
+      const directory = await openScopedDirectory(user, target);
+      try {
+        const entries = await readdir(directory.accessPath, { withFileTypes: true });
+        const names = entries
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+          .map((e) => e.name)
+          .sort((a, b) => a.localeCompare(b))
+          .slice(0, 500);
 
-      // Parallel stat for .git — trivial on local FS; bounded by the 500 cap.
-      const enriched = await Promise.all(
-        names.map(async (name) => {
-          let hasGit = false;
-          try { await stat(join(target, name, '.git')); hasGit = true; } catch { /* */ }
-          return { name, hasGit };
-        })
-      );
+        // Keep the opened directory pinned while probing children. On Linux
+        // accessPath is /proc/self/fd/N, so a concurrent symlink swap cannot
+        // redirect these reads outside the validated workspace.
+        const enriched = await Promise.all(
+          names.map(async (name) => {
+            let hasGit = false;
+            try { await stat(join(directory.accessPath, name, '.git')); hasGit = true; } catch { /* */ }
+            return { name, hasGit };
+          })
+        );
 
-      const atScopeRoot = user.fsRoot !== '' && target === resolve(user.fsRoot);
-      const parent = target === '/' || atScopeRoot ? null : target.split(sep).slice(0, -1).join(sep) || '/';
-      // Also detect whether the target itself is a git repo (useful for "use
-      // this folder" hinting at the top of the picker).
-      let targetHasGit = false;
-      try { await stat(join(target, '.git')); targetHasGit = true; } catch { /* */ }
+        const atScopeRoot = user.fsRoot !== '' && target === resolve(user.fsRoot);
+        const parent = target === '/' || atScopeRoot ? null : target.split(sep).slice(0, -1).join(sep) || '/';
+        let targetHasGit = false;
+        try { await stat(join(directory.accessPath, '.git')); targetHasGit = true; } catch { /* */ }
 
-      // Keep `dirs` for backward compatibility with older clients.
-      return { path: target, parent, targetHasGit, entries: enriched, dirs: names };
+        return { path: target, parent, targetHasGit, entries: enriched, dirs: names };
+      } finally {
+        await directory.close().catch(() => undefined);
+      }
     } catch (e) {
       return sendScoped(reply, e);
     }
@@ -267,7 +273,17 @@ export function registerApi(
     try {
       const parent = resolveSafe(body?.parentPath ?? fsAnchor(user), user);
       const target = join(parent, name.value);
-      await mkdir(target);
+      // Validate the not-yet-existing child against the nearest real ancestor,
+      // then create it relative to a pinned parent directory on Linux.
+      resolveSafe(target, user);
+      const directory = await openScopedDirectory(user, parent);
+      try {
+        await mkdir(join(directory.accessPath, name.value));
+      } finally {
+        await directory.close().catch(() => undefined);
+      }
+      const created = await openScopedDirectory(user, target);
+      await created.close().catch(() => undefined);
       return { path: target };
     } catch (e) {
       return sendScoped(reply, e);
@@ -306,12 +322,20 @@ export function registerApi(
 
     let lease: UploadLease | undefined;
     const savedPaths: string[] = [];
+    const scopeRoot = user.canonicalFsRoot || root;
+    const scopeIdentity = user.canonicalFsRootIdentity;
     try {
       const rootStat = await stat(root);
       if (!rootStat.isDirectory()) return reply.code(400).send({ error: 'cwd is not a directory' });
       const q = req.query as UploadQuery | undefined;
       lease = await uploadAdmission.acquire(admissionRequest(user, root, q));
-      const uploadDir = await ensureSafeUploadDirectory(root, new Date().toISOString().slice(0, 10), user.fsRoot || root);
+      const uploadDir = await ensureSafeUploadDirectory(
+        root,
+        new Date().toISOString().slice(0, 10),
+        scopeRoot,
+        user.via,
+        scopeIdentity,
+      );
 
       const saved = [];
       for (const file of files) {
@@ -323,8 +347,7 @@ export function registerApi(
           throw new Error(`${name} is larger than 25 MB`);
         }
         lease.addBytes(bytes.byteLength);
-        await assertSafeUploadDirectory(root, uploadDir, user.fsRoot || root);
-        const path = await writeUniqueFile(uploadDir, name, bytes);
+        const path = await writeUniqueFile(uploadDir, name, bytes, root, scopeRoot, user.via, scopeIdentity);
         savedPaths.push(path);
         const rel = relative(root, path);
         saved.push({
@@ -337,7 +360,13 @@ export function registerApi(
       }
       return { files: saved };
     } catch (e) {
-      await Promise.all(savedPaths.map((path) => unlink(path).catch(() => undefined)));
+      await Promise.all(savedPaths.map((path) => removeUploadedFileSafe(
+        root,
+        path,
+        scopeRoot,
+        user.via,
+        scopeIdentity,
+      )));
       return reply.code(uploadErrorStatus(e)).send({ error: uploadErrorMessage(e) });
     } finally {
       lease?.release();
@@ -352,7 +381,7 @@ export function registerApi(
     const limit = Math.min(Math.max(Number(q?.limit) || 100, 1), 500);
     try {
       const root = resolveSafe(q?.cwd ?? user.workspaceRoot, user);
-      const { results, truncated } = await searchProjectFiles(root, needle, limit);
+      const { results, truncated } = await searchProjectFiles(root, needle, limit, { scopeUser: user });
       return { cwd: root, results, truncated };
     } catch (e) {
       return sendScoped(reply, e);
@@ -363,17 +392,40 @@ export function registerApi(
     const user = userOf(req);
     const q = req.query as { cwd?: string; path?: string; download?: string } | undefined;
     if (!q?.path) return reply.code(400).send({ error: 'path required' });
+    let opened: ScopedOpenFile | undefined;
     try {
       const target = resolveProjectFile(q.cwd ?? user.workspaceRoot, q.path, user, defaultCwd);
-      const st = await stat(target);
-      if (!st.isFile()) return reply.code(400).send({ error: 'path is not a file' });
+      opened = await openScopedFile(user, target);
       const filename = basename(target);
+      // Classify the canonical file, not a benign-looking symlink name.
+      const activeContent = isActiveContentFile(opened.canonicalPath);
+      const disposition = q.download === '1' || activeContent ? 'attachment' : 'inline';
       reply
-        .header('content-type', mimeForFile(target))
-        .header('content-length', st.size)
-        .header('content-disposition', `${q.download === '1' ? 'attachment' : 'inline'}; filename="${headerSafeFilename(filename)}"`);
-      return reply.send(createReadStream(target));
+        .header('content-type', activeContent ? 'application/octet-stream' : mimeForFile(opened.canonicalPath))
+        .header('content-length', opened.stat.size)
+        .header('x-content-type-options', 'nosniff')
+        .header('content-disposition', `${disposition}; filename="${headerSafeFilename(filename)}"`);
+      if (activeContent) {
+        // HTML, SVG and XML can execute script or trigger same-origin requests.
+        // They are member-controlled artifacts, so never render them in the
+        // authenticated application origin. CSP is a second line of defence
+        // for clients that ignore Content-Disposition.
+        reply.header('content-security-policy', "sandbox; default-src 'none'");
+      }
+      const stream = opened.handle.createReadStream({ autoClose: true });
+      const streamOwner = opened;
+      stream.once('close', () => { void streamOwner.close(); });
+      stream.once('error', () => { void streamOwner.close(); });
+      try {
+        const response = reply.send(stream);
+        opened = undefined; // The response stream owns and closes the handle.
+        return response;
+      } catch (error) {
+        stream.destroy();
+        throw error;
+      }
     } catch (e) {
+      await opened?.close().catch(() => undefined);
       return sendScoped(reply, e);
     }
   });
@@ -516,13 +568,29 @@ async function receiveMultipartUploads(
 
   try {
     lease = await admission.acquire(admissionRequest(user, root, q));
-    const uploadDir = await ensureSafeUploadDirectory(root, new Date().toISOString().slice(0, 10), user.fsRoot || root);
+    const scopeRoot = user.canonicalFsRoot || root;
+    const scopeIdentity = user.canonicalFsRootIdentity;
+    const uploadDir = await ensureSafeUploadDirectory(
+      root,
+      new Date().toISOString().slice(0, 10),
+      scopeRoot,
+      user.via,
+      scopeIdentity,
+    );
     for await (const part of req.parts()) {
       if (part.type !== 'file') continue;
       const name = sanitizeFileName(part.filename);
       lease.reserveFile();
-      await assertSafeUploadDirectory(root, uploadDir, user.fsRoot || root);
-      const written = await writeUniqueUploadStream(uploadDir, name, part, lease);
+      const written = await writeUniqueUploadStream(
+        uploadDir,
+        name,
+        part,
+        lease,
+        root,
+        scopeRoot,
+        user.via,
+        scopeIdentity,
+      );
       savedPaths.push(written.path);
       const rel = relative(root, written.path);
       saved.push({
@@ -536,7 +604,15 @@ async function receiveMultipartUploads(
     if (saved.length === 0) return reply.code(400).send({ error: 'files required' });
     return { files: saved };
   } catch (e) {
-    await Promise.all(savedPaths.map((path) => unlink(path).catch(() => undefined)));
+    const scopeRoot = user.canonicalFsRoot || root;
+    const scopeIdentity = user.canonicalFsRootIdentity;
+    await Promise.all(savedPaths.map((path) => removeUploadedFileSafe(
+      root,
+      path,
+      scopeRoot,
+      user.via,
+      scopeIdentity,
+    )));
     const message = uploadErrorMessage(e);
     return reply.code(uploadErrorStatus(e)).send({ error: message });
   } finally {
@@ -549,8 +625,12 @@ async function writeUniqueUploadStream(
   name: string,
   part: MultipartFile,
   lease: UploadLease,
+  root: string,
+  scopeRoot: string,
+  mode: CcwUser['via'],
+  scopeIdentity: CcwUser['canonicalFsRootIdentity'],
 ): Promise<{ path: string; size: number }> {
-  const reserved = await reserveUniqueFile(dir, name);
+  const reserved = await reserveUniqueFile(dir, name, root, scopeRoot, mode, scopeIdentity);
   let size = 0;
   const counter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -569,27 +649,116 @@ async function writeUniqueUploadStream(
     await pipeline(part.file, counter, reserved.handle.createWriteStream());
     if (part.file.truncated) throw new Error(`${name} is larger than 25 MB`);
     if (size === 0) throw new Error(`${name} is empty`);
+    await verifyReservedUploadFile(reserved, root, scopeRoot, mode, scopeIdentity);
+    await closeReservedUploadFile(reserved);
     return { path: reserved.path, size };
   } catch (e) {
-    await reserved.handle.close().catch(() => undefined);
-    await unlink(reserved.path).catch(() => undefined);
+    await cleanupReservedUploadFile(reserved);
     throw e;
   }
 }
 
-async function reserveUniqueFile(dir: string, name: string): Promise<{ path: string; handle: FileHandle }> {
+type ReservedUploadFile = {
+  path: string;
+  safePath: string;
+  name: string;
+  handle: FileHandle;
+  stat: Awaited<ReturnType<FileHandle['stat']>>;
+  directory: SafeUploadDirectoryHandle;
+};
+
+async function reserveUniqueFile(
+  dir: string,
+  name: string,
+  root: string,
+  scopeRoot: string,
+  mode: CcwUser['via'],
+  scopeIdentity: CcwUser['canonicalFsRootIdentity'],
+): Promise<ReservedUploadFile> {
+  const directory = await openSafeUploadDirectory(root, dir, scopeRoot, mode, scopeIdentity);
   const ext = extname(name);
   const base = ext ? name.slice(0, -ext.length) : name;
-  for (let i = 0; i < 100; i++) {
-    const candidate = i === 0 ? name : `${base}-${i + 1}${ext}`;
-    const path = join(dir, candidate);
-    try {
-      return { path, handle: await open(path, 'wx') };
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+  try {
+    for (let i = 0; i < 100; i++) {
+      const candidate = i === 0 ? name : `${base}-${i + 1}${ext}`;
+      const path = join(dir, candidate);
+      const safePath = join(directory.accessPath, candidate);
+      let handle: FileHandle | undefined;
+      try {
+        handle = await open(safePath, 'wx');
+        let openedStat: Awaited<ReturnType<FileHandle['stat']>>;
+        try {
+          openedStat = await handle.stat();
+        } catch (error) {
+          await handle.close().catch(() => undefined);
+          await unlink(safePath).catch(() => undefined);
+          throw error;
+        }
+        return { path, safePath, name: candidate, handle, stat: openedStat, directory };
+      } catch (e) {
+        await handle?.close().catch(() => undefined);
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      }
     }
+    throw new Error(`Could not find a free filename for ${name}`);
+  } catch (error) {
+    await directory.close().catch(() => undefined);
+    throw error;
   }
-  throw new Error(`Could not find a free filename for ${name}`);
+}
+
+async function verifyReservedUploadFile(
+  reserved: ReservedUploadFile,
+  root: string,
+  scopeRoot: string,
+  mode: CcwUser['via'],
+  scopeIdentity: CcwUser['canonicalFsRootIdentity'],
+): Promise<void> {
+  if (mode === 'token') {
+    await assertSafeUploadDirectory(root, dirname(reserved.path), scopeRoot);
+  }
+  await reserved.directory.verify();
+  const currentPath = await realpath(reserved.safePath);
+  const expectedPath = join(reserved.directory.canonicalPath, reserved.name);
+  if (currentPath !== expectedPath) throw new Error('Upload destination changed while uploading');
+  const currentStat = await stat(currentPath);
+  if (reserved.stat.dev !== currentStat.dev || reserved.stat.ino !== currentStat.ino) {
+    throw new Error('Upload destination changed while uploading');
+  }
+}
+
+async function closeReservedUploadFile(reserved: ReservedUploadFile): Promise<void> {
+  await reserved.handle.close().catch(() => undefined);
+  await reserved.directory.close().catch(() => undefined);
+}
+
+async function cleanupReservedUploadFile(reserved: ReservedUploadFile): Promise<void> {
+  await reserved.handle.close().catch(() => undefined);
+  // safePath remains pinned to the validated directory while its fd is open.
+  await unlink(reserved.safePath).catch(() => undefined);
+  await reserved.directory.close().catch(() => undefined);
+}
+
+async function removeUploadedFileSafe(
+  root: string,
+  path: string,
+  scopeRoot: string,
+  mode: CcwUser['via'],
+  scopeIdentity: CcwUser['canonicalFsRootIdentity'],
+): Promise<void> {
+  let directory: SafeUploadDirectoryHandle | undefined;
+  try {
+    directory = await openSafeUploadDirectory(root, dirname(path), scopeRoot, mode, scopeIdentity);
+    const candidate = join(directory.accessPath, basename(path));
+    const currentPath = await realpath(candidate);
+    if (currentPath !== join(directory.canonicalPath, basename(path))) return;
+    await unlink(candidate);
+  } catch {
+    // Cleanup must never follow a directory that moved out of scope. Leaving a
+    // partial file in the original, now-unreachable directory is safer.
+  } finally {
+    await directory?.close().catch(() => undefined);
+  }
 }
 
 function uploadErrorMessage(e: unknown): string {
@@ -645,20 +814,25 @@ function decodeUploadBytes(dataBase64: string | undefined): Buffer {
   return Buffer.from(raw, 'base64');
 }
 
-async function writeUniqueFile(dir: string, name: string, bytes: Buffer): Promise<string> {
-  const ext = extname(name);
-  const base = ext ? name.slice(0, -ext.length) : name;
-  for (let i = 0; i < 100; i++) {
-    const candidate = i === 0 ? name : `${base}-${i + 1}${ext}`;
-    const path = join(dir, candidate);
-    try {
-      await writeFile(path, bytes, { flag: 'wx' });
-      return path;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-    }
+async function writeUniqueFile(
+  dir: string,
+  name: string,
+  bytes: Buffer,
+  root: string,
+  scopeRoot: string,
+  mode: CcwUser['via'],
+  scopeIdentity: CcwUser['canonicalFsRootIdentity'],
+): Promise<string> {
+  const reserved = await reserveUniqueFile(dir, name, root, scopeRoot, mode, scopeIdentity);
+  try {
+    await reserved.handle.writeFile(bytes);
+    await verifyReservedUploadFile(reserved, root, scopeRoot, mode, scopeIdentity);
+    await closeReservedUploadFile(reserved);
+    return reserved.path;
+  } catch (error) {
+    await cleanupReservedUploadFile(reserved);
+    throw error;
   }
-  throw new Error(`Could not find a free filename for ${name}`);
 }
 
 function mimeForFile(path: string): string {
@@ -701,6 +875,14 @@ function mimeForFile(path: string): string {
   }
 }
 
+const ACTIVE_CONTENT_EXTENSIONS = new Set([
+  '.htm', '.html', '.svg', '.svgz', '.xhtml', '.xml',
+]);
+
+function isActiveContentFile(path: string): boolean {
+  return ACTIVE_CONTENT_EXTENSIONS.has(extname(path).toLowerCase());
+}
+
 function headerSafeFilename(name: string): string {
   return name.replace(/["\r\n]/g, '_');
 }
@@ -712,6 +894,7 @@ type FileSearchOptions = {
   timeBudgetMs?: number;
   entryBudget?: number;
   now?: () => number;
+  scopeUser?: CcwUser;
 };
 
 type FileSearchContext = {
@@ -737,19 +920,31 @@ export async function searchProjectFiles(
     now,
   };
   const results: string[] = [];
-  await walk(root, root, needle.toLowerCase(), results, limit, 0, context);
+  await walk(root, root, needle.toLowerCase(), results, limit, 0, context, options.scopeUser);
   return { results, truncated: context.truncated };
 }
 
-async function walk(root: string, dir: string, needle: string, out: string[], limit: number, depth: number, context: FileSearchContext): Promise<void> {
+async function walk(root: string, dir: string, needle: string, out: string[], limit: number, depth: number, context: FileSearchContext, scopeUser?: CcwUser): Promise<void> {
   if (out.length >= limit || depth > MAX_DEPTH) return;
   if (context.visited >= context.entryBudget || context.now() > context.deadline) {
     context.truncated = true;
     return;
   }
   let entries;
-  try { entries = await readdir(dir, { withFileTypes: true }); }
-  catch { return; }
+  if (scopeUser) {
+    let directory;
+    try {
+      directory = await openScopedDirectory(scopeUser, dir);
+      entries = await readdir(directory.accessPath, { withFileTypes: true });
+    } catch {
+      return;
+    } finally {
+      await directory?.close().catch(() => undefined);
+    }
+  } else {
+    try { entries = await readdir(dir, { withFileTypes: true }); }
+    catch { return; }
+  }
   if (entries.length > MAX_ENTRIES_PER_DIR) {
     entries = entries.slice(0, MAX_ENTRIES_PER_DIR);
     context.truncated = true;
@@ -766,7 +961,7 @@ async function walk(root: string, dir: string, needle: string, out: string[], li
     const full = join(dir, e.name);
     const rel = full.slice(root.length + 1);
     if (e.isDirectory()) {
-      await walk(root, full, needle, out, limit, depth + 1, context);
+      await walk(root, full, needle, out, limit, depth + 1, context, scopeUser);
     } else if (e.isFile()) {
       if (!needle || rel.toLowerCase().includes(needle)) {
         out.push(rel);

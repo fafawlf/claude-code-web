@@ -5,6 +5,7 @@ import type { AgentProvider, AgentSession } from '../agents/types.js';
 import type { PermissionListener, PlanListener } from './ClaudeSession.js';
 import type { AgentProviderId, ClaudeAuthMode, PermissionMode, SessionStateSnapshot } from '../protocol.js';
 import type { GitIdentity } from '../git/identity.js';
+import type { WorkspaceLease } from '../workspace/ExecutionWorkspace.js';
 
 const MAX_CONCURRENT = 8;
 type ManagerListener = (sessions: SessionStateSnapshot[]) => void;
@@ -46,6 +47,7 @@ export class SessionManager {
     viewerMode?: boolean;
     searchRoot?: string;
     gitIdentity?: GitIdentity;
+    workspaceLease?: WorkspaceLease;
     owner?: string;
     onPermission?: PermissionListener;
     onPlan?: PlanListener;
@@ -55,18 +57,28 @@ export class SessionManager {
     // switches until the user explicitly closes them.
     if (this.activeCount() >= this.maxConcurrent) this.reapAbandoned(opts.owner);
     if (this.activeCount() >= this.maxConcurrent) {
+      opts.workspaceLease?.close();
       throw new Error(`Concurrent session limit (${this.maxConcurrent}) reached. Close a background session first.`);
     }
     if (opts.owner && this.maxPerOwner !== undefined && this.activeCountFor(opts.owner) >= this.maxPerOwner) {
       this.reapAbandoned(opts.owner);
       if (this.activeCountFor(opts.owner) >= this.maxPerOwner) {
+        opts.workspaceLease?.close();
         throw new Error(`You already have ${this.maxPerOwner} sessions running. Close one first.`);
       }
     }
     const { owner, ...sessionOpts } = opts;
     const id = randomUUID();
-    const provider = this.providerFor(opts.provider ?? 'claude');
-    const session = provider.createSession({ id, ...sessionOpts });
+    let session: AgentSession;
+    try {
+      const provider = this.providerFor(opts.provider ?? 'claude');
+      session = provider.createSession({ id, ...sessionOpts });
+    } catch (error) {
+      // The manager transfers lease ownership to the provider only after a
+      // session has been constructed successfully.
+      sessionOpts.workspaceLease?.close();
+      throw error;
+    }
     this.sessions.set(id, session);
     if (owner) this.owners.set(id, owner);
     this.track(id, session);
