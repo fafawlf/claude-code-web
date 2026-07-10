@@ -114,7 +114,9 @@ test('only admins can authorize a canary routing cookie', async () => {
 
 test('canary cookie setter requires both the random capability and an admin session', async () => {
   const previous = process.env.CCW_CANARY_TOKEN;
+  const previousRollback = process.env.CCW_ROLLBACK_TOKEN;
   process.env.CCW_CANARY_TOKEN = 'random-capability-for-test';
+  process.env.CCW_ROLLBACK_TOKEN = 'random-rollback-for-test';
   const s = await setup();
   try {
     const wrongKey = await s.app.inject({
@@ -139,10 +141,20 @@ test('canary cookie setter requires both the random capability and an admin sess
     assert.equal(admin.statusCode, 302);
     assert.match(String(admin.headers['set-cookie']), /ccw_canary=random-capability-for-test/);
     assert.equal(admin.headers.location, '/');
+
+    const rollback = await s.app.inject({
+      method: 'GET',
+      url: '/__ccw_canary?key=random-rollback-for-test',
+      headers: { cookie: s.cookies.boss },
+    });
+    assert.equal(rollback.statusCode, 302);
+    assert.match(String(rollback.headers['set-cookie']), /ccw_canary=random-rollback-for-test/);
   } finally {
     await s.cleanup();
     if (previous === undefined) delete process.env.CCW_CANARY_TOKEN;
     else process.env.CCW_CANARY_TOKEN = previous;
+    if (previousRollback === undefined) delete process.env.CCW_ROLLBACK_TOKEN;
+    else process.env.CCW_ROLLBACK_TOKEN = previousRollback;
   }
 });
 

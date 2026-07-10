@@ -75,9 +75,13 @@ export function registerApi(
   };
 
   app.get('/__ccw_canary', async (req, reply) => {
-    const token = process.env.CCW_CANARY_TOKEN ?? '';
+    const tokens = [process.env.CCW_CANARY_TOKEN, process.env.CCW_ROLLBACK_TOKEN]
+      .filter((value): value is string => !!value);
     const query = req.query as { key?: string } | undefined;
-    if (!token || !query?.key || !timingSafeEqualStr(query.key, token)) {
+    const token = query?.key
+      ? tokens.find((candidate) => timingSafeEqualStr(query.key!, candidate))
+      : undefined;
+    if (!token) {
       return reply.code(404).send({ error: 'Not found' });
     }
     const user = resolveUser(req, idCtx);

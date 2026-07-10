@@ -95,6 +95,7 @@ require_candidate() {
   validate_port "$CANDIDATE_PORT"
   validate_service "$CANDIDATE_SERVICE"
   validate_cookie "$CANDIDATE_COOKIE"
+  validate_cookie "$CANDIDATE_ROLLBACK_COOKIE"
 }
 
 slot_service() {
@@ -309,8 +310,9 @@ deploy_candidate() {
   fi
   build_time=$(cat "$release_dir/.ccw-build-time" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 
-  local unit_tmp cookie
+  local unit_tmp cookie rollback_cookie
   cookie=$(random_cookie)
+  rollback_cookie=$(random_cookie)
   unit_tmp=$(mktemp)
   cat > "$unit_tmp" <<EOF
 [Unit]
@@ -325,6 +327,7 @@ Environment="CCW_BUILD_SHA=$sha"
 Environment="CCW_BUILD_BRANCH=$RELEASE_REF"
 Environment="CCW_BUILD_TIME=$build_time"
 Environment="CCW_CANARY_TOKEN=$cookie"
+Environment="CCW_ROLLBACK_TOKEN=$rollback_cookie"
 ExecStart=/usr/bin/node $release_dir/server/dist/bin/claudecode-web.js --host 127.0.0.1 --port $candidate_port --cwd $DATA_DIR/users
 Restart=always
 RestartSec=5
@@ -347,6 +350,7 @@ CANDIDATE_SHA=$sha
 CANDIDATE_REF=$RELEASE_REF
 CANDIDATE_RELEASE=$release_dir
 CANDIDATE_COOKIE=$cookie
+CANDIDATE_ROLLBACK_COOKIE=$rollback_cookie
 CANDIDATE_PORT=$candidate_port
 CANDIDATE_SERVICE=$candidate_service
 CANDIDATE_STARTED_AT=$(date +%s)
@@ -382,7 +386,7 @@ promote_candidate() {
   wait_for_health "$CANDIDATE_PORT" "$CANDIDATE_SHA" >/dev/null
 
   local state_tmp
-  render_nginx "$CANDIDATE_PORT" "$ACTIVE_PORT" "$CANDIDATE_COOKIE" "$CANDIDATE_PORT"
+  render_nginx "$CANDIDATE_PORT" "$ACTIVE_PORT" "$CANDIDATE_ROLLBACK_COOKIE" "$CANDIDATE_PORT"
 
   state_tmp=$(mktemp "$DEPLOY_STATE_DIR/.promotion.XXXXXX")
   cat > "$state_tmp" <<EOF
@@ -397,7 +401,7 @@ PROMOTED_SHA=$CANDIDATE_SHA
 PROMOTED_REF=$CANDIDATE_REF
 PROMOTED_RELEASE=$CANDIDATE_RELEASE
 PROMOTED_CANARY_COOKIE=$CANDIDATE_COOKIE
-ROLLBACK_COOKIE=$CANDIDATE_COOKIE
+ROLLBACK_COOKIE=$CANDIDATE_ROLLBACK_COOKIE
 PROMOTED_AT=$(date +%s)
 EOF
   chmod 0600 "$state_tmp"
@@ -457,6 +461,9 @@ drain_previous() {
     echo "Refusing to stop the active service." >&2
     exit 1
   fi
+  local retired_cookie
+  retired_cookie=$(random_cookie)
+  render_nginx "$ACTIVE_PORT" "$ACTIVE_PORT" "$retired_cookie" "$ACTIVE_PORT"
   systemctl stop "$PREVIOUS_SERVICE"
   rm -f "$PROMOTION_STATE" "$CANDIDATE_STATE"
   echo "Previous service $PREVIOUS_SERVICE stopped after the drain window. The inactive slot is ready for the next release."

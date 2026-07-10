@@ -25,6 +25,11 @@ test('blue-green deployment shell is valid and alternates inactive slots', () =>
   assert.equal(green, '8085');
   assert.equal(blue, '8084');
   assert.match(cookie, /^[a-f0-9]{48}$/);
+
+  const source = readFileSync(script, 'utf8');
+  assert.match(source, /Environment="CCW_ROLLBACK_TOKEN=\$rollback_cookie"/);
+  assert.match(source, /render_nginx "\$CANDIDATE_PORT" "\$ACTIVE_PORT" "\$CANDIDATE_ROLLBACK_COOKIE"/);
+  assert.match(source, /render_nginx "\$ACTIVE_PORT" "\$ACTIVE_PORT" "\$retired_cookie"/);
 });
 
 test('rendered canary route requires admin auth and keeps websocket proxying', () => {
