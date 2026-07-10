@@ -14,6 +14,7 @@ import { FeishuClient } from './auth/feishu.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import { registerUsageRoutes } from './usage/routes.js';
 import { resolveUser, type IdentityContext } from './users/identity.js';
+import { registerHealthRoute } from './buildInfo.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -74,7 +75,7 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
     });
   }
 
-  app.get('/healthz', async () => ({ ok: true }));
+  registerHealthRoute(app);
 
   // Used by the SPA to confirm its credential (token or cookie) is valid.
   app.get('/auth-check', async (req, reply) => {
