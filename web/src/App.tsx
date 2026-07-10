@@ -24,6 +24,7 @@ import type { SlashAction } from './components/SlashPalette';
 import { normalizeProjectPath, readPinnedProjects, readRecentProjects, rememberProject, togglePinnedProject, type ProjectEntry } from './projectHistory';
 import { readSkin, skinById, writeSkin, type SkinId } from './skins';
 import { appUrl } from './appUrl';
+import { ProjectRequestCoordinator } from './projectRequests';
 
 const EDIT_LIKE = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const SETUP_SEEN_KEY = 'ccw_setup_seen_v1';
@@ -75,6 +76,7 @@ export function App() {
   const [planProposed, setPlanProposed] = useState<ServerPlanProposed | null>(null);
   const [sessions, setSessions] = useState<StoredSession[]>([]);
   const [projectSessions, setProjectSessions] = useState<Record<string, StoredSession[]>>({});
+  const projectRequestsRef = useRef(new ProjectRequestCoordinator<StoredSession[]>());
   const [liveSessions, setLiveSessions] = useState<SessionStateSnapshot[]>([]);
   const [defaultCwd, setDefaultCwd] = useState<string>('');
   const [authInfo, setAuthInfo] = useState<ClaudeAuthInfo | null>(null);
@@ -103,6 +105,7 @@ export function App() {
   useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
   useEffect(() => { selectedProviderRef.current = selectedProvider; }, [selectedProvider]);
   useEffect(() => installMobileViewportVars(), []);
+  useEffect(() => () => projectRequestsRef.current.dispose(), []);
 
   const commitState = useCallback((nextState: ChatState | ((prev: ChatState) => ChatState)) => {
     const next = typeof nextState === 'function' ? nextState(stateRef.current) : nextState;
@@ -181,13 +184,20 @@ export function App() {
     if (!token || !cwd) return;
     const normalized = normalizeProjectPath(cwd);
     const url = appUrl(`/api/sessions?t=${encodeURIComponent(token)}&cwd=${encodeURIComponent(normalized)}`);
-    fetch(url)
-      .then((r) => r.json())
-      .then((j) => {
-        const list = j.sessions ?? [];
+    void projectRequestsRef.current.request(
+      normalized,
+      primary,
+      async (signal) => {
+        const response = await fetch(url, { signal });
+        if (!response.ok) throw new Error(`session list failed (${response.status})`);
+        const body = await response.json() as { sessions?: StoredSession[] };
+        return body.sessions ?? [];
+      },
+      (list, isCurrentPrimary) => {
         setProjectSessions((prev) => ({ ...prev, [normalized]: list }));
-        if (primary) setSessions(list);
-      })
+        if (isCurrentPrimary) setSessions(list);
+      },
+    )
       .catch(() => {});
   }, [token]);
 
