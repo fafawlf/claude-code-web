@@ -175,12 +175,13 @@ test('[QA] Linux cookie uploads reject root-self and ancestor swaps before mkdir
   mkdirSync(root, { recursive: true });
   mkdirSync(join(outside, 'alice'), { recursive: true });
   const canonicalRoot = realpathSync(root);
+  const rootIdentity = captureFsRootIdentity(canonicalRoot);
 
   try {
     renameSync(parent, join(base, 'users-original'));
     symlinkSync(outside, parent);
     await assert.rejects(
-      ensureSafeUploadDirectory(root, '2026-07-10', canonicalRoot, 'cookie', captureFsRootIdentity(canonicalRoot)),
+      ensureSafeUploadDirectory(root, '2026-07-10', canonicalRoot, 'cookie', rootIdentity),
       /outside the workspace|changed while uploading/,
     );
     assert.equal(readdirSync(join(outside, 'alice')).length, 0);
