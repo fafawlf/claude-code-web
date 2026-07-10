@@ -1,6 +1,7 @@
 import type { ChatState } from './reducer';
 import type { ChatItem, SessionRuntimeStatus, SessionStateSnapshot, StoredSession } from './types';
 import { cachedChatState } from './sessionCache';
+import { abbreviateHome } from './pathDisplay';
 
 export type ActivityStatus = 'needs_review' | 'plan_ready' | 'working' | 'issue' | 'finished';
 export type ActivityTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success';
@@ -32,6 +33,7 @@ type DeriveArgs = {
   activeSessionId: string | null;
   cache: Map<string, ChatState>;
   storedSessions: StoredSession[];
+  home?: string;
   now?: number;
 };
 
@@ -43,7 +45,7 @@ const STATUS_PRIORITY: Record<ActivityStatus, number> = {
   finished: 4,
 };
 
-export function deriveActivitySessions({ liveSessions, activeSessionId, cache, storedSessions, now = Date.now() }: DeriveArgs): ActivitySessionViewModel[] {
+export function deriveActivitySessions({ liveSessions, activeSessionId, cache, storedSessions, home, now = Date.now() }: DeriveArgs): ActivitySessionViewModel[] {
   const storedByClaudeId = new Map(storedSessions.map((s) => [s.sessionId, s]));
 
   return dedupeActivitySnapshots(liveSessions
@@ -55,8 +57,8 @@ export function deriveActivitySessions({ liveSessions, activeSessionId, cache, s
         sessionId: s.sessionId,
         nodeId: s.nodeId,
         provider: s.provider,
-        title: activityTitle(s, cachedChatState(cache, s), s.claudeSessionId ? storedByClaudeId.get(s.claudeSessionId) : undefined, now),
-        subtitle: activitySubtitle(s, now),
+        title: activityTitle(s, cachedChatState(cache, s), s.claudeSessionId ? storedByClaudeId.get(s.claudeSessionId) : undefined, home, now),
+        subtitle: activitySubtitle(s, home, now),
         status,
         statusLabel: activityStatusLabel(s.runtimeStatus),
         tone: activityTone(status),
@@ -166,18 +168,18 @@ function activityTone(status: ActivityStatus): ActivityTone {
   }
 }
 
-function activityTitle(s: SessionStateSnapshot, cached: ChatState | undefined, stored: StoredSession | undefined, now: number): string {
+function activityTitle(s: SessionStateSnapshot, cached: ChatState | undefined, stored: StoredSession | undefined, home: string | undefined, now: number): string {
   const prompt = firstUserPrompt(cached?.items);
   if (prompt) return trimTitle(prompt);
 
   const storedTitle = stored?.customTitle ?? stored?.summary ?? stored?.firstPrompt;
   if (storedTitle) return trimTitle(storedTitle);
 
-  return `${compactPath(s.cwd)} · ${formatActivityTime(s.lastEventAt, now)}`;
+  return `${compactPath(s.cwd, home)} · ${formatActivityTime(s.lastEventAt, now)}`;
 }
 
-function activitySubtitle(s: SessionStateSnapshot, now: number): string {
-  return `${compactPath(s.cwd)} · ${formatActivityTime(s.lastEventAt, now)}`;
+function activitySubtitle(s: SessionStateSnapshot, home: string | undefined, now: number): string {
+  return `${compactPath(s.cwd, home)} · ${formatActivityTime(s.lastEventAt, now)}`;
 }
 
 function firstUserPrompt(items: ChatItem[] | undefined): string | null {
@@ -191,9 +193,8 @@ function trimTitle(text: string): string {
   return oneLine.length > 84 ? `${oneLine.slice(0, 81)}...` : oneLine;
 }
 
-function compactPath(path: string): string {
-  let s = path;
-  if (s.startsWith('/root')) s = '~' + s.slice('/root'.length);
+function compactPath(path: string, home?: string): string {
+  const s = abbreviateHome(path, home);
   const parts = s.split('/').filter(Boolean);
   if (parts.length <= 3) return s || '/';
   if (s.startsWith('~')) return '~/' + parts.slice(-2).join('/');

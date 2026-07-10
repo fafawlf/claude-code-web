@@ -3,10 +3,12 @@ import type { AgentProviderId, ClaudeAuthInfo, CodexAuthInfo, NodeInfo, SessionS
 import type { SkinId } from '../skins';
 import { AgentMenu } from './AgentMenu';
 import { Icon } from './Icon';
+import { abbreviateHome } from '../pathDisplay';
 
 type Props = {
   state: SessionStateSnapshot | null;
   cwd: string;
+  home?: string;
   auth?: ClaudeAuthInfo | null;
   codexAuth?: CodexAuthInfo | null;
   codexDefaultModel?: string;
@@ -38,7 +40,7 @@ export function TopBar(p: Props) {
     setRenaming(true);
   }, [p.renameRequest]);
 
-  const cwdShort = p.cwd ? shortPath(p.cwd) : '…';
+  const cwdShort = p.cwd ? shortPath(p.cwd, p.home) : '…';
   const currentProvider = s?.provider ?? p.selectedProvider;
   const currentNodeId = s?.nodeId ?? p.selectedNodeId;
 
@@ -138,10 +140,8 @@ export function TopBar(p: Props) {
   );
 }
 
-function shortPath(p: string): string {
-  let s = p;
-  const home = '/root'; // display-only heuristic
-  if (s.startsWith(home)) s = '~' + s.slice(home.length);
+function shortPath(p: string, home?: string): string {
+  const s = abbreviateHome(p, home);
   const parts = s.split('/').filter(Boolean);
   if (parts.length <= 3) return s;
   return (s.startsWith('~') ? '~/' : '/') + '…/' + parts.slice(-2).join('/');
