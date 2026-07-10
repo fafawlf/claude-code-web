@@ -13,6 +13,8 @@ const STICK_THRESHOLD = 80; // px from bottom still counts as "at bottom"
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 type Props = {
+  sessionKey: string;
+  scrollPositions: Map<string, number | 'bottom'>;
   token: string;
   cwd: string;
   skin: SkinId;
@@ -27,13 +29,14 @@ type Props = {
   onStop: () => void;
 };
 
-function MessageListImpl({ token, cwd, skin, items, busy, streamingText, pendingByToolUseId, secondsSinceLastEvent, activeTool, onAcceptEdit, onRejectEdit, onStop }: Props) {
+function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items, busy, streamingText, pendingByToolUseId, secondsSinceLastEvent, activeTool, onAcceptEdit, onRejectEdit, onStop }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const content = contentForSkin(skin);
+  const visibleItems = useMemo(() => items.filter((it) => !shouldHideToolInTranscript(it)), [items]);
 
   const scrollToBottom = useCallback(() => {
     const el = scrollerRef.current;
@@ -50,11 +53,34 @@ function MessageListImpl({ token, cwd, skin, items, busy, streamingText, pending
       const sticky = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD;
       stickToBottomRef.current = sticky;
       setShowJump(!sticky);
+      scrollPositions.set(sessionKey, sticky ? 'bottom' : el.scrollTop);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
-    return () => el.removeEventListener('scroll', onScroll);
-  }, []);
+    return () => {
+      const sticky = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD;
+      scrollPositions.set(sessionKey, sticky ? 'bottom' : el.scrollTop);
+      el.removeEventListener('scroll', onScroll);
+    };
+  }, [scrollPositions, sessionKey]);
+
+  // A seen session returns to its exact reading position. A session without a
+  // snapshot opens at the latest message. The component is keyed by session,
+  // so stream animation and Jump state cannot leak across switches.
+  useIsoLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const saved = scrollPositions.get(sessionKey);
+    if (saved === undefined || saved === 'bottom') {
+      stickToBottomRef.current = true;
+      el.scrollTop = el.scrollHeight;
+      setShowJump(false);
+    } else {
+      stickToBottomRef.current = false;
+      el.scrollTop = saved;
+      setShowJump(true);
+    }
+  }, [scrollPositions, sessionKey]);
 
   // Scroll on new message (items count change) only. Not on stream deltas.
   // Use layout effect + instant behavior — "smooth" looks laggy when 900
@@ -78,7 +104,7 @@ function MessageListImpl({ token, cwd, skin, items, busy, streamingText, pending
     <div className="relative flex-1 min-h-0">
       <div ref={scrollerRef} className="message-scroller h-full overflow-y-auto">
       <div ref={contentRef} className="message-list-content min-h-full max-w-[720px] mx-auto px-6 pt-8 pb-44 flex flex-col justify-end gap-[18px]">
-        {items.filter((it) => !shouldHideToolInTranscript(it)).map((it) => (
+        {visibleItems.map((it) => (
           <Bubble
             key={it.id}
             item={it}
@@ -113,7 +139,7 @@ export const MessageList = memo(MessageListImpl);
 
 type BubbleProps = { item: ChatItem } & Pick<Props, 'token' | 'cwd' | 'skin' | 'pendingByToolUseId' | 'onAcceptEdit' | 'onRejectEdit'>;
 
-function Bubble({ item, token, cwd, skin, pendingByToolUseId, onAcceptEdit, onRejectEdit }: BubbleProps) {
+const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId, onAcceptEdit, onRejectEdit }: BubbleProps) {
   const content = contentForSkin(skin);
   if (item.kind === 'user') {
     return (
@@ -154,7 +180,7 @@ function Bubble({ item, token, cwd, skin, pendingByToolUseId, onAcceptEdit, onRe
   return (
     <div className={`animate-fade-up text-xs px-3 py-2 rounded-sm ${item.level === 'error' ? 'bg-danger/10 text-danger' : 'bg-bg-raised/60 text-text-muted'}`}>{item.text}</div>
   );
-}
+});
 
 function ThinkingState({ skin, secondsSinceLastEvent, activeTool, onStop }: { skin: SkinId; secondsSinceLastEvent: number; activeTool?: ActiveToolInfo; onStop: () => void }) {
   const content = contentForSkin(skin);

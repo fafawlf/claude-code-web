@@ -78,6 +78,7 @@ export class SessionCache extends Map<string, ChatState> {
 
   remember(activeSessionId: string | null, state: ChatState): string | null {
     const identity = state.state;
+    if (!identity && state.items.length === 0 && state.lastEventId === 0) return null;
     const keys = identity ? cacheKeys(identity) : activeSessionId ? [activeSessionId] : [];
     if (keys.length === 0) return null;
     this.store(keys, state);

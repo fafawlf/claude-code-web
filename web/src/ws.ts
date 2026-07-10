@@ -76,8 +76,12 @@ export class WsClient {
     if (this.ws?.readyState === WebSocket.OPEN) cb();
   }
 
+  setHelloIntent(hello: ClientHello): void {
+    this.latestHello = hello;
+  }
+
   send(m: ClientMessage): boolean {
-    if (m.type === 'hello') this.latestHello = m;
+    if (m.type === 'hello') this.setHelloIntent(m);
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
     this.ws.send(JSON.stringify(m));
     if (m.type === 'hello') this.helloSentOnSocket = this.ws;
