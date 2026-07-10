@@ -362,7 +362,17 @@ function InputBarImpl(p: Props) {
           <SlashPalette query={slashQuery} provider={p.provider} onPick={pickSlash} onClose={() => setSlashQuery(null)} />
         )}
         {mentionQuery !== null && slashQuery === null && (
-          <MentionPopup token={p.token} cwd={p.cwd} query={mentionQuery} onPick={insertMention} onClose={() => setMentionQuery(null)} />
+          <MentionPopup
+            token={p.token}
+            cwd={p.cwd}
+            query={mentionQuery}
+            onPick={insertMention}
+            onClose={() => setMentionQuery(null)}
+            onEmptySubmit={() => {
+              setMentionQuery(null);
+              queueMicrotask(submit);
+            }}
+          />
         )}
         {sendHint && <div className="mt-2 text-[11px] leading-4 text-warning" role="status">{sendHint}</div>}
       </div>

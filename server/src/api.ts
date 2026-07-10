@@ -23,6 +23,8 @@ const SKIP_DIRS = new Set([
 const MAX_UPLOAD_FILES = 12;
 const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
 const UPLOAD_BODY_LIMIT = 80 * 1024 * 1024;
+const FILE_SEARCH_TIME_BUDGET_MS = 200;
+const FILE_SEARCH_ENTRY_BUDGET = 20_000;
 const DOWNLOADABLE_OUTSIDE_PROJECT_EXTENSIONS = new Set([
   '.csv', '.doc', '.docx', '.gif', '.html', '.jpeg', '.jpg', '.json', '.log', '.md',
   '.pdf', '.png', '.ppt', '.pptx', '.svg', '.txt', '.webp', '.xls', '.xlsx', '.zip',
@@ -251,9 +253,8 @@ export function registerApi(
     const limit = Math.min(Math.max(Number(q?.limit) || 100, 1), 500);
     try {
       const root = resolveSafe(q?.cwd ?? user.workspaceRoot, user);
-      const results: string[] = [];
-      await walk(root, root, needle, results, limit, 0);
-      return { cwd: root, results };
+      const { results, truncated } = await searchProjectFiles(root, needle, limit);
+      return { cwd: root, results, truncated };
     } catch (e) {
       return sendScoped(reply, e);
     }
@@ -464,20 +465,65 @@ function headerSafeFilename(name: string): string {
 const MAX_DEPTH = 6;
 const MAX_ENTRIES_PER_DIR = 2000;
 
-async function walk(root: string, dir: string, needle: string, out: string[], limit: number, depth: number): Promise<void> {
+type FileSearchOptions = {
+  timeBudgetMs?: number;
+  entryBudget?: number;
+  now?: () => number;
+};
+
+type FileSearchContext = {
+  deadline: number;
+  entryBudget: number;
+  visited: number;
+  truncated: boolean;
+  now: () => number;
+};
+
+export async function searchProjectFiles(
+  root: string,
+  needle: string,
+  limit: number,
+  options: FileSearchOptions = {},
+): Promise<{ results: string[]; truncated: boolean }> {
+  const now = options.now ?? Date.now;
+  const context: FileSearchContext = {
+    deadline: now() + (options.timeBudgetMs ?? FILE_SEARCH_TIME_BUDGET_MS),
+    entryBudget: options.entryBudget ?? FILE_SEARCH_ENTRY_BUDGET,
+    visited: 0,
+    truncated: false,
+    now,
+  };
+  const results: string[] = [];
+  await walk(root, root, needle.toLowerCase(), results, limit, 0, context);
+  return { results, truncated: context.truncated };
+}
+
+async function walk(root: string, dir: string, needle: string, out: string[], limit: number, depth: number, context: FileSearchContext): Promise<void> {
   if (out.length >= limit || depth > MAX_DEPTH) return;
+  if (context.visited >= context.entryBudget || context.now() > context.deadline) {
+    context.truncated = true;
+    return;
+  }
   let entries;
   try { entries = await readdir(dir, { withFileTypes: true }); }
   catch { return; }
-  if (entries.length > MAX_ENTRIES_PER_DIR) entries = entries.slice(0, MAX_ENTRIES_PER_DIR);
+  if (entries.length > MAX_ENTRIES_PER_DIR) {
+    entries = entries.slice(0, MAX_ENTRIES_PER_DIR);
+    context.truncated = true;
+  }
   for (const e of entries) {
     if (out.length >= limit) return;
+    context.visited += 1;
+    if (context.visited > context.entryBudget || context.now() > context.deadline) {
+      context.truncated = true;
+      return;
+    }
     if (e.name.startsWith('.') && e.name !== '.env.example') continue;
     if (SKIP_DIRS.has(e.name)) continue;
     const full = join(dir, e.name);
     const rel = full.slice(root.length + 1);
     if (e.isDirectory()) {
-      await walk(root, full, needle, out, limit, depth + 1);
+      await walk(root, full, needle, out, limit, depth + 1, context);
     } else if (e.isFile()) {
       if (!needle || rel.toLowerCase().includes(needle)) {
         out.push(rel);
