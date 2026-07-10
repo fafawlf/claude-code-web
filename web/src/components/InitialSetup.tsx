@@ -159,9 +159,15 @@ function InfoRow({
   );
 }
 
+export function inferPreferredMode(stored: string | null, hostname: string): Mode {
+  if (stored === 'local' || stored === 'remote') return stored;
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' ? 'local' : 'remote';
+}
+
 function readPreferredMode(): Mode {
   try {
-    return window.localStorage.getItem('ccw_setup_mode') === 'local' ? 'local' : 'remote';
+    return inferPreferredMode(window.localStorage.getItem('ccw_setup_mode'), window.location.hostname);
   } catch {
     return 'remote';
   }
