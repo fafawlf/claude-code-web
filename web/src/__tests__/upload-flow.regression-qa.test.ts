@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { UploadPool, planUploadSelection, uploadFileMultipart } from '../uploads';
+import { UploadPool, planUploadSelection, uploadFileMultipart, uploadStartBlockReason } from '../uploads';
+
+test('[QA] uploads stay blocked until the target attachment is ready and writable', () => {
+  assert.equal(uploadStartBlockReason(false, false), 'Still connecting. Try again in a moment.');
+  assert.equal(uploadStartBlockReason(true, true), 'Press Continue writing to take over this chat.');
+  assert.equal(uploadStartBlockReason(true, false), null);
+});
 
 // QA regression: the browser must stop a thirteenth attachment before any network work starts.
 test('[QA] upload selection accepts at most 12 attachments', () => {

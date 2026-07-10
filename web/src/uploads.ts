@@ -12,6 +12,12 @@ export const MAX_UPLOAD_FILES = 12;
 export const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_UPLOAD_TOTAL_BYTES = 50 * 1024 * 1024;
 
+export function uploadStartBlockReason(ready: boolean, readOnly: boolean): string | null {
+  if (readOnly) return 'Press Continue writing to take over this chat.';
+  if (!ready) return 'Still connecting. Try again in a moment.';
+  return null;
+}
+
 type UploadSelectionFile = Pick<File, 'name' | 'size' | 'type'>;
 
 export type UploadSelectionResult<T extends UploadSelectionFile> = {
