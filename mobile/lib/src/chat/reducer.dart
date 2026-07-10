@@ -62,6 +62,7 @@ bool _isStreamHandoff(String streamingText, String finalText) {
 /// Fold a single SDK event into a [ChatState]. 1:1 port of `applyEvent` from
 /// `web/src/reducer.ts`. `ev` is the raw SDK payload; shape is loose by design.
 ChatState applyEvent(ChatState s, Object? ev, int eventId) {
+  if (eventId > 0 && eventId <= s.lastEventId) return s;
   if (ev is! Map) return s.copyWith(lastEventId: max(s.lastEventId, eventId));
   final List<ChatItem> items = List<ChatItem>.of(s.items);
   bool busy = s.busy;

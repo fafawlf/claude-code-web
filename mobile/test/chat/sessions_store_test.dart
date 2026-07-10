@@ -202,11 +202,99 @@ void main() {
     final user = cs.items.single as UserItem;
     expect(user.text, 'hello');
     expect(user.optimistic, isTrue);
-    expect(h.sent.single, isA<ClientUserMessage>());
+    final sent = h.sent.single as ClientAttachmentCommand;
+    expect(sent.command, isA<ClientUserMessage>());
+    expect(sent.attachId, hello.attachId);
+    expect(sent.sessionId, 'S1');
     await h.close();
   });
 
-  test('switchTo sends a unique scoped hello with the resume cursor', () async {
+  test('all session commands carry the current attachment scope', () async {
+    final h = _Harness();
+    final hello = await h.attach('S1');
+    h.sent.clear();
+
+    h.store.respondPermission(
+      reqId: 'permission-1',
+      decision: PermissionDecision.allow,
+    );
+    h.store.respondPlan(reqId: 'plan-1', decision: PlanDecision.approve);
+    h.store.interrupt();
+    h.store.setModel('claude-opus-4-8');
+    h.store.setMode(PermissionMode.plan);
+    h.store.refreshHistory();
+    h.store.sendUser('hello');
+
+    expect(h.sent, hasLength(7));
+    for (final ClientMessage message in h.sent) {
+      final json = message.toJson();
+      expect(json['attachId'], hello.attachId);
+      expect(json['sessionId'], 'S1');
+    }
+    await h.close();
+  });
+
+  test('final replay metadata is retained for the active attachment', () async {
+    final h = _Harness();
+    final hello = h.switchTo('S1');
+    h.ready(hello);
+    h.controller.add(ServerSdkEventBatch(
+      events: const <SdkEventEntry>[],
+      attachId: hello.attachId,
+      sessionId: 'S1',
+      replayComplete: true,
+      historyStatus: HistoryStatus.error,
+      historyTruncated: true,
+    ));
+    await h.pump();
+
+    expect(h.store.state.attachmentReady, isFalse);
+    expect(h.store.state.attachmentHistoryStatus, HistoryStatus.error);
+    expect(h.store.state.attachmentHistoryTruncated, isTrue);
+    final item = h.store.state.byId['S1']!.items.single as SystemItem;
+    expect(item.level, SystemLevel.error);
+    await h.close();
+  });
+
+  test('full replay keeps a scoped history error and retry starts clean', () async {
+    final h = _Harness();
+    final hello = h.switchTo('S1');
+    h.controller.add(ServerReady(
+      state: _snap(id: 'S1'),
+      attachId: hello.attachId,
+      sessionId: 'S1',
+      replayMode: ReplayMode.full,
+      historyStatus: HistoryStatus.loading,
+    ));
+    h.controller.add(ServerError(
+      message: 'transcript read failed',
+      attachId: hello.attachId,
+      sessionId: 'S1',
+    ));
+    h.controller.add(ServerSdkEventBatch(
+      events: const <SdkEventEntry>[],
+      attachId: hello.attachId,
+      sessionId: 'S1',
+      replayComplete: true,
+      historyStatus: HistoryStatus.error,
+    ));
+    await h.pump();
+
+    expect(h.store.state.attachmentReady, isFalse);
+    final errors = h.store.state.byId['S1']!.items.whereType<SystemItem>();
+    expect(errors.map((SystemItem item) => item.text),
+        contains('transcript read failed'));
+
+    h.sent.clear();
+    h.store.retryAttachment();
+    final retry = h.sent.single as ClientHello;
+    expect(retry.sessionId, 'S1');
+    expect(retry.lastEventId, 0);
+    expect(retry.attachId, isNot(hello.attachId));
+    await h.close();
+  });
+
+  test('switchTo resumes only events materialised in the local cache', () async {
     final h = _Harness();
     h.controller.add(ServerSessionsUpdate(sessions: <SessionStateSnapshot>[
       _snap(id: 'A', lastEventId: 42),
@@ -218,12 +306,136 @@ void main() {
     final first = h.switchTo('A');
     final second = h.switchTo('B');
     expect(first.sessionId, 'A');
-    expect(first.lastEventId, 42);
+    expect(first.lastEventId, 0);
     expect(first.attachId, isNotEmpty);
     expect(second.attachId, isNot(equals(first.attachId)));
     expect(h.store.state.activeId, 'B');
     expect(h.store.state.attachId, second.attachId);
     expect(h.store.state.attachmentReady, isFalse);
+    await h.close();
+  });
+
+  test('full replay replaces cached history atomically', () async {
+    final h = _Harness();
+    final first = h.switchTo('A');
+    h.ready(first);
+    h.controller.add(ServerSdkEventBatch(
+      events: <SdkEventEntry>[
+        SdkEventEntry(id: 1, event: <String, dynamic>{
+          'type': 'assistant',
+          'message': {
+            'content': [
+              {'type': 'text', 'text': 'cached'},
+            ],
+          },
+        }),
+      ],
+      attachId: first.attachId,
+      sessionId: 'A',
+      replayComplete: true,
+    ));
+    await h.pump();
+
+    final refresh = h.switchTo('A');
+    h.controller.add(ServerReady(
+      state: _snap(id: 'A', lastEventId: 3),
+      attachId: refresh.attachId,
+      sessionId: 'A',
+      replayMode: ReplayMode.full,
+      historyStatus: HistoryStatus.loading,
+    ));
+    h.controller.add(ServerSdkEventBatch(
+      events: <SdkEventEntry>[
+        SdkEventEntry(id: 2, event: <String, dynamic>{
+          'type': 'assistant',
+          'message': {
+            'content': [
+              {'type': 'text', 'text': 'fresh one'},
+            ],
+          },
+        }),
+      ],
+      attachId: refresh.attachId,
+      sessionId: 'A',
+    ));
+    await h.pump();
+
+    var items = h.store.state.byId['A']!.items;
+    expect((items.single as AssistantTextItem).text, 'cached');
+
+    h.controller.add(ServerSdkEventBatch(
+      events: <SdkEventEntry>[
+        SdkEventEntry(id: 3, event: <String, dynamic>{
+          'type': 'assistant',
+          'message': {
+            'content': [
+              {'type': 'text', 'text': 'fresh two'},
+            ],
+          },
+        }),
+      ],
+      attachId: refresh.attachId,
+      sessionId: 'A',
+      replayComplete: true,
+      historyStatus: HistoryStatus.ready,
+    ));
+    await h.pump();
+
+    items = h.store.state.byId['A']!.items;
+    expect(
+      items.map((ChatItem item) => (item as AssistantTextItem).text),
+      <String>['fresh one', 'fresh two'],
+    );
+    expect(h.store.state.attachmentReady, isTrue);
+    await h.close();
+  });
+
+  test('full replay preserves control and heartbeat frames that overtake replay completion', () async {
+    final h = _Harness();
+    final hello = h.switchTo('A');
+    h.controller.add(ServerReady(
+      state: _snap(id: 'A', lastEventId: 1),
+      attachId: hello.attachId,
+      sessionId: 'A',
+      replayMode: ReplayMode.full,
+      historyStatus: HistoryStatus.loading,
+    ));
+    h.controller.add(ServerPermissionRequest(
+      reqId: 'permission-during-replay',
+      toolName: 'Bash',
+      input: const <String, dynamic>{'command': 'pwd'},
+      attachId: hello.attachId,
+      sessionId: 'A',
+    ));
+    h.controller.add(ServerPendingControl(
+      sessionId: 'A',
+      attachId: hello.attachId,
+      control: const PendingPlan(
+        reqId: 'plan-during-replay',
+        plan: 'Keep this plan visible',
+      ),
+    ));
+    h.controller.add(ServerHeartbeat(
+      now: 4000,
+      session: _snap(id: 'A', lastEventId: 1),
+      noActivityMs: 4000,
+      attachId: hello.attachId,
+      sessionId: 'A',
+    ));
+    h.controller.add(ServerSdkEventBatch(
+      events: const <SdkEventEntry>[],
+      attachId: hello.attachId,
+      sessionId: 'A',
+      replayComplete: true,
+      historyStatus: HistoryStatus.ready,
+    ));
+    await h.pump();
+
+    final ChatState state = h.store.state.byId['A']!;
+    expect(state.pendingPermission?.reqId, 'permission-during-replay');
+    expect(state.pendingPlan?.reqId, 'plan-during-replay');
+    expect(state.heartbeatInactiveSeconds, 4);
+    expect(h.store.state.attachmentReady, isTrue);
     await h.close();
   });
 
@@ -255,6 +467,33 @@ void main() {
     expect(h.store.state.activeId, 'NEW');
     expect(h.store.state.attachmentSessionId, 'NEW');
     expect(h.store.state.attachmentReady, isTrue);
+    await h.close();
+  });
+
+  test('matching attachment accepts recovered ready with a fresh session id', () async {
+    final h = _Harness();
+    final hello = h.switchTo('EXPIRED');
+
+    h.controller.add(ServerReady(
+      state: _snap(id: 'RECOVERED'),
+      attachId: hello.attachId,
+      sessionId: 'RECOVERED',
+      replayMode: ReplayMode.full,
+      historyStatus: HistoryStatus.ready,
+    ));
+    h.controller.add(ServerSdkEventBatch(
+      events: const <SdkEventEntry>[],
+      attachId: hello.attachId,
+      sessionId: 'RECOVERED',
+      replayComplete: true,
+      historyStatus: HistoryStatus.ready,
+    ));
+    await h.pump();
+
+    expect(h.store.state.activeId, 'RECOVERED');
+    expect(h.store.state.attachmentSessionId, 'RECOVERED');
+    expect(h.store.state.attachmentReady, isTrue);
+    expect(h.sent.whereType<ClientListSessions>(), hasLength(1));
     await h.close();
   });
 

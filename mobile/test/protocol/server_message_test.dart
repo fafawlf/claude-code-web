@@ -98,6 +98,8 @@ void main() {
           'attachId': 'attach-1',
           'sessionId': 's1',
           'replayComplete': true,
+          'historyStatus': 'error',
+          'historyTruncated': true,
           'events': [
             {'id': 1, 'event': {'type': 'assistant'}},
             {'id': 2, 'event': {'type': 'result'}},
@@ -110,6 +112,8 @@ void main() {
       expect(msg.attachId, 'attach-1');
       expect(msg.sessionId, 's1');
       expect(msg.replayComplete, isTrue);
+      expect(msg.historyStatus, HistoryStatus.error);
+      expect(msg.historyTruncated, isTrue);
     });
 
     test('permission_request', () {

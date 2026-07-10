@@ -111,6 +111,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final String streaming = active?.streamingText ?? '';
     final bool busy = active?.busy ?? false;
     final bool canSend = connected && s.attachmentReady;
+    final bool historyError =
+        s.attachmentHistoryStatus == HistoryStatus.error;
 
     // On session switch (or first attach) we want to land at the bottom so the
     // user sees the latest context. After that, we stop auto-following stream
@@ -187,8 +189,53 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   },
                 ),
         ),
-        _composer(palette, t, connected, canSend, busy),
+        if (historyError || s.attachmentHistoryTruncated)
+          _historyStatusBanner(
+            palette,
+            error: historyError,
+            onRetry: historyError
+                ? () => ref.read(sessionsStoreProvider).retryAttachment()
+                : null,
+          ),
+        _composer(palette, t, connected, canSend, busy, historyError),
       ],
+    );
+  }
+
+  Widget _historyStatusBanner(
+    SkinPalette p, {
+    required bool error,
+    VoidCallback? onRetry,
+  }) {
+    return Container(
+      width: double.infinity,
+      color: error
+          ? p.danger.withValues(alpha: 0.12)
+          : p.warning.withValues(alpha: 0.12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Row(
+        children: <Widget>[
+          Icon(
+            error ? Icons.sync_problem : Icons.info_outline,
+            size: 16,
+            color: error ? p.danger : p.warning,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              error
+                  ? 'History could not be loaded.'
+                  : 'Some older messages were omitted to keep this chat responsive.',
+              style: TextStyle(
+                color: error ? p.danger : p.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          if (onRetry != null)
+            TextButton(onPressed: onRetry, child: const Text('Retry')),
+        ],
+      ),
     );
   }
 
@@ -335,6 +382,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     bool connected,
     bool canSend,
     bool busy,
+    bool historyError,
   ) {
     return Container(
       decoration: BoxDecoration(
@@ -360,9 +408,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     decoration: InputDecoration(
                       hintText: !connected
                           ? 'Disconnected'
-                          : canSend
-                              ? 'Message Claude…'
-                              : 'Syncing session…',
+                          : historyError
+                              ? 'Retry history sync to continue'
+                              : canSend
+                                  ? 'Message Claude…'
+                                  : 'Syncing session…',
                       filled: true,
                       fillColor: p.bgSurface,
                       contentPadding: const EdgeInsets.symmetric(

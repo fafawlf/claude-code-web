@@ -36,6 +36,20 @@ void main() {
     expect(const ClientUserMessage(text: 'hi').toJson(), {'type': 'user', 'text': 'hi'});
   });
 
+  test('ClientAttachmentCommand adds the active scope', () {
+    final message = ClientAttachmentCommand(
+      command: const ClientUserMessage(text: 'hi'),
+      attachId: 'attach-1',
+      sessionId: 'session-1',
+    );
+    expect(message.toJson(), {
+      'type': 'user',
+      'text': 'hi',
+      'attachId': 'attach-1',
+      'sessionId': 'session-1',
+    });
+  });
+
   test('ClientPermissionResponse scope optional', () {
     expect(
       const ClientPermissionResponse(reqId: 'r1', decision: PermissionDecision.allow).toJson(),
