@@ -273,7 +273,6 @@ class SessionsStore {
     switch (m) {
       case ServerReady(
           :final SessionStateSnapshot state,
-          :final String? attachId,
           :final String? sessionId,
           :final ReplayMode? replayMode,
           :final HistoryStatus? historyStatus,
@@ -284,7 +283,7 @@ class SessionsStore {
         if (scopedSessionId != state.sessionId) {
           return;
         }
-        final bool legacyProtocol = attachId == null;
+        final bool legacyProtocol = (m as ServerReady).attachId == null;
         current
           ..sessionId = state.sessionId
           ..readyReceived = true
