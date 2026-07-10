@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Blue/green deployment helper for the Feishu multi-user service.
+# Repeatable two-slot blue/green deployment for the Feishu multi-user service.
 #
 # Usage on the server:
 #   blue-green.sh candidate <git-ref>
@@ -19,11 +19,11 @@ DEPLOY_STATE_DIR=${DEPLOY_STATE_DIR:-/srv/ccw/deploy}
 DATA_DIR=${DATA_DIR:-/srv/ccw}
 ENV_FILE=${ENV_FILE:-$DATA_DIR/ccw.env}
 HOST=${HOST:-claude.fa-fa.ai}
-STABLE_PORT=${STABLE_PORT:-8084}
-CANDIDATE_PORT=${CANDIDATE_PORT:-8085}
-STABLE_SERVICE=${STABLE_SERVICE:-ccw-multiuser.service}
-CANDIDATE_SERVICE=${CANDIDATE_SERVICE:-ccw-multiuser-candidate.service}
+BLUE_PORT=${BLUE_PORT:-8084}
+GREEN_PORT=${GREEN_PORT:-8085}
+LEGACY_SERVICE=${LEGACY_SERVICE:-ccw-multiuser.service}
 SITE_FILE=${SITE_FILE:-/etc/nginx/sites-available/$HOST}
+ACTIVE_STATE=$DEPLOY_STATE_DIR/active.env
 CANDIDATE_STATE=$DEPLOY_STATE_DIR/candidate.env
 PROMOTION_STATE=$DEPLOY_STATE_DIR/promotion.env
 
@@ -32,15 +32,6 @@ require_root() {
     echo "Run as root." >&2
     exit 1
   fi
-}
-
-require_candidate() {
-  if [ ! -f "$CANDIDATE_STATE" ]; then
-    echo "No candidate is recorded. Run: $0 candidate <git-ref>" >&2
-    exit 1
-  fi
-  # shellcheck disable=SC1090
-  source "$CANDIDATE_STATE"
 }
 
 validate_cookie() {
@@ -59,6 +50,60 @@ validate_git_ref() {
       exit 1
       ;;
   esac
+}
+
+validate_service() {
+  case "$1" in
+    ''|*[!A-Za-z0-9@_.-]*)
+      echo "Unsafe systemd service name." >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_port() {
+  case "$1" in
+    "$BLUE_PORT"|"$GREEN_PORT") ;;
+    *)
+      echo "Port $1 is not a configured deployment slot." >&2
+      exit 1
+      ;;
+  esac
+}
+
+load_active() {
+  ACTIVE_PORT=$BLUE_PORT
+  ACTIVE_SERVICE=$LEGACY_SERVICE
+  ACTIVE_SHA=legacy
+  ACTIVE_REF=multi-user
+  ACTIVE_RELEASE=$REPO_DIR
+  if [ -f "$ACTIVE_STATE" ]; then
+    # shellcheck disable=SC1090
+    source "$ACTIVE_STATE"
+  fi
+  validate_port "$ACTIVE_PORT"
+  validate_service "$ACTIVE_SERVICE"
+}
+
+require_candidate() {
+  if [ ! -f "$CANDIDATE_STATE" ]; then
+    echo "No candidate is recorded. Run: $0 candidate <git-ref>" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  source "$CANDIDATE_STATE"
+  validate_port "$CANDIDATE_PORT"
+  validate_service "$CANDIDATE_SERVICE"
+  validate_cookie "$CANDIDATE_COOKIE"
+}
+
+slot_service() {
+  validate_port "$1"
+  echo "ccw-multiuser-slot-$1.service"
+}
+
+inactive_port() {
+  if [ "$1" = "$BLUE_PORT" ]; then echo "$GREEN_PORT"; else echo "$BLUE_PORT"; fi
 }
 
 health_json() {
@@ -81,22 +126,49 @@ wait_for_health() {
     fi
     sleep 1
   done
-  echo "Candidate health check failed on port $port." >&2
+  echo "Health check failed on port $port for commit $expected_sha." >&2
   return 1
+}
+
+random_cookie() {
+  local cookie
+  cookie=$(openssl rand -hex 24)
+  validate_cookie "$cookie"
+  echo "$cookie"
+}
+
+write_active_state() {
+  local port=$1 service=$2 sha=$3 ref=$4 release=$5
+  local tmp
+  mkdir -p "$DEPLOY_STATE_DIR"
+  tmp=$(mktemp "$DEPLOY_STATE_DIR/.active.XXXXXX")
+  cat > "$tmp" <<EOF
+ACTIVE_PORT=$port
+ACTIVE_SERVICE=$service
+ACTIVE_SHA=$sha
+ACTIVE_REF=$ref
+ACTIVE_RELEASE=$release
+EOF
+  chmod 0600 "$tmp"
+  mv "$tmp" "$ACTIVE_STATE"
 }
 
 render_nginx() {
   local default_port=$1
   local canary_port=$2
   local canary_cookie=$3
-  local tmp
+  local auth_port=$4
+  local tmp backup=''
+  validate_port "$default_port"
+  validate_port "$canary_port"
+  validate_port "$auth_port"
   validate_cookie "$canary_cookie"
   tmp=$(mktemp)
 
   cat > "$tmp" <<EOF
 server {
     server_name $HOST;
-    client_max_body_size 100m;
+    client_max_body_size 80m;
 
     set \$ccw_backend http://127.0.0.1:$default_port;
     if (\$cookie_ccw_canary = "$canary_cookie") {
@@ -105,8 +177,19 @@ server {
 
     location = /__ccw_canary {
         if (\$arg_key != "$canary_cookie") { return 404; }
+        auth_request /__ccw_canary_auth;
         add_header Set-Cookie "ccw_canary=$canary_cookie; Path=/; Secure; HttpOnly; SameSite=Lax" always;
         return 302 /;
+    }
+
+    location = /__ccw_canary_auth {
+        internal;
+        proxy_pass http://127.0.0.1:$auth_port/api/admin/canary-check;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Cookie \$http_cookie;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
     location = /__ccw_stable {
@@ -143,16 +226,16 @@ server {
 EOF
 
   mkdir -p "$DEPLOY_STATE_DIR"
+  nginx -t
   if [ -f "$SITE_FILE" ]; then
-    cp -p "$SITE_FILE" "$DEPLOY_STATE_DIR/nginx-$(date -u +%Y%m%dT%H%M%SZ).conf"
+    backup="$DEPLOY_STATE_DIR/nginx-$(date -u +%Y%m%dT%H%M%S)-$$.conf"
+    cp -p "$SITE_FILE" "$backup"
   fi
-  nginx -t -c /etc/nginx/nginx.conf
   install -m 0644 "$tmp" "$SITE_FILE"
   if ! nginx -t; then
     echo "Generated nginx configuration is invalid; restoring the previous file." >&2
-    local latest
-    latest=$(find "$DEPLOY_STATE_DIR" -maxdepth 1 -name 'nginx-*.conf' -type f | sort | tail -1)
-    [ -n "$latest" ] && install -m 0644 "$latest" "$SITE_FILE"
+    if [ -n "$backup" ]; then install -m 0644 "$backup" "$SITE_FILE"; fi
+    nginx -t
     rm -f "$tmp"
     exit 1
   fi
@@ -165,6 +248,11 @@ deploy_candidate() {
     echo "Usage: $0 candidate <git-ref>" >&2
     exit 1
   fi
+  validate_git_ref "$RELEASE_REF"
+  if [ -f "$PROMOTION_STATE" ]; then
+    echo "A previous promotion is still draining. Run drain or rollback before replacing a slot." >&2
+    exit 1
+  fi
   if [ ! -d "$REPO_DIR/.git" ]; then
     echo "Missing source repository at $REPO_DIR." >&2
     exit 1
@@ -173,14 +261,20 @@ deploy_candidate() {
     echo "Missing environment file at $ENV_FILE." >&2
     exit 1
   fi
-  validate_git_ref "$RELEASE_REF"
+
+  load_active
+  local candidate_port candidate_service
+  candidate_port=$(inactive_port "$ACTIVE_PORT")
+  candidate_service=$(slot_service "$candidate_port")
+  if [ "$candidate_service" = "$ACTIVE_SERVICE" ]; then
+    echo "Refusing to restart the active service." >&2
+    exit 1
+  fi
 
   git -C "$REPO_DIR" fetch --prune origin
-  local sha
+  local sha release_dir build_time
   sha=$(git -C "$REPO_DIR" rev-parse "$RELEASE_REF^{commit}")
-  local release_dir=$RELEASES_DIR/$sha
-  local build_time
-  build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  release_dir=$RELEASES_DIR/$sha
 
   if [ -d "$release_dir" ] && [ ! -f "$release_dir/server/dist/bin/claudecode-web.js" ]; then
     echo "Incomplete release already exists at $release_dir; inspect and remove it before retrying." >&2
@@ -188,92 +282,147 @@ deploy_candidate() {
   fi
 
   if [ ! -f "$release_dir/server/dist/bin/claudecode-web.js" ]; then
-    local staging=$RELEASES_DIR/.staging-$sha-$$
-    rm -rf "$staging"
-    mkdir -p "$staging"
+    mkdir -p "$RELEASES_DIR"
+    local staging
+    staging=$(mktemp -d "$RELEASES_DIR/.staging-$sha.XXXXXX")
     git -C "$REPO_DIR" archive "$sha" | tar -x -C "$staging"
+    build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    echo "$build_time" > "$staging/.ccw-build-time"
     (
       cd "$staging"
       npm ci
+      npm audit --omit=dev
       npm test
       npm run build
     )
     mv "$staging" "$release_dir"
   fi
+  build_time=$(cat "$release_dir/.ccw-build-time" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 
   local unit_tmp
   unit_tmp=$(mktemp)
   cat > "$unit_tmp" <<EOF
 [Unit]
-Description=Claude Code Web candidate ($sha)
+Description=Claude Code Web slot $candidate_port ($sha)
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=$release_dir
 EnvironmentFile=$ENV_FILE
-Environment=CCW_BUILD_SHA=$sha
-Environment=CCW_BUILD_BRANCH=$RELEASE_REF
-Environment=CCW_BUILD_TIME=$build_time
-ExecStart=/usr/bin/node $release_dir/server/dist/bin/claudecode-web.js --host 127.0.0.1 --port $CANDIDATE_PORT --cwd $DATA_DIR/users
+Environment="CCW_BUILD_SHA=$sha"
+Environment="CCW_BUILD_BRANCH=$RELEASE_REF"
+Environment="CCW_BUILD_TIME=$build_time"
+ExecStart=/usr/bin/node $release_dir/server/dist/bin/claudecode-web.js --host 127.0.0.1 --port $candidate_port --cwd $DATA_DIR/users
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
-  install -m 0644 "$unit_tmp" "/etc/systemd/system/$CANDIDATE_SERVICE"
+  install -m 0644 "$unit_tmp" "/etc/systemd/system/$candidate_service"
   rm -f "$unit_tmp"
   systemctl daemon-reload
-  systemctl enable --now "$CANDIDATE_SERVICE"
-  systemctl restart "$CANDIDATE_SERVICE"
-  wait_for_health "$CANDIDATE_PORT" "$sha"
+  systemctl enable "$candidate_service"
+  systemctl restart "$candidate_service"
+  wait_for_health "$candidate_port" "$sha"
 
   mkdir -p "$DEPLOY_STATE_DIR"
-  local cookie=qa-${sha:0:12}
-  cat > "$CANDIDATE_STATE" <<EOF
+  local cookie state_tmp
+  cookie=$(random_cookie)
+  state_tmp=$(mktemp "$DEPLOY_STATE_DIR/.candidate.XXXXXX")
+  cat > "$state_tmp" <<EOF
 CANDIDATE_SHA=$sha
 CANDIDATE_REF=$RELEASE_REF
 CANDIDATE_RELEASE=$release_dir
 CANDIDATE_COOKIE=$cookie
+CANDIDATE_PORT=$candidate_port
+CANDIDATE_SERVICE=$candidate_service
 CANDIDATE_STARTED_AT=$(date +%s)
 EOF
-  chmod 0600 "$CANDIDATE_STATE"
-  echo "Candidate ready on port $CANDIDATE_PORT. Enable routing with: $0 canary"
+  chmod 0600 "$state_tmp"
+  mv "$state_tmp" "$CANDIDATE_STATE"
+  echo "Candidate ready on port $candidate_port. Enable routing with: $0 canary"
 }
 
 enable_canary() {
+  load_active
   require_candidate
-  render_nginx "$STABLE_PORT" "$CANDIDATE_PORT" "$CANDIDATE_COOKIE"
-  echo "Canary route enabled: https://$HOST/__ccw_canary?key=$CANDIDATE_COOKIE"
+  if [ "$CANDIDATE_PORT" = "$ACTIVE_PORT" ] || [ "$CANDIDATE_SERVICE" = "$ACTIVE_SERVICE" ]; then
+    echo "Candidate points at the active slot; deploy a new candidate first." >&2
+    exit 1
+  fi
+  wait_for_health "$CANDIDATE_PORT" "$CANDIDATE_SHA" >/dev/null
+  render_nginx "$ACTIVE_PORT" "$CANDIDATE_PORT" "$CANDIDATE_COOKIE" "$CANDIDATE_PORT"
+  echo "Admin-only canary route enabled: https://$HOST/__ccw_canary?key=$CANDIDATE_COOKIE"
 }
 
 promote_candidate() {
-  require_candidate
   if [ "${CONFIRM_IDLE:-}" != "1" ]; then
     echo "Confirm there are no running tasks, then run: CONFIRM_IDLE=1 $0 promote" >&2
     exit 1
   fi
+  load_active
+  require_candidate
+  if [ "$CANDIDATE_PORT" = "$ACTIVE_PORT" ] || [ "$CANDIDATE_SERVICE" = "$ACTIVE_SERVICE" ]; then
+    echo "Candidate is already active." >&2
+    exit 1
+  fi
   wait_for_health "$CANDIDATE_PORT" "$CANDIDATE_SHA" >/dev/null
-  local rollback_cookie=rollback-${CANDIDATE_SHA:0:12}
-  render_nginx "$CANDIDATE_PORT" "$STABLE_PORT" "$rollback_cookie"
-  cat > "$PROMOTION_STATE" <<EOF
+
+  local rollback_cookie state_tmp
+  rollback_cookie=$(random_cookie)
+  render_nginx "$CANDIDATE_PORT" "$ACTIVE_PORT" "$rollback_cookie" "$CANDIDATE_PORT"
+
+  state_tmp=$(mktemp "$DEPLOY_STATE_DIR/.promotion.XXXXXX")
+  cat > "$state_tmp" <<EOF
+PREVIOUS_PORT=$ACTIVE_PORT
+PREVIOUS_SERVICE=$ACTIVE_SERVICE
+PREVIOUS_SHA=$ACTIVE_SHA
+PREVIOUS_REF=$ACTIVE_REF
+PREVIOUS_RELEASE=$ACTIVE_RELEASE
+PROMOTED_PORT=$CANDIDATE_PORT
+PROMOTED_SERVICE=$CANDIDATE_SERVICE
 PROMOTED_SHA=$CANDIDATE_SHA
-PROMOTED_AT=$(date +%s)
+PROMOTED_REF=$CANDIDATE_REF
+PROMOTED_RELEASE=$CANDIDATE_RELEASE
+PROMOTED_CANARY_COOKIE=$CANDIDATE_COOKIE
 ROLLBACK_COOKIE=$rollback_cookie
+PROMOTED_AT=$(date +%s)
 EOF
-  chmod 0600 "$PROMOTION_STATE"
-  echo "Candidate promoted for new connections. Old WebSockets remain on port $STABLE_PORT while they drain."
+  chmod 0600 "$state_tmp"
+  mv "$state_tmp" "$PROMOTION_STATE"
+  write_active_state "$CANDIDATE_PORT" "$CANDIDATE_SERVICE" "$CANDIDATE_SHA" "$CANDIDATE_REF" "$CANDIDATE_RELEASE"
+  echo "Candidate promoted for new connections. Old WebSockets remain on port $ACTIVE_PORT while they drain."
 }
 
 rollback_candidate() {
-  require_candidate
-  render_nginx "$STABLE_PORT" "$CANDIDATE_PORT" "$CANDIDATE_COOKIE"
+  if [ ! -f "$PROMOTION_STATE" ]; then
+    load_active
+    require_candidate
+    render_nginx "$ACTIVE_PORT" "$CANDIDATE_PORT" "$CANDIDATE_COOKIE" "$CANDIDATE_PORT"
+    echo "Default routing remains on port $ACTIVE_PORT; candidate is still available to admins."
+    return
+  fi
+
+  # shellcheck disable=SC1090
+  source "$PROMOTION_STATE"
+  validate_port "$PREVIOUS_PORT"
+  validate_port "$PROMOTED_PORT"
+  validate_service "$PREVIOUS_SERVICE"
+  validate_service "$PROMOTED_SERVICE"
+  validate_cookie "$PROMOTED_CANARY_COOKIE"
+  if [ "$(systemctl is-active "$PREVIOUS_SERVICE" 2>/dev/null || true)" != "active" ]; then
+    systemctl start "$PREVIOUS_SERVICE"
+  fi
+  health_json "$PREVIOUS_PORT" >/dev/null
+  render_nginx "$PREVIOUS_PORT" "$PROMOTED_PORT" "$PROMOTED_CANARY_COOKIE" "$PROMOTED_PORT"
+  write_active_state "$PREVIOUS_PORT" "$PREVIOUS_SERVICE" "$PREVIOUS_SHA" "$PREVIOUS_REF" "$PREVIOUS_RELEASE"
   rm -f "$PROMOTION_STATE"
-  echo "New connections rolled back to port $STABLE_PORT. Candidate remains available through its canary cookie."
+  echo "New connections rolled back to port $PREVIOUS_PORT. The promoted build remains admin-canaryable."
 }
 
-drain_stable() {
+drain_previous() {
   if [ "${CONFIRM_IDLE:-}" != "1" ]; then
     echo "Confirm there are no old-server tasks, then run: CONFIRM_IDLE=1 $0 drain" >&2
     exit 1
@@ -284,34 +433,51 @@ drain_stable() {
   fi
   # shellcheck disable=SC1090
   source "$PROMOTION_STATE"
+  load_active
+  if [ "$ACTIVE_SERVICE" != "$PROMOTED_SERVICE" ] || [ "$ACTIVE_PORT" != "$PROMOTED_PORT" ]; then
+    echo "Promotion state does not match the active slot; refusing to stop anything." >&2
+    exit 1
+  fi
   local age=$(( $(date +%s) - PROMOTED_AT ))
   if [ "$age" -lt 1800 ]; then
     echo "Keep the old service for at least 30 minutes; $((1800 - age)) seconds remain." >&2
     exit 1
   fi
-  systemctl stop "$STABLE_SERVICE"
-  echo "Old stable service stopped after the drain window. Rollback now requires restarting $STABLE_SERVICE first."
+  if [ "$PREVIOUS_SERVICE" = "$ACTIVE_SERVICE" ]; then
+    echo "Refusing to stop the active service." >&2
+    exit 1
+  fi
+  systemctl stop "$PREVIOUS_SERVICE"
+  rm -f "$PROMOTION_STATE" "$CANDIDATE_STATE"
+  echo "Previous service $PREVIOUS_SERVICE stopped after the drain window. The inactive slot is ready for the next release."
 }
 
 show_status() {
-  echo "stable-service=$(systemctl is-active "$STABLE_SERVICE" 2>/dev/null || true)"
-  echo "candidate-service=$(systemctl is-active "$CANDIDATE_SERVICE" 2>/dev/null || true)"
-  echo "stable-health=$(health_json "$STABLE_PORT" 2>/dev/null || echo unavailable)"
-  echo "candidate-health=$(health_json "$CANDIDATE_PORT" 2>/dev/null || echo unavailable)"
+  load_active
+  echo "active-port=$ACTIVE_PORT"
+  echo "active-service=$ACTIVE_SERVICE"
+  echo "active-sha=$ACTIVE_SHA"
+  echo "legacy-service=$(systemctl is-active "$LEGACY_SERVICE" 2>/dev/null || true)"
+  echo "blue-service=$(systemctl is-active "$(slot_service "$BLUE_PORT")" 2>/dev/null || true)"
+  echo "green-service=$(systemctl is-active "$(slot_service "$GREEN_PORT")" 2>/dev/null || true)"
+  echo "blue-health=$(health_json "$BLUE_PORT" 2>/dev/null || echo unavailable)"
+  echo "green-health=$(health_json "$GREEN_PORT" 2>/dev/null || echo unavailable)"
   [ -f "$CANDIDATE_STATE" ] && sed -n '1,20p' "$CANDIDATE_STATE"
-  [ -f "$PROMOTION_STATE" ] && sed -n '1,20p' "$PROMOTION_STATE"
+  [ -f "$PROMOTION_STATE" ] && sed -n '1,30p' "$PROMOTION_STATE"
 }
 
-require_root
-case "$COMMAND" in
-  candidate) deploy_candidate ;;
-  canary) enable_canary ;;
-  promote) promote_candidate ;;
-  rollback) rollback_candidate ;;
-  drain) drain_stable ;;
-  status) show_status ;;
-  *)
-    echo "Unknown command: $COMMAND" >&2
-    exit 2
-    ;;
-esac
+if [ "${CCW_DEPLOY_LIB_ONLY:-}" != "1" ]; then
+  require_root
+  case "$COMMAND" in
+    candidate) deploy_candidate ;;
+    canary) enable_canary ;;
+    promote) promote_candidate ;;
+    rollback) rollback_candidate ;;
+    drain) drain_previous ;;
+    status) show_status ;;
+    *)
+      echo "Unknown command: $COMMAND" >&2
+      exit 2
+      ;;
+  esac
+fi
