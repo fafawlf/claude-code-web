@@ -221,7 +221,8 @@ export class CodexSession {
     this.updateState({ runtimeStatus: 'running', activeTool: this.activeTurn });
 
     const args = this.buildArgs(prompt);
-    const child = spawn(codexPath, args, {
+    const directNodeScript = /\.(?:cjs|mjs|js)$/.test(codexPath);
+    const child = spawn(directNodeScript ? process.execPath : codexPath, directNodeScript ? [codexPath, ...args] : args, {
       cwd: this.state.cwd,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
