@@ -103,3 +103,43 @@ test('WsClient does not duplicate hello when an onOpen callback sends it', async
     client.close();
   });
 });
+
+test('WsClient injects the latest attachment scope into every session command', async () => {
+  await withFakeSockets(() => {
+    const client = new WsClient('', () => {});
+    client.connect();
+    client.send({ type: 'hello', sessionId: 'session-a', attachId: 'attach-a' });
+    sockets[0].open();
+    client.send({ type: 'user', text: 'hello' });
+    client.send({ type: 'permission_response', reqId: 'permission-1', decision: 'allow' });
+    client.send({ type: 'set_model', model: 'next-model' });
+    client.send({ type: 'interrupt' });
+
+    assert.deepEqual(sockets[0].sent, [
+      { type: 'hello', sessionId: 'session-a', attachId: 'attach-a' },
+      { type: 'user', text: 'hello', sessionId: 'session-a', attachId: 'attach-a' },
+      { type: 'permission_response', reqId: 'permission-1', decision: 'allow', sessionId: 'session-a', attachId: 'attach-a' },
+      { type: 'set_model', model: 'next-model', sessionId: 'session-a', attachId: 'attach-a' },
+      { type: 'interrupt', sessionId: 'session-a', attachId: 'attach-a' },
+    ]);
+    client.close();
+  });
+});
+
+test('WsClient preserves explicit stale scope so the server can reject delayed commands', async () => {
+  await withFakeSockets(() => {
+    const client = new WsClient('', () => {});
+    client.connect();
+    client.send({ type: 'hello', sessionId: 'session-b', attachId: 'attach-b' });
+    sockets[0].open();
+    client.send({ type: 'user', text: 'delayed', sessionId: 'session-a', attachId: 'attach-a' });
+
+    assert.deepEqual(sockets[0].sent.at(-1), {
+      type: 'user',
+      text: 'delayed',
+      sessionId: 'session-a',
+      attachId: 'attach-a',
+    });
+    client.close();
+  });
+});

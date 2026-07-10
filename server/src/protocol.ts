@@ -41,24 +41,31 @@ export type ClientHello = {
   viewerMode?: boolean;
 };
 
-export type ClientUserMessage = { type: 'user'; text: string };
-export type ClientPermissionResponse = {
+export type ClientAttachmentScope = {
+  /** Attachment/session scope is optional only for rolling compatibility with
+   * clients that predate attachment generations. New clients send both. */
+  attachId?: string;
+  sessionId?: string;
+};
+
+export type ClientUserMessage = ClientAttachmentScope & { type: 'user'; text: string };
+export type ClientPermissionResponse = ClientAttachmentScope & {
   type: 'permission_response';
   reqId: string;
   decision: 'allow' | 'deny';
   scope?: 'once' | 'session';
 };
-export type ClientPlanResponse = {
+export type ClientPlanResponse = ClientAttachmentScope & {
   type: 'plan_response';
   reqId: string;
   decision: 'approve' | 'reject';
 };
-export type ClientInterrupt = { type: 'interrupt' };
-export type ClientSetModel = { type: 'set_model'; model: string };
-export type ClientSetClaudeAuthMode = { type: 'set_claude_auth_mode'; mode: ClaudeAuthMode };
-export type ClientSetMode = { type: 'set_permission_mode'; mode: PermissionMode };
-export type ClientRefreshHistory = { type: 'refresh_history' };
-export type ClientSessionClose = { type: 'session_close'; sessionId: string };
+export type ClientInterrupt = ClientAttachmentScope & { type: 'interrupt' };
+export type ClientSetModel = ClientAttachmentScope & { type: 'set_model'; model: string };
+export type ClientSetClaudeAuthMode = ClientAttachmentScope & { type: 'set_claude_auth_mode'; mode: ClaudeAuthMode };
+export type ClientSetMode = ClientAttachmentScope & { type: 'set_permission_mode'; mode: PermissionMode };
+export type ClientRefreshHistory = ClientAttachmentScope & { type: 'refresh_history' };
+export type ClientSessionClose = ClientAttachmentScope & { type: 'session_close'; sessionId: string };
 /** Ask for a fresh snapshot of all sessions. Used to populate the
  *  drawer/sidebar on demand. The server no longer broadcasts sessions_update
  *  automatically — that proved fatal on slow links (session-list snapshots
@@ -123,6 +130,10 @@ export type ServerSdkEventBatch = ServerAttachmentScope & {
   type: 'sdk_events_batch';
   events: Array<{ id: number; event: unknown }>;
   replayComplete?: boolean;
+  /** Final history outcome. Present on replayComplete for attachments whose
+   * initial ready frame reported `loading`. */
+  historyStatus?: HistoryStatus;
+  historyTruncated?: boolean;
 };
 export type ServerPermissionRequest = ServerAttachmentScope & {
   type: 'permission_request';
