@@ -1,10 +1,13 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import fastifyMultipart, { type MultipartFile } from '@fastify/multipart';
 import { listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import { createReadStream } from 'node:fs';
-import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, isAbsolute, sep } from 'node:path';
 import { arch, homedir, platform } from 'node:os';
 import { timingSafeEqualStr } from './auth.js';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { detectClaudeAuthInfo, detectCodexAuthInfo } from './authInfo.js';
 import type { SessionManager } from './session/SessionManager.js';
 import { detectClaudeExecutable } from './session/resolveClaudePath.js';
@@ -19,6 +22,7 @@ const SKIP_DIRS = new Set([
 
 const MAX_UPLOAD_FILES = 12;
 const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_TOTAL_BYTES = 50 * 1024 * 1024;
 const UPLOAD_BODY_LIMIT = 80 * 1024 * 1024;
 const FILE_SEARCH_TIME_BUDGET_MS = 200;
 const FILE_SEARCH_ENTRY_BUDGET = 20_000;
@@ -35,6 +39,14 @@ export function registerApi(
   nodes: NodeRegistry = new NodeRegistry(defaultCwd),
   runtime: { host?: string; port?: number } = {}
 ) {
+  app.register(fastifyMultipart, {
+    limits: {
+      fields: 4,
+      files: MAX_UPLOAD_FILES,
+      fileSize: MAX_UPLOAD_FILE_BYTES,
+      parts: MAX_UPLOAD_FILES + 4,
+    },
+  });
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return;
     const provided = (req.query as { t?: string } | undefined)?.t ?? '';
@@ -149,6 +161,9 @@ export function registerApi(
   });
 
   app.post('/api/uploads', { bodyLimit: UPLOAD_BODY_LIMIT }, async (req, reply) => {
+    if (req.isMultipart()) {
+      return receiveMultipartUploads(req, reply, defaultCwd);
+    }
     const body = req.body as UploadRequest | undefined;
     const root = resolveSafe(body?.cwd ?? defaultCwd);
     const files = body?.files ?? [];
@@ -166,12 +181,17 @@ export function registerApi(
       await mkdir(uploadDir, { recursive: true });
 
       const saved = [];
+      let totalBytes = 0;
       for (const file of files) {
         const name = sanitizeFileName(file?.name);
         const bytes = decodeUploadBytes(file?.dataBase64);
         if (bytes.byteLength === 0) return reply.code(400).send({ error: `${name} is empty` });
         if (bytes.byteLength > MAX_UPLOAD_FILE_BYTES) {
           return reply.code(400).send({ error: `${name} is larger than 25 MB` });
+        }
+        totalBytes += bytes.byteLength;
+        if (totalBytes > MAX_UPLOAD_TOTAL_BYTES) {
+          return reply.code(400).send({ error: 'Uploads are larger than the 50 MB total limit' });
         }
         const path = await writeUniqueFile(uploadDir, name, bytes);
         const rel = relative(root, path);
@@ -297,6 +317,109 @@ type UploadRequest = {
   cwd?: string;
   files?: Array<{ name?: string; mime?: string; dataBase64?: string }>;
 };
+
+type UploadReply = {
+  code: (status: number) => { send: (body: unknown) => unknown };
+};
+
+async function receiveMultipartUploads(
+  req: FastifyRequest,
+  reply: UploadReply,
+  defaultCwd: string,
+): Promise<unknown> {
+  const q = req.query as { cwd?: string } | undefined;
+  let root: string;
+  try {
+    root = resolveSafe(q?.cwd ?? defaultCwd);
+    const rootStat = await stat(root);
+    if (!rootStat.isDirectory()) return reply.code(400).send({ error: 'cwd is not a directory' });
+  } catch (e) {
+    return reply.code(400).send({ error: (e as Error).message });
+  }
+
+  const uploadDir = join(root, '.claudecode-web', 'uploads', new Date().toISOString().slice(0, 10));
+  const savedPaths: string[] = [];
+  const saved: Array<{ name: string; path: string; relativePath: string; mime?: string; size: number }> = [];
+  const total = { bytes: 0 };
+
+  try {
+    await mkdir(uploadDir, { recursive: true });
+    for await (const part of req.parts()) {
+      if (part.type !== 'file') continue;
+      const name = sanitizeFileName(part.filename);
+      const written = await writeUniqueUploadStream(uploadDir, name, part, total);
+      savedPaths.push(written.path);
+      const rel = relative(root, written.path);
+      saved.push({
+        name: basename(written.path),
+        path: written.path,
+        relativePath: rel.startsWith('..') ? written.path : rel,
+        mime: part.mimetype || undefined,
+        size: written.size,
+      });
+    }
+    if (saved.length === 0) return reply.code(400).send({ error: 'files required' });
+    return { files: saved };
+  } catch (e) {
+    await Promise.all(savedPaths.map((path) => unlink(path).catch(() => undefined)));
+    const message = uploadErrorMessage(e);
+    return reply.code(400).send({ error: message });
+  }
+}
+
+async function writeUniqueUploadStream(
+  dir: string,
+  name: string,
+  part: MultipartFile,
+  total: { bytes: number },
+): Promise<{ path: string; size: number }> {
+  const reserved = await reserveUniqueFile(dir, name);
+  let size = 0;
+  const counter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.byteLength;
+      total.bytes += chunk.byteLength;
+      if (total.bytes > MAX_UPLOAD_TOTAL_BYTES) {
+        callback(new Error('Uploads are larger than the 50 MB total limit'));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+
+  try {
+    await pipeline(part.file, counter, reserved.handle.createWriteStream());
+    if (part.file.truncated) throw new Error(`${name} is larger than 25 MB`);
+    if (size === 0) throw new Error(`${name} is empty`);
+    return { path: reserved.path, size };
+  } catch (e) {
+    await reserved.handle.close().catch(() => undefined);
+    await unlink(reserved.path).catch(() => undefined);
+    throw e;
+  }
+}
+
+async function reserveUniqueFile(dir: string, name: string): Promise<{ path: string; handle: FileHandle }> {
+  const ext = extname(name);
+  const base = ext ? name.slice(0, -ext.length) : name;
+  for (let i = 0; i < 100; i++) {
+    const candidate = i === 0 ? name : `${base}-${i + 1}${ext}`;
+    const path = join(dir, candidate);
+    try {
+      return { path, handle: await open(path, 'wx') };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    }
+  }
+  throw new Error(`Could not find a free filename for ${name}`);
+}
+
+function uploadErrorMessage(e: unknown): string {
+  const code = (e as { code?: string } | undefined)?.code;
+  if (code === 'FST_REQ_FILE_TOO_LARGE') return 'A file is larger than 25 MB';
+  if (code === 'FST_FILES_LIMIT') return `Upload at most ${MAX_UPLOAD_FILES} files at once`;
+  return String((e as Error)?.message || e || 'Upload failed');
+}
 
 function sanitizeFileName(name: string | undefined): string {
   const raw = basename((name || 'upload').replace(/\\/g, '/'));
