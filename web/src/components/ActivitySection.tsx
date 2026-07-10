@@ -70,7 +70,9 @@ export function ActivitySection({ summary, sessions, onOpen, onEnd }: Props) {
   );
 }
 
-function ActivityRow({ session, onOpen, onEnd }: { session: ActivitySessionViewModel; onOpen: Props['onOpen']; onEnd: Props['onEnd'] }) {
+export function ActivityRow({ session, onOpen, onEnd }: { session: ActivitySessionViewModel; onOpen: Props['onOpen']; onEnd: Props['onEnd'] }) {
+  const finished = session.status === 'finished';
+  const actionLabel = finished ? 'Dismiss' : 'End';
   return (
     <div className="activity-row group relative mx-1 my-px rounded-sm hover:bg-bg-hover transition-colors duration-hover">
       <button
@@ -88,10 +90,10 @@ function ActivityRow({ session, onOpen, onEnd }: { session: ActivitySessionViewM
       </button>
       <button
         onClick={(e) => { e.stopPropagation(); onEnd(session.sessionId); }}
-        className="activity-end absolute top-2 right-2 px-2 py-1 rounded-sm text-[11px] text-text-muted opacity-0 group-hover:opacity-100 hover:text-danger hover:bg-bg-base transition-all duration-hover"
-        title="End this task"
+        className={`activity-end absolute top-2 right-2 px-2 py-1 rounded-sm text-[11px] text-text-muted opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:bg-bg-base transition-all duration-hover ${finished ? 'hover:text-text-primary' : 'hover:text-danger'}`}
+        title={finished ? 'Dismiss this finished task' : 'End this task'}
       >
-        End
+        {actionLabel}
       </button>
     </div>
   );
