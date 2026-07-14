@@ -86,7 +86,13 @@ export async function provisionWorkspace(
       try {
         const templateStat = await stat(templateDir);
         if (!templateStat.isDirectory()) throw new Error('Workspace template is not a directory');
-        await cp(templateDir, accessPath, { recursive: true });
+        // Node's fs.cp treats the /proc fd symlink itself as a non-directory
+        // when the source is a directory. Copy each child beneath the pinned
+        // handle instead, so every write stays capability-scoped without
+        // asking cp to replace the handle path.
+        for (const entry of await readdir(templateDir)) {
+          await cp(join(templateDir, entry), join(accessPath, entry), { recursive: true });
+        }
         await verifyStillPinned(usersHandle, workspaceHandle, root, expectedWorkspace, security);
         return workspaceIdentity;
       } catch (error) {
