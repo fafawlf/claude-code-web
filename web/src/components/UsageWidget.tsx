@@ -3,7 +3,7 @@ import type { ClaudeAuthMode, UsageResponse } from '../types';
 import { apiFetch } from '../api';
 import { TopbarMenuPortal } from './TopbarMenuPortal';
 
-const POLL_MS = 60_000;
+const POLL_MS = 5 * 60_000;
 
 /** Shared-subscription usage meter. Everyone sees the same Max account, so
  *  everyone gets to see how much of it is left. */
@@ -66,10 +66,17 @@ export function UsageWidget({
                 {shared?.sevenDayOpus?.utilization !== undefined && (
                   <UsageRow label="Weekly (Opus)" value={shared.sevenDayOpus.utilization} resetsAt={shared.sevenDayOpus.resetsAt} />
                 )}
+                {shared.stale && (
+                  <div className="text-text-muted">
+                    Showing the last update{shared.fetchedAt ? ` from ${shortTime(new Date(shared.fetchedAt).toISOString())}` : ''}
+                    {shared.reason ? ` — ${shared.reason}` : ''}.
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-text-muted">
-                Account quota unavailable{shared?.reason ? ` — ${shared.reason}` : ''}.
+                {shared?.temporary ? 'Usage temporarily unavailable' : 'Account quota unavailable'}
+                {shared?.reason ? ` — ${shared.reason}` : ''}.
               </div>
             )}
             {usage && usage.perUser.length > 0 && (
