@@ -26,6 +26,30 @@ test('Linux provisioning rejects a pre-existing symlink before copying or writin
   }
 });
 
+test('Linux provisioning copies template contents through the pinned workspace handle', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const data = mkdtempSync(join(tmpdir(), 'ccw-provision-template-'));
+  const users = join(data, 'users');
+  const template = join(data, 'template');
+  mkdirSync(users);
+  mkdirSync(join(template, '.claude', 'skills'), { recursive: true });
+  writeFileSync(join(template, 'CLAUDE.md'), '# Shared workspace\n');
+  writeFileSync(join(template, '.claude', 'skills', 'README.md'), 'shared skills\n');
+
+  try {
+    await provisionWorkspace('alice', template, {
+      canonicalUsersRoot: users,
+      canonicalUsersRootIdentity: captureFsRootIdentity(users),
+    });
+
+    assert.equal(readFileSync(join(users, 'alice', 'CLAUDE.md'), 'utf8'), '# Shared workspace\n');
+    assert.equal(readFileSync(join(users, 'alice', '.claude', 'skills', 'README.md'), 'utf8'), 'shared skills\n');
+  } finally {
+    rmSync(data, { recursive: true, force: true });
+  }
+});
+
 test('failed initialization binds the new inode early so a retry can recover safely', {
   skip: process.platform !== 'linux',
 }, async () => {
