@@ -3,7 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-const CACHE_MS = 60_000;
+const SUCCESS_CACHE_MS = 5 * 60_000;
+const TRANSIENT_ERROR_CACHE_MS = 15 * 60_000;
+const DEFAULT_CREDENTIALS_KEY = '<default>';
 
 export type UsageWindow = {
   utilization?: number;
@@ -13,6 +15,10 @@ export type UsageWindow = {
 export type SharedUsage = {
   available: boolean;
   reason?: string;
+  /** The values are from the last successful request while a refresh is delayed. */
+  stale?: boolean;
+  /** The failure should recover without changing account credentials. */
+  temporary?: boolean;
   plan?: string;
   fiveHour?: UsageWindow;
   sevenDay?: UsageWindow;
@@ -26,7 +32,15 @@ type Credentials = {
   subscriptionType?: string;
 };
 
-let cache: { value: SharedUsage; at: number } | undefined;
+type CacheEntry = {
+  value: SharedUsage;
+  at: number;
+  ttl: number;
+};
+
+const cache = new Map<string, CacheEntry>();
+const lastSuccessful = new Map<string, SharedUsage>();
+const inFlight = new Map<string, Promise<SharedUsage>>();
 
 /**
  * Read the shared subscription's rate-limit windows from the same endpoint the
@@ -36,14 +50,49 @@ let cache: { value: SharedUsage; at: number } | undefined;
  * access token is stale we degrade and let the next agent launch heal it.
  */
 export async function getSharedUsage(credentialsPath?: string): Promise<SharedUsage> {
-  if (cache && Date.now() - cache.at < CACHE_MS) return cache.value;
-  const value = await fetchSharedUsage(credentialsPath);
-  cache = { value, at: Date.now() };
-  return value;
+  const key = credentialsPath ?? DEFAULT_CREDENTIALS_KEY;
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.at < cached.ttl) return cached.value;
+
+  // Every browser polls the same shared account. Coalesce cache misses so a
+  // cohort of clients crossing the expiry boundary produces one upstream call.
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+
+  const request = fetchSharedUsage(credentialsPath)
+    .then((result) => {
+      let value = result;
+      let ttl = SUCCESS_CACHE_MS;
+
+      if (result.available) {
+        lastSuccessful.set(key, result);
+      } else if (result.temporary) {
+        ttl = TRANSIENT_ERROR_CACHE_MS;
+        const previous = lastSuccessful.get(key);
+        if (previous) {
+          value = {
+            ...previous,
+            stale: true,
+            reason: result.reason,
+          };
+        }
+      }
+
+      cache.set(key, { value, at: Date.now(), ttl });
+      return value;
+    })
+    .finally(() => {
+      if (inFlight.get(key) === request) inFlight.delete(key);
+    });
+
+  inFlight.set(key, request);
+  return request;
 }
 
 export function clearSharedUsageCache(): void {
-  cache = undefined;
+  cache.clear();
+  lastSuccessful.clear();
+  inFlight.clear();
 }
 
 async function fetchSharedUsage(credentialsPath?: string): Promise<SharedUsage> {
@@ -52,7 +101,12 @@ async function fetchSharedUsage(credentialsPath?: string): Promise<SharedUsage> 
     return { available: false, reason: 'no subscription credentials on this server' };
   }
   if (creds.expiresAt && creds.expiresAt < Date.now()) {
-    return { available: false, reason: 'subscription token is refreshing; try again shortly', plan: creds.subscriptionType };
+    return {
+      available: false,
+      temporary: true,
+      reason: 'subscription token is refreshing; try again shortly',
+      plan: creds.subscriptionType,
+    };
   }
   try {
     const res = await fetch(USAGE_URL, {
@@ -63,6 +117,22 @@ async function fetchSharedUsage(credentialsPath?: string): Promise<SharedUsage> 
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) {
+      if (res.status === 429) {
+        return {
+          available: false,
+          temporary: true,
+          reason: 'usage refresh rate limited; retrying later',
+          plan: creds.subscriptionType,
+        };
+      }
+      if (res.status >= 500) {
+        return {
+          available: false,
+          temporary: true,
+          reason: 'usage service temporarily unavailable; retrying later',
+          plan: creds.subscriptionType,
+        };
+      }
       return { available: false, reason: `usage endpoint returned ${res.status}`, plan: creds.subscriptionType };
     }
     const body = (await res.json()) as Record<string, unknown>;
@@ -75,7 +145,12 @@ async function fetchSharedUsage(credentialsPath?: string): Promise<SharedUsage> 
       fetchedAt: Date.now(),
     };
   } catch (e) {
-    return { available: false, reason: (e as Error).message, plan: creds.subscriptionType };
+    return {
+      available: false,
+      temporary: true,
+      reason: `usage refresh failed: ${(e as Error).message}`,
+      plan: creds.subscriptionType,
+    };
   }
 }
 

@@ -117,10 +117,13 @@ export type UsageResponse = {
   shared: {
     available: boolean;
     reason?: string;
+    stale?: boolean;
+    temporary?: boolean;
     plan?: string;
     fiveHour?: UsageWindow;
     sevenDay?: UsageWindow;
     sevenDayOpus?: UsageWindow;
+    fetchedAt?: number;
   };
   perUser: Array<{
     slug: string;
