@@ -309,7 +309,9 @@ deploy_candidate() {
     (
       cd "$staging"
       npm ci
-      npm audit --omit=dev
+      # Fail the release on high/critical production advisories. Moderate
+      # findings remain visible without blocking deploys while upstreams patch.
+      npm audit --omit=dev --audit-level=high
       npm test
       npm run build
     )
