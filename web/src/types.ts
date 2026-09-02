@@ -227,7 +227,8 @@ export type StoredSession = {
 // Models exposed in the UI. Labels are stable display names; ids map to SDK model strings.
 export const MODEL_OPTIONS = [
   { id: DEFAULT_CLAUDE_MODEL, label: 'Opus 4.8', hint: 'best for agentic coding' },
-  { id: 'claude-fable-5', label: 'Fable 5', hint: 'new flagship · slower' },
+  { id: 'claude-fable-5-1', label: 'Fable 5.1', hint: 'long-horizon agentic work' },
+  { id: 'claude-fable-5', label: 'Fable 5', hint: 'previous Fable model' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', hint: 'fast frontier model' },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', hint: 'balanced' },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5', hint: 'fastest' },
