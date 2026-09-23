@@ -5,7 +5,7 @@ export type ClaudeAuthMode = 'account' | 'api';
 
 export const DEFAULT_NODE_ID = 'local';
 export const DEFAULT_AGENT_PROVIDER: AgentProviderId = 'claude';
-export const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
 
 export type ActiveToolInfo = {
   toolUseId: string;
@@ -226,7 +226,8 @@ export type StoredSession = {
 
 // Models exposed in the UI. Labels are stable display names; ids map to SDK model strings.
 export const MODEL_OPTIONS = [
-  { id: DEFAULT_CLAUDE_MODEL, label: 'Opus 4.8', hint: 'best for agentic coding' },
+  { id: DEFAULT_CLAUDE_MODEL, label: 'Opus 5.5', hint: 'agentic coding and knowledge work' },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', hint: 'previous Opus model' },
   { id: 'claude-fable-5-1', label: 'Fable 5.1', hint: 'long-horizon agentic work' },
   { id: 'claude-fable-5', label: 'Fable 5', hint: 'previous Fable model' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', hint: 'fast frontier model' },
@@ -258,7 +259,7 @@ export function providerLabel(provider: AgentProviderId | undefined): string {
 }
 
 export function defaultModelLabel(provider: AgentProviderId | undefined): string {
-  return provider === 'codex' ? 'Codex default' : 'Opus 4.8';
+  return provider === 'codex' ? 'Codex default' : 'Opus 5.5';
 }
 
 export function modelLabel(provider: AgentProviderId | undefined, model?: string, fallbackModel?: string): string {
